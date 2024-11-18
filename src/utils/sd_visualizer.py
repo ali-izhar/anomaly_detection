@@ -1,4 +1,6 @@
-# src/utils/visualizer.py
+# src/utils/sd_visualizer.py
+
+"""Visualization tools for synthetic data analysis."""
 
 from pathlib import Path
 import logging
@@ -11,7 +13,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple
 logger = logging.getLogger(__name__)
 
 
-class Visualizer:
+class SyntheticDataVisualizer:
     """Visualization tools for temporal graph analysis and change detection."""
 
     @staticmethod

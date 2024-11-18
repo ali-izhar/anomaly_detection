@@ -1,4 +1,6 @@
-# src/utils/eval.py
+# src/utils/rm_evaluator.py
+
+"""Evaluator class for the MIT Reality Mining dataset."""
 
 import pandas as pd
 import numpy as np
@@ -8,7 +10,7 @@ from typing import Dict, List, Any
 logger = logging.getLogger(__name__)
 
 
-class Evaluator:
+class RealityMiningEvaluator:
     """Evaluates change point detection performance using multiple metrics.
 
     Computes standard binary classification metrics and detection delays

@@ -14,12 +14,13 @@ import shap  # type: ignore
 from pathlib import Path
 from typing import Dict, List, Any
 
+from sklearn.model_selection import train_test_split
+
+from config.config import load_config
 from src.changepoint.detector import ChangePointDetector
 from src.graph.graph_generator import GraphGenerator
 from src.models.models import CustomThresholdModel
-from src.utils import Visualizer
-from config.config import load_config
-from sklearn.model_selection import train_test_split
+from src.utils import SyntheticDataVisualizer
 from src.utils.log_handling import get_logger
 
 logger = get_logger(__name__)
@@ -73,7 +74,7 @@ def run_synthetic_pipeline(config_path: str) -> None:
             logger.error(f"Failed to generate NW graphs: {str(e)}")
 
         # Initialize other components
-        visualizer = Visualizer()
+        visualizer = SyntheticDataVisualizer()
         detector = ChangePointDetector()
 
         # Process each graph type
@@ -103,7 +104,7 @@ def analyze_graph_sequence(
     graphs: List[np.ndarray],
     graph_type: str,
     detector: ChangePointDetector,
-    visualizer: Visualizer,
+    visualizer: SyntheticDataVisualizer,
     config: Any,
 ) -> None:
     """Analyze single graph sequence for structural changes."""
@@ -239,7 +240,7 @@ def create_dashboard(
     shap_values: np.ndarray,
     centralities: Dict[str, List[List[float]]],
     config: Any,
-    visualizer: Visualizer,
+    visualizer: SyntheticDataVisualizer,
 ) -> None:
     """Create comprehensive visualization dashboard."""
     try:

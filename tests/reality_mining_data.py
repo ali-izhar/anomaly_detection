@@ -18,11 +18,11 @@ import networkx as nx
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.changepoint import ChangePointDetector
-from src.models import CustomThresholdModel
-from src.utils import Evaluator
-from src.graph import GraphGenerator
 from config.config import load_config
+from src.changepoint import ChangePointDetector
+from src.graph import GraphGenerator
+from src.models import CustomThresholdModel
+from src.utils import RealityMiningEvaluator
 from src.utils.log_handling import get_logger
 
 logger = get_logger(__name__)
@@ -67,7 +67,7 @@ class RealityMiningDataPipeline:
         self.cpd_ba_n: Optional[ChangePointDetector] = None
 
         # Evaluation component
-        self.evaluator = Evaluator(
+        self.evaluator = RealityMiningEvaluator(
             trials=self.config.analysis.parameters.trials,
             ground_truth=self.config.analysis.parameters.change_point,
             thresholds=self.config.analysis.thresholds,
