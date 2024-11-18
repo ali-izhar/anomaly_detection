@@ -22,8 +22,7 @@ from config.config import load_config
 from src.changepoint import ChangePointDetector
 from src.graph import GraphGenerator
 from src.models import CustomThresholdModel
-from src.utils import RealityMiningEvaluator
-from src.utils.log_handling import get_logger
+from src.utils import RealityMiningEvaluator, get_logger
 
 logger = get_logger(__name__)
 

@@ -17,11 +17,10 @@ from typing import Dict, List, Any
 from sklearn.model_selection import train_test_split
 
 from config.config import load_config
-from src.changepoint.detector import ChangePointDetector
-from src.graph.graph_generator import GraphGenerator
-from src.models.models import CustomThresholdModel
-from src.utils import SyntheticDataVisualizer
-from src.utils.log_handling import get_logger
+from src.models import CustomThresholdModel
+from src.changepoint import ChangePointDetector
+from src.graph import GraphGenerator
+from src.utils import SyntheticDataVisualizer, get_logger
 
 logger = get_logger(__name__)
 
