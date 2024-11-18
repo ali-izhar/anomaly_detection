@@ -174,3 +174,10 @@ notebooks*/
 
 # outputs
 outputs*/
+
+# tmp directory
+tmp*/
+
+# results
+results*/
+saved_results*/
