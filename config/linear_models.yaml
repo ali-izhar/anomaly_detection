@@ -1,0 +1,81 @@
+# Linear Models Configuration
+
+equations:
+  default:              # Default set of linear equations [slope, intercept]
+    - [2, 3]            # First equation: y = 2x + 3
+    - [3, 3]            # Second equation: y = 3x + 3
+    - [5, 8]            # Third equation: y = 5x + 8
+    - [7, 2]            # Fourth equation: y = 7x + 2
+  modified:             # Alternative set of equations
+    - [1, 2]            # Modified equations for testing
+    - [2, 4]
+    - [4, 6]
+    - [6, 1]
+
+scenarios:                # Different test scenarios
+  default:
+    name: "Default Scenario"
+    equations: "default"  # Use default equation set
+    change_point: 100     # Point where change occurs
+    thresholds:
+      sum: 50             # Additive Martingale threshold
+      avg: 12.5           # Additive (with scaling factor) Martingale threshold
+
+  low_threshold:
+    name: "Low Thresholds"
+    equations: "default"
+    change_point: 100
+    thresholds:
+      sum: 30
+      avg: 7.5
+
+  high_threshold:
+    name: "High Thresholds"
+    equations: "default"
+    change_point: 100
+    thresholds:
+      sum: 70
+      avg: 17.5
+
+  modified:
+    name: "Modified Equations"
+    equations: "modified"
+    change_point: 100
+    thresholds:
+      sum: 50
+      avg: 12.5
+
+  early_change:
+    name: "Early Change Point"
+    equations: "default"
+    change_point: 50
+    thresholds:
+      sum: 50
+      avg: 12.5
+
+  late_change:
+    name: "Late Change Point"
+    equations: "default"
+    change_point: 150
+    thresholds:
+      sum: 50
+      avg: 12.5
+
+visualization:
+  save_plots: true
+  num_graph_samples: 5
+
+shap:
+  background_samples: 10   # Number of background samples for SHAP
+  compute_full_range: true # Compute SHAP values for entire range
+
+time:
+  total_instants: 200      # Total number of time points
+
+paths:
+  output:
+    dir: "outputs/linear_models/"
+
+logging:
+  level: "INFO"
+  file: "logs/linear_models.log"

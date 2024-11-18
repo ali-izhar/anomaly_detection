@@ -1,0 +1,72 @@
+graph:
+  erdos_renyi:
+    n: 50
+    probabilities:
+      initial: 0.4
+      changed: 0.7
+    set1: 100
+    set2: 100
+
+  barabasi_albert:
+    n: 50
+    edges:
+      initial: 3
+      changed: 7
+    set1: 100
+    set2: 100
+
+  newman_watts:
+    n: 30
+    neighbors:
+      initial: 4
+      changed: 6
+    rewiring_prob:
+      initial: 0.1
+      changed: 0.3
+    set1: 100
+    set2: 100
+
+analysis:
+  centrality_metrics:
+    - degree
+    - betweenness
+    - eigenvector
+    - closeness
+    - svd
+    - lsvd
+  
+  parameters:
+    threshold: 15
+    detect_change: true
+    change_point: 101
+    test_size: 0.2
+    random_state: 42
+    model_threshold: 20
+  
+  labels:
+    high: 20
+    low: 1
+  
+  plot_range:
+    start: 0
+    end: 200
+
+data_processing:
+  save_intermediate: true
+  probability_threshold: 0.3
+
+paths:
+  data:
+    dir: "./data"
+    proximity_file: "./data/Proximity.csv"
+  
+  output:
+    dir: "./outputs/synthetic_data/"
+
+visualization:
+  save_plots: true
+  num_graph_samples: 5
+
+logging:
+  level: "INFO"
+  file: "logs/synthetic_data.log"
