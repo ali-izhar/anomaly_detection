@@ -340,18 +340,20 @@ class SyntheticDataVisualizer:
             ax3.set_ylabel("Feature Importance", fontsize=8)
             ax3.legend(
                 fontsize=5,
-                loc='upper right',
+                loc="upper right",
                 title="Centrality Measures",
                 title_fontsize=6,
-                framealpha=0.8
+                framealpha=0.8,
             )
             ax3.grid(True)
 
             ax4 = fig.add_subplot(gs[2, 3:])
-            
+
             # Normalize SHAP values for better visualization
-            normalized_shap = (shap_values - np.min(shap_values)) / (np.max(shap_values) - np.min(shap_values))
-            
+            normalized_shap = (shap_values - np.min(shap_values)) / (
+                np.max(shap_values) - np.min(shap_values)
+            )
+
             # Create heatmap with improved settings
             sns.heatmap(
                 normalized_shap.T,
@@ -361,21 +363,24 @@ class SyntheticDataVisualizer:
                 xticklabels=50,
                 yticklabels=[name.capitalize() for name in martingales_detect.keys()],
                 cbar_kws={
-                    'label': 'Relative Feature Importance',
-                    'orientation': 'horizontal'
-                }
+                    "label": "Relative Feature Importance",
+                    "orientation": "horizontal",
+                },
             )
-            
-            ax4.set_title("Feature Importance Over Time\n(Red = High Impact, Blue = Low Impact)", fontsize=10)
+
+            ax4.set_title(
+                "Feature Importance Over Time\n(Red = High Impact, Blue = Low Impact)",
+                fontsize=10,
+            )
             ax4.set_xlabel("Time Steps", fontsize=8)
             ax4.set_ylabel("")
-            
+
             # Move y-axis labels to the right
             ax4.yaxis.set_label_position("right")
             ax4.yaxis.tick_right()
-            
+
             # Rotate x-axis labels for better readability
-            plt.setp(ax4.get_xticklabels(), rotation=45, ha='right')
+            plt.setp(ax4.get_xticklabels(), rotation=45, ha="right")
             # Keep y-axis labels horizontal
             plt.setp(ax4.get_yticklabels(), rotation=0)
 
@@ -388,7 +393,7 @@ class SyntheticDataVisualizer:
 
             M_sum = sum(m["martingales"] for m in martingales_detect.values())
             M_avg = M_sum / len(martingales_detect)
-            
+
             ax5.plot(M_sum, color="blue", alpha=0.3, label="Martingale Sum")
             ax5.plot(M_avg, color="green", alpha=0.3, label="Martingale Average")
 
@@ -411,22 +416,26 @@ class SyntheticDataVisualizer:
             ax5.grid(True)
 
             ax6 = fig.add_subplot(gs[3, 3:])
-            
+
             for name, values in centralities.items():
                 flat_values = [v for graph in values for v in graph]
-                
+
                 # Remove extreme outliers using percentiles
                 q1, q3 = np.percentile(flat_values, [1, 99])
                 iqr = q3 - q1
                 lower_bound = q1 - 1.5 * iqr
                 upper_bound = q3 + 1.5 * iqr
-                filtered_values = [v for v in flat_values if lower_bound <= v <= upper_bound]
-                
+                filtered_values = [
+                    v for v in flat_values if lower_bound <= v <= upper_bound
+                ]
+
                 # Normalize the values to [0,1] range for each centrality measure
                 min_val = min(filtered_values)
                 max_val = max(filtered_values)
-                normalized_values = [(v - min_val) / (max_val - min_val) for v in filtered_values]
-                
+                normalized_values = [
+                    (v - min_val) / (max_val - min_val) for v in filtered_values
+                ]
+
                 # Plot with improved settings
                 sns.kdeplot(
                     data=normalized_values,
@@ -435,36 +444,40 @@ class SyntheticDataVisualizer:
                     fill=True,
                     alpha=0.4,
                     bw_adjust=0.5,  # Slightly reduce bandwidth for better detail
-                    common_norm=True  # Use common normalization for fair comparison
+                    common_norm=True,  # Use common normalization for fair comparison
                 )
-            
-            ax6.set_title("Normalized Centrality Distributions\n(Original Range Shown in Labels)", fontsize=10)
+
+            ax6.set_title(
+                "Normalized Centrality Distributions\n(Original Range Shown in Labels)",
+                fontsize=10,
+            )
             ax6.set_xlabel("Normalized Centrality Value (0-1 Scale)", fontsize=8)
             ax6.set_ylabel("Density", fontsize=8)
-            
+
             # Improve legend with value ranges
             ax6.legend(
                 title="Centrality Measures [min, max]",
                 fontsize=6,
                 title_fontsize=8,
                 bbox_to_anchor=(1.05, 1),
-                loc='upper left'
+                loc="upper left",
             )
-            
+
             # Add grid and set limits
             ax6.grid(True, alpha=0.3)
             ax6.set_xlim(-0.05, 1.05)  # Add small padding around 0-1 range
             ax6.set_ylim(bottom=0)
-            
+
             # Add text explaining the normalization
             ax6.text(
-                0.98, 0.02,
+                0.98,
+                0.02,
                 "Note: Each measure normalized to [0,1] range\nfor shape comparison",
                 fontsize=6,
-                ha='right',
-                va='bottom',
+                ha="right",
+                va="bottom",
                 transform=ax6.transAxes,
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none')
+                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
             )
 
             # Add overall title and description

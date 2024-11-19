@@ -1,0 +1,70 @@
+model_params:
+  base:
+    aggregation: "add"
+  MIv1:
+    aggregation: "add"
+  MIv2:
+    aggregation: "add"
+  MIv3:
+    aggregation: "mul"
+  MIv4:
+    aggregation: "add"
+    epsilon: 1e-8
+  same-0.5opp:
+    aggregation: "add"
+    alpha: 0.5
+
+experiment_params:
+  feature_name: "pitch_control"  # ['pitch_control', 'influence']
+  game: 1  # [1, 2, 3]
+  model_name: "base"  # ['base', 'MIv1', 'MIv2', 'MIv3', 'MIv4', 'same-0.5opp']
+  
+  # Model architecture
+  num_node_features: 1
+  gcn_out_features: 128
+  lstm_hidden_size: 256
+  num_nodes: 22
+  n_steps_in: 3
+  n_steps_out: 3
+  num_lstm_layers: 2
+
+  # Training parameters
+  learning_rate: 0.001
+  weight_decay: 1e-5
+  num_epochs: 40
+  early_stopping_patience: 5
+  scheduler_patience: 5
+  scheduler_factor: 0.1
+  train_split: 0.8
+  val_split: 0.8
+
+  # Graph construction
+  distance_threshold: 15
+
+visualization:
+  enabled: true
+  plots:
+    - name: "all_models"
+      title: "Median Residue per Player Across All Models"
+      filter_game: null
+      filter_models: null
+    
+    - name: "game1"
+      title: "Median Residue per Player for Game 1"
+      filter_game: 1
+      filter_models: null
+    
+    - name: "game2"
+      title: "Median Residue per Player for Game 2"
+      filter_game: 2
+      filter_models: null
+    
+    - name: "game2_base_mi"
+      title: "Comparison of Models (base vs MIv1) for Game 2"
+      filter_game: 2
+      filter_models: ["base", "MIv1"]
+    
+    - name: "game1_base_mi"
+      title: "Comparison of Models (base vs MIv1) for Game 1"
+      filter_game: 1
+      filter_models: ["base", "MIv1"]
