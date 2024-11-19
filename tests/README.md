@@ -30,7 +30,7 @@ This design intentionally creates a stable baseline $(M(t) = 1)$ before the chan
 
 ## 1.3 Experiment Dashboard
 
-<!-- ![SHAP Dashboard](../assets/shap_dashboard.png) -->
+![SHAP Dashboard](../assets/shap_dashboard.png)
 
 - **Default Scenario (Row 1):** Martingale values remain constant at $1$ before the change point $(t=100)$ and follow the actual linear equations thereafter. Consequently, SHAP values exhibit a spike at the change point, indicating the detection moment.
 - **Detection Thresholds (Row 2):** Adjusting detection thresholds impacts the sensitivity and stability of change detection:
@@ -94,13 +94,13 @@ The SHAP value patterns observed include:
 
 ## 1.5 Running the Experiment
 
-```python
+```bash
 python main.py linear -c config/linear_models.yaml
 ```
 
 ---
 
-# 2. Synthetic Network Experiments
+# 2. Synthetic Network Experiment
 
 The Synthetic Network Experiments are designed to generate and analyze evolving networks with controlled structural changes. These experiments evaluate the effectiveness of our detection framework in identifying and interpreting structural shifts within network data.
 
@@ -174,7 +174,7 @@ Key findings:
 
 ## 2.4 Network Evolution Analysis
 
-<!-- ![Barabási-Albert Analysis](../assets/comp_ba.png) -->
+![Barabási-Albert Analysis](../assets/comp_ba.png)
 
 - **Network Snapshots (Top Row):** Displays the transition from sparse to dense connectivity, highlighting the emergence of hub nodes following the change point and increased clustering in subsequent snapshots.
 - **Change Detection (Middle Rows):**
@@ -228,8 +228,124 @@ def compute_martingale(data: List[Any], threshold: float, epsilon: float, detect
   - **Behavior:** Martingale values accumulate without resetting, leading to a peak between $t=(175, 200)$.
   - **Outcome:** Demonstrates the cumulative effect of structural changes, useful for understanding the magnitude of changes over extended periods.
 
-## 2.7 Running Synthetic Experiments
+## 2.7 Running Synthetic Experiment
+
+```bash
+python main.py synthetic -c config/synthetic_data.yaml
+```
+
+---
+
+# 3. Reality Mining Experiment
+
+The Reality Mining Experiment uses real-world interaction data to detect and analyze social events within a dynamic social network.
+
+## 3.1 Dataset Analysis
+
+From `reality_mining_data.py`:
 
 ```python
-python main.py synthetic -c config/synthetic_data.yaml
+def load_data(self) -> None:
+    """Load raw interaction data:
+    - Proximity data between dorm residents
+    - User interactions with timestamps
+    - Interaction probabilities
+    """
+```
+
+The Reality Mining dataset captures social interactions within a dormitory community, providing insights into human behavior and network dynamics.
+- **Participants:** Approximately 80 dorm residents.
+- **Timeframe:** October 2008 to May 2009.
+- **Interaction Types:**
+  - **Proximity Data:** Physical closeness between residents.
+  - **Calls:** Telecommunication interactions.
+  - **Location Data:** Geospatial information based on mobile device tracking.
+
+## 3.2 Event Analysis
+
+### Columbus Day Event (Days 1-60, Oct 2008)
+
+![Columbus Day Analysis](../assets/columbus_analysis.png)
+
+- **Martingale Pattern:**
+  - **Initial Stability:** Low martingale values indicate a stable social structure.
+  - **Event-Induced Spike:** A dramatic increase in the martingale sum (cyan) approaching the event.
+  - **Metric Responses:**
+    - **Betweenness Centrality (Green):** Indicates changes in path structures.
+    - **SVD (Brown):** Reflects global network restructuring.
+  - **Peak Detection:** Martingale values reach approximately 9000, signifying a significant structural change.
+
+- **SHAP Value Evolution:**
+  - **Pre-Event:** Metrics contribute negatively to the "no change" prediction.
+  - **During Event:** LSVD and closeness centrality exhibit the strongest immediate responses.
+  - **Post-Event:** All metrics stabilize with positive contributions, indicating a permanent shift in social interaction patterns.
+
+### New Year Event (Days 81-141, Dec 2008 - Jan 2009)
+
+![New Year Analysis](../assets/newyear_analysis.png)
+
+- **Martingale Pattern:**
+  - **Gradual Increase:** Martingale values steadily rise through December.
+  - **Peak Detection:** Sum peaks around 1200, lower than the Columbus Day event.
+  - **Dominant Metric:** Degree centrality (orange) plays a significant role.
+
+- **SHAP Value Evolution:**
+  - **Pre-Event:** Metrics contribute variably to the "no change" prediction.
+  - **During Event:** Eigenvector and LSVD centralities show the highest impact.
+  - **Post-Event:** Multiple waves of feature importance reflect extended social network restructuring.
+
+## 3.3 Data Format and Encoding
+
+The Reality Mining dataset is encoded in `Proximity.csv` with the following structure:
+
+```csv
+user.id | remote.user.id | time      | prob2
+58      | 42            | 2007-09-05 14:02:11 | 0.034
+58      | 49            | 2007-09-05 14:02:11 | 0
+58      | 54            | 2007-09-05 14:02:11 | 0.233
+...
+```
+
+- **user.id**: The ID of the resident initiating the interaction (1-80)
+- **remote.user.id**: The ID of the resident being interacted with
+- **time**: Timestamped interaction date
+- **prob2**: Interaction probability [0,1]
+  - Higher values (e.g., 0.233) indicate stronger interactions
+  - Zero values indicate potential but unrealized interactions
+
+### Data Processing
+From `reality_mining_data.py`:
+
+```python
+def preprocess_data(self) -> None:
+    """Filter and transform raw interaction data.
+    1. Remove low probability interactions (p < threshold)
+    2. Convert timestamps to dates
+    3. Remove duplicates
+    4. Sort chronologically
+    """
+```
+
+### Network Construction
+
+```python
+def create_graphs(self) -> None:
+    """Convert filtered interactions into temporal graphs:
+    - Nodes: Dorm residents (IDs 1-80)
+    - Edges: Interactions with prob2 > threshold
+    - Weight: Interaction probability
+    """
+    G = nx.Graph()
+    G.add_nodes_from(range(1, 80))  # Fixed node set
+    G.add_edges_from(group)         # Daily interactions
+```
+
+- **Nodes:** Represent dorm residents (IDs 1-80).
+- **Edges:** Formed based on interactions with `prob2` exceeding a predefined threshold.
+- **Weights:** Correspond to the interaction probabilities, reflecting the strength of connections.
+
+## 3.4 Running Reality Mining Analysis
+
+```bash
+python main.py reality -c config/reality_mining.yaml
 ```
