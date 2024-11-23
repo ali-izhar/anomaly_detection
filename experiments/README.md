@@ -215,16 +215,16 @@ The Barabási-Albert (BA) model's evolution is meticulously controlled through s
 Implemented in `src/changepoint/martingale.py`, the martingale framework provides two detection modes, each revealing different aspects of structural changes:
 
 ```python
-def compute_martingale(data: List[Any], threshold: float, epsilon: float, detect: bool = True):
+def compute_martingale(data: List[Any], threshold: float, epsilon: float, reset: bool = True):
     """Martingale computation with optional detection reset"""
 ```
 
-- **With Detection (`detect=True`):**
+- **With Detection (`reset=True`):**
   - **Behavior:** Martingale values exhibit spikes between $t=(100, 125)$, corresponding to the structural change.
   - **Reset Mechanism:** After each detection, the martingale resets $(martingale[-1] = 1)$, enabling the identification of multiple change points.
   - **Outcome:** Provides clear and localized detection of change points, allowing for precise localization within the network evolution timeline.
 
-- **Without Detection (`detect=False`):**
+- **Without Detection (`reset=False`):**
   - **Behavior:** Martingale values accumulate without resetting, leading to a peak between $t=(175, 200)$.
   - **Outcome:** Demonstrates the cumulative effect of structural changes, useful for understanding the magnitude of changes over extended periods.
 
