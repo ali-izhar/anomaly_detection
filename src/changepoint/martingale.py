@@ -55,7 +55,7 @@ def compute_martingale(
     data: List[Any],
     threshold: float,
     epsilon: float,
-    detect: bool = True,
+    reset: bool = True,
 ) -> Dict[str, Any]:
     """Compute power martingale sequence for online change detection.
     Implements power martingale: M_n = product of (epsilon * p_i^(epsilon - 1)) for i from 1 to n
@@ -66,7 +66,7 @@ def compute_martingale(
         data: Sequential observations to monitor
         threshold: Detection threshold tau > 0
         epsilon: Sensitivity epsilon in (0,1), smaller values increase sensitivity
-        detect: Whether to reset after detection
+        reset: Whether to reset after detection
 
     Returns:
         Dictionary containing:
@@ -110,7 +110,7 @@ def compute_martingale(
             logger.debug(f"Time {i}: martingale={new_martingale}, p-value={pvalue}")
 
             # Check for change point
-            if detect and new_martingale > threshold:
+            if reset and new_martingale > threshold:
                 logger.info(
                     f"Change point detected at time {i} (martingale={new_martingale})"
                 )

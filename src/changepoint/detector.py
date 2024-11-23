@@ -98,17 +98,17 @@ class ChangePointDetector:
         data: List[float],
         threshold: float,
         epsilon: float = 0.8,
-        detect: bool = True,
+        reset: bool = True,
     ) -> Dict[str, Any]:
         """Perform univariate martingale-based change detection.
         Implements sequential martingale test: M_n exceeding threshold indicates change.
-        M_n is reset after detection if detect is True for finding multiple changes.
+        M_n is reset after detection if reset is True for finding multiple changes.
 
         Args:
             data: Univariate time series of feature values
             threshold: Detection threshold for martingale value
             epsilon: Sensitivity parameter epsilon in (0,1), smaller = more sensitive
-            detect: Whether to reset martingale after detection
+            reset: Whether to reset martingale after detection
 
         Returns:
             Dictionary containing:
@@ -120,7 +120,7 @@ class ChangePointDetector:
         logger.debug(
             f"Running martingale test with threshold={threshold}, epsilon={epsilon}"
         )
-        results = compute_martingale(data, threshold, epsilon, detect)
+        results = compute_martingale(data, threshold, epsilon, reset)
 
         if results["change_detected_instant"]:
             logger.info(

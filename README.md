@@ -1,6 +1,6 @@
 # Change Point Detection in Dynamic Networks
 
-Detect and explain significant structural changes in dynamic networks using martingale-based methods and SHAP values.
+Detect, Predict, and Explain significant structural changes in dynamic networks using martingale-based methods and SHAP values.
 
 ## Installation
 
@@ -26,26 +26,21 @@ python main.py linear -c config/linear_models.yaml
 ```
 
 Available experiments:
-- `synthetic`: Run synthetic data experiments
-- `reality`: Analyze Reality Mining dataset
-- `linear`: Run linear model experiments
+- `synthetic`: Run synthetic data experiments (requires `config/synthetic_data.yaml`)
+- `reality`: Analyze Reality Mining dataset (requires `config/reality_mining.yaml`)
+- `linear`: Run linear model experiments (requires `config/linear_models.yaml`)
 
 Each experiment requires a corresponding YAML configuration file specified with the `-c` flag.
-
-## Visual Analysis Examples
 
 ### Network Evolution Models
 ![Barabási-Albert Analysis](assets/comp_ba.png)
 
 - Top row: Network evolution over time
-- Second row: Martingale values over time (with and without detection)
+- Second row: Martingale values over time (with and without detection reset*)
 - Third row: SHAP values evolution with heatmap
 - Fourth row: Detected change points
 
-### Change Point Detection Results
-![SHAP Dashboard](assets/shap_dashboard.png)
-
-The dashboard shows the sum and average martingale models for linear data defined by `config/linear_models.yaml`.
+> \* Detection reset: After a change point is detected, the martingale values are reset to 1 until the next change point is detected. This is used to find multiple change points. If a reset is not used, the martingale values will continue to grow indefinitely.
 
 ## Module Structure
 
@@ -53,7 +48,7 @@ The dashboard shows the sum and average martingale models for linear data define
 - `src/graph/`: Graph generation and analysis
 - `src/models/`: Model implementations
 - `src/utils/`: Helper functions
-- `tests/`: Test suite
+- `experiments/`: Experiment suite
 
 ## Data Sources
 

@@ -1,4 +1,4 @@
-# tests/linear_models.py
+# experiments/linear_models.py
 
 """Linear model analysis module for change point detection.
 

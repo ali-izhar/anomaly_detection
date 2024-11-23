@@ -1,4 +1,4 @@
-# tests/reality_mining_data.py
+# experiments/reality_mining_data.py
 
 """Reality Mining data analysis module for change point detection.
 
@@ -291,7 +291,7 @@ class RealityMiningDataPipeline:
             martingales = {}
             for k, v in event_data.items():
                 martingales[k] = self.cpd.martingale_test(
-                    v, self.config.analysis.thresholds[-1], detect=False
+                    v, self.config.analysis.thresholds[-1], reset=False
                 )
 
             # Calculate aggregates - convert to numpy arrays first

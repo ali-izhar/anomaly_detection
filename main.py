@@ -38,18 +38,18 @@ def run_experiment(experiment: str, config_path: str) -> None:
         logger.info(f"Starting {experiment} experiment")
 
         if experiment == "linear":
-            from tests.linear_models import main
+            from experiments.linear_models import main
 
             main(config_path)
 
         elif experiment == "reality":
-            from tests.reality_mining_data import RealityMiningDataPipeline
+            from experiments.reality_mining_data import RealityMiningDataPipeline
 
             pipeline = RealityMiningDataPipeline(config_path)
             pipeline.run()
 
         elif experiment == "synthetic":
-            from tests.synthetic_data import run_synthetic_pipeline
+            from experiments.synthetic_data import run_synthetic_pipeline
 
             run_synthetic_pipeline(config_path)
 

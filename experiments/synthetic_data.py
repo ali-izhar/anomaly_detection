@@ -1,4 +1,4 @@
-# tests/run_synthetic.py
+# experiments/synthetic_data.py
 
 """Synthetic data analysis module for change point detection.
 
@@ -122,7 +122,7 @@ def analyze_graph_sequence(
             cent: detector.martingale_test(
                 centralities[cent],
                 threshold=config.analysis.parameters.threshold,
-                detect=True,
+                reset=True,
             )
             for cent in config.analysis.centrality_metrics
         }
@@ -136,7 +136,7 @@ def analyze_graph_sequence(
             cent: detector.martingale_test(
                 centralities[cent],
                 threshold=config.analysis.parameters.threshold,
-                detect=False,
+                reset=False,
             )
             for cent in config.analysis.centrality_metrics
         }
