@@ -105,8 +105,12 @@ def analyze_ba_features(adj_matrix: np.ndarray) -> Dict:
 
     return metrics
 
+
 def create_dashboard(
-    graphs: List[np.ndarray], time_points: List[int], pos: Dict
+    graphs: List[np.ndarray],
+    time_points: List[int],
+    pos: Dict,
+    change_points: List[int],
 ) -> None:
     """Create comprehensive dashboard of BA graph analytics with all features."""
     fig = plt.figure(figsize=(20, 35))
@@ -150,30 +154,29 @@ def create_dashboard(
 
     # Row 2: Centrality Measures Evolution
     ax_centrality = fig.add_subplot(gs[1, :])
-    centralities = extract_centralities([graphs[t] for t in time_points])
+    all_time_points = list(range(len(graphs)))
+    centralities = extract_centralities([graphs[t] for t in all_time_points])
     for metric, values in centralities.items():
         means = [np.mean(v) for v in values]
         stds = [np.std(v) for v in values]
         maxs = [np.max(v) for v in values]
 
         line = ax_centrality.plot(
-            time_points,
+            all_time_points,
             means,
-            "-o",
+            "-",
             label=f"{metric} (μ={means[-1]:.2f}, σ={stds[-1]:.2f}, max={maxs[-1]:.2f})",
         )
-        # Add light shading for standard deviation
         ax_centrality.fill_between(
-            time_points,
+            all_time_points,
             [m - s for m, s in zip(means, stds)],
             [m + s for m, s in zip(means, stds)],
             alpha=0.2,
             color=line[0].get_color(),
         )
 
-    ax_centrality.axvline(
-        x=time_points[2], color="r", linestyle="--", alpha=0.5, label="Change Point"
-    )
+    for cp in change_points:
+        ax_centrality.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
     ax_centrality.set_xlabel("Time step")
     ax_centrality.set_ylabel("Centrality Value")
     ax_centrality.set_title("Centrality Measures Evolution (with ±1σ bands)")
@@ -182,9 +185,11 @@ def create_dashboard(
 
     # Row 3: Embedding Evolution with Explained Variance
     ax_embedding = fig.add_subplot(gs[2, :])
-    svd_embeddings = compute_embeddings([graphs[t] for t in time_points], method="svd")
+    svd_embeddings = compute_embeddings(
+        [graphs[t] for t in all_time_points], method="svd"
+    )
     lsvd_embeddings = compute_embeddings(
-        [graphs[t] for t in time_points], method="lsvd"
+        [graphs[t] for t in all_time_points], method="lsvd"
     )
 
     # Compute norms and basic statistics for embeddings
@@ -193,9 +198,7 @@ def create_dashboard(
         mean_norm = np.mean(norms)
         std_norm = np.std(norms)
 
-        # Compute variance explained (for SVD only)
         if name == "SVD":
-            # Compute variance explained by first two components
             var_exp = [
                 np.sum(np.square(emb[:2])) / np.sum(np.square(emb))
                 for emb in embeddings
@@ -204,9 +207,10 @@ def create_dashboard(
         else:
             label = f"{name} norm (μ={mean_norm:.2f}, σ={std_norm:.2f})"
 
-        ax_embedding.plot(time_points, norms, "-o", label=label)
+        ax_embedding.plot(all_time_points, norms, "-", label=label)
 
-    ax_embedding.axvline(x=time_points[2], color="r", linestyle="--", alpha=0.5)
+    for cp in change_points:
+        ax_embedding.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
     ax_embedding.set_xlabel("Time step")
     ax_embedding.set_ylabel("Embedding Norm")
     ax_embedding.set_title("Graph Embedding Evolution")
@@ -217,7 +221,7 @@ def create_dashboard(
     ax_struct = fig.add_subplot(gs[3, :])
     structural_metrics = defaultdict(list)
 
-    for t in time_points:
+    for t in all_time_points:
         G = adjacency_to_graph(graphs[t])
         structural_metrics["Clustering"].append(nx.average_clustering(G))
         structural_metrics["Density"].append(nx.density(G))
@@ -236,13 +240,14 @@ def create_dashboard(
     for metric, values in structural_metrics.items():
         mean, std = np.mean(values), np.std(values)
         ax_struct.plot(
-            time_points,
+            all_time_points,
             values,
-            "-o",
+            "-",
             label=f"{metric} (μ={mean:.2f}, σ={std:.2f}, Δ={values[-1]-values[0]:.2f})",
         )
 
-    ax_struct.axvline(x=time_points[2], color="r", linestyle="--", alpha=0.5)
+    for cp in change_points:
+        ax_struct.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
     ax_struct.set_xlabel("Time step")
     ax_struct.set_ylabel("Value")
     ax_struct.set_title("Structural Properties Evolution with Statistics")
@@ -253,7 +258,7 @@ def create_dashboard(
     ax_spectral = fig.add_subplot(gs[4, :])
     spectral_metrics = defaultdict(list)
 
-    for t in time_points:
+    for t in all_time_points:
         laplacian = compute_laplacian(graphs[t])
         eigenvalues = np.real(np.linalg.eigvals(laplacian))
         eigenvalues.sort()
@@ -266,13 +271,14 @@ def create_dashboard(
     for metric, values in spectral_metrics.items():
         mean, std = np.mean(values), np.std(values)
         ax_spectral.plot(
-            time_points,
+            all_time_points,
             values,
-            "-o",
+            "-",
             label=f"{metric} (μ={mean:.2f}, σ={std:.2f}, range=[{min(values):.2f}, {max(values):.2f}])",
         )
 
-    ax_spectral.axvline(x=time_points[2], color="r", linestyle="--", alpha=0.5)
+    for cp in change_points:
+        ax_spectral.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
     ax_spectral.set_xlabel("Time step")
     ax_spectral.set_ylabel("Value")
     ax_spectral.set_title("Spectral Properties Evolution with Statistics")
@@ -319,7 +325,10 @@ def create_dashboard(
                     linewidth=1,
                 )
 
-        ax.axvline(x=len(graphs) // 2, color="r", linestyle="--", alpha=0.5)
+        # Add vertical lines for all change points instead of just the middle
+        for cp in change_points:
+            ax.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
+
         ax.set_xlabel("Time step")
         ax.set_ylabel("Value")
         ax.set_title(f"{group_name}", fontsize=10)
@@ -368,10 +377,11 @@ def create_dashboard(
     • Average path length: Mean shortest path between all node pairs
     • Diameter: Maximum shortest path length in network
     
-    Change Point (t=100):
-    • Before: m₁=3 edges/new node
-    • After: m₂=7 edges/new node
-    • Impact: More hubs, denser network
+    Change Points:
+    • Initial: m₁=3 edges/new node
+    • First change (t=50): m₂=7 edges/new node
+    • Second change (t=100): m₃=4 edges/new node
+    • Third change (t=150): m₄=6 edges/new node
     """
 
     footer_text_right = """
@@ -432,14 +442,14 @@ def main():
     # Generate BA graphs
     result = generate_ba_graphs()
     graphs = result["graphs"]
-    change_point = result["change_point"]
+    change_points = result["change_points"]
 
-    # Time points to analyze
+    # Select key time points to visualize (limit to 4 for the grid layout)
     time_points = [
         0,  # Start
-        change_point - 1,  # Just before change
-        change_point,  # At change
-        len(graphs) - 1,  # End
+        change_points[0],  # First change
+        change_points[1],  # Second change
+        change_points[2],  # Third change
     ]
 
     # Create output directory
@@ -457,7 +467,7 @@ def main():
             if isinstance(value, (int, float)):
                 print(f"{metric}: {value:.3f}")
 
-    create_dashboard(graphs, time_points, pos)
+    create_dashboard(graphs, time_points, pos, change_points)
 
 
 if __name__ == "__main__":
