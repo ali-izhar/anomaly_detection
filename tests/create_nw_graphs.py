@@ -1,3 +1,5 @@
+# tests/create_nw_graphs.py
+
 """
 Newman-Watts (NW) Small-World Graph Sequence Generator
 
@@ -34,7 +36,7 @@ NW_CONFIG = {
     "rewiring_prob": {
         "initial": 0.1,  # Initial rewiring probability
         "change1": 0.3,  # First change
-        "change2": 0.05, # Second change
+        "change2": 0.05,  # Second change
         "change3": 0.2,  # Third change
     },
     "sequence_length": {
@@ -49,6 +51,7 @@ NW_CONFIG = {
 #                           IMPLEMENTATION DETAILS                             #
 # -----------------------------------------------------------------------------#
 
+
 def _generate_graph_segment(
     generator: GraphGenerator,
     n: int,
@@ -61,10 +64,13 @@ def _generate_graph_segment(
     skip_first: bool = False,
 ) -> List[np.ndarray]:
     """Generate a segment of NW graphs with parameter changes."""
-    graphs = generator.newman_watts(n=n, k1=k1, k2=k2, p1=p1, p2=p2, set1=set1, set2=set2)
+    graphs = generator.newman_watts(
+        n=n, k1=k1, k2=k2, p1=p1, p2=p2, set1=set1, set2=set2
+    )
     if skip_first:
         return graphs[set1:]
     return graphs
+
 
 def _calculate_change_points(config: Dict) -> List[int]:
     """Calculate the indices where parameter changes occur."""
@@ -75,10 +81,11 @@ def _calculate_change_points(config: Dict) -> List[int]:
         seq_len["before_change"] + seq_len["after_change1"] + seq_len["after_change2"],
     ]
 
+
 def generate_nw_graphs(config: Dict = NW_CONFIG) -> Dict[str, List[np.ndarray]]:
     """Generate Newman-Watts small-world graph sequence with multiple parameter changes."""
     generator = GraphGenerator()
-    
+
     graphs1 = _generate_graph_segment(
         generator,
         config["n"],
@@ -123,9 +130,11 @@ def generate_nw_graphs(config: Dict = NW_CONFIG) -> Dict[str, List[np.ndarray]]:
         "change_points": change_points,
     }
 
+
 # -----------------------------------------------------------------------------#
 #                               MAIN ENTRY POINT                               #
 # -----------------------------------------------------------------------------#
+
 
 def main():
     """Main entry point for graph generation."""
@@ -143,6 +152,7 @@ def main():
     print(f"  - Generated {len(result['graphs'])} graphs")
     print(f"  - Change points at t={result['change_points']}")
     print(f"  - Graph shape: {result['graphs'][0].shape}")
+
 
 if __name__ == "__main__":
     main()

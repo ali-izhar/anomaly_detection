@@ -1,3 +1,5 @@
+# tests/create_er_graphs.py
+
 """
 Erdős-Rényi (ER) Graph Sequence Generator
 
@@ -42,6 +44,7 @@ ER_CONFIG = {
 #                           IMPLEMENTATION DETAILS                             #
 # -----------------------------------------------------------------------------#
 
+
 def _generate_graph_segment(
     generator: GraphGenerator,
     n: int,
@@ -57,6 +60,7 @@ def _generate_graph_segment(
         return graphs[set1:]
     return graphs
 
+
 def _calculate_change_points(config: Dict) -> List[int]:
     """Calculate the indices where parameter changes occur."""
     seq_len = config["sequence_length"]
@@ -66,10 +70,11 @@ def _calculate_change_points(config: Dict) -> List[int]:
         seq_len["before_change"] + seq_len["after_change1"] + seq_len["after_change2"],
     ]
 
+
 def generate_er_graphs(config: Dict = ER_CONFIG) -> Dict[str, List[np.ndarray]]:
     """Generate Erdős-Rényi graph sequence with multiple parameter changes."""
     generator = GraphGenerator()
-    
+
     graphs1 = _generate_graph_segment(
         generator,
         config["n"],
@@ -108,9 +113,11 @@ def generate_er_graphs(config: Dict = ER_CONFIG) -> Dict[str, List[np.ndarray]]:
         "change_points": change_points,
     }
 
+
 # -----------------------------------------------------------------------------#
 #                               MAIN ENTRY POINT                               #
 # -----------------------------------------------------------------------------#
+
 
 def main():
     """Main entry point for graph generation."""
@@ -127,6 +134,7 @@ def main():
     print(f"  - Generated {len(result['graphs'])} graphs")
     print(f"  - Change points at t={result['change_points']}")
     print(f"  - Graph shape: {result['graphs'][0].shape}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,5 @@
+# tests/create_ba_graphs.py
+
 """
 Barabási-Albert (BA) Graph Sequence Generator
 
@@ -132,6 +134,7 @@ def main():
     print(f"  - Generated {len(result['graphs'])} graphs")
     print(f"  - Change points at t={result['change_points']}")
     print(f"  - Graph shape: {result['graphs'][0].shape}")
+
 
 if __name__ == "__main__":
     main()
