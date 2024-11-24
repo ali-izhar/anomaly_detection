@@ -459,13 +459,13 @@ def main():
     G_first = adjacency_to_graph(graphs[0])
     pos = nx.spring_layout(G_first, k=1, iterations=50)
 
-    # Generate visualizations
-    for t in time_points:
-        print(f"\n=== Time step {t} ===")
-        metrics = analyze_ba_features(graphs[t])
-        for metric, value in metrics.items():
-            if isinstance(value, (int, float)):
-                print(f"{metric}: {value:.3f}")
+    with open("ba_outputs/ba_metrics.txt", "w") as f:
+        for t in time_points:
+            f.write(f"\n=== Time step {t} ===\n")
+            metrics = analyze_ba_features(graphs[t])
+            for metric, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    f.write(f"{metric}: {value:.3f}\n")
 
     create_dashboard(graphs, time_points, pos, change_points)
 

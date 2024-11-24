@@ -1,4 +1,4 @@
-# train.py
+# spatio_temporal_train.py
 
 """Main training script for GCN-LSTM model on soccer player movement data."""
 
