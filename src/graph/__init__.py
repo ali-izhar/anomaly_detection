@@ -7,6 +7,7 @@ from .features import (
     adjacency_to_graph,
 )
 from .graph_generator import GraphGenerator
+from .syn_data_generator import SyntheticDataGenerator
 
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "graph_to_adjacency",
     "adjacency_to_graph",
     "GraphGenerator",
+    "SyntheticDataGenerator",
 ]

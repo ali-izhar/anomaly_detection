@@ -102,11 +102,12 @@ def visualize_martingale_analysis(
     detected_changes = set()
     for t in range(len(M_sum)):
         if M_sum[t] > THRESHOLD or M_avg[t] > THRESHOLD:
-            ax_reset.axvline(x=t, color='purple', linestyle='--', alpha=0.3, zorder=1)
+            ax_reset.axvline(x=t, color="purple", linestyle="--", alpha=0.3, zorder=1)
             detected_changes.add(t)
     if detected_changes:  # Add to legend only if there were detections
-        ax_reset.plot([], [], color='purple', linestyle='--', alpha=0.3, 
-                     label='Detected Change')
+        ax_reset.plot(
+            [], [], color="purple", linestyle="--", alpha=0.3, label="Detected Change"
+        )
 
     # Add subtle grid lines
     ax_reset.grid(True, linestyle="--", alpha=0.3)
@@ -140,12 +141,12 @@ def visualize_martingale_analysis(
         loc="upper right",
         bbox_to_anchor=(1, 1.02),
         frameon=True,
-        facecolor='none',  # Transparent background
-        edgecolor='none',
+        facecolor="none",  # Transparent background
+        edgecolor="none",
         shadow=False,
     )
     # Add these lines to ensure transparency
-    legend.get_frame().set_facecolor('none')
+    legend.get_frame().set_facecolor("none")
     legend.get_frame().set_alpha(0)
 
     # Set y-axis limits with some padding
@@ -226,12 +227,12 @@ def visualize_martingale_analysis(
         loc="upper left",
         bbox_to_anchor=(0, 1.02),
         frameon=True,
-        facecolor='none',  # Transparent background
-        edgecolor='none',
+        facecolor="none",  # Transparent background
+        edgecolor="none",
         shadow=False,
     )
     # Add these lines to ensure transparency
-    legend.get_frame().set_facecolor('none')
+    legend.get_frame().set_facecolor("none")
     legend.get_frame().set_alpha(0)
 
     # Customize cumulative plot with smaller title
@@ -293,7 +294,7 @@ def save_martingale_results(
             # Detected change points with their martingale values
             detected_points = results["change_detected_instant"]
             martingale_values = results["martingales"]
-            
+
             f.write("Detected change points and their martingale values:\n")
             if detected_points:
                 for point in detected_points:
@@ -307,7 +308,10 @@ def save_martingale_results(
 
             # Handle martingale values statistics
             flat_values = np.array(
-                [x.item() if isinstance(x, np.ndarray) else x for x in martingale_values]
+                [
+                    x.item() if isinstance(x, np.ndarray) else x
+                    for x in martingale_values
+                ]
             )
 
             if flat_values.size > 0:
