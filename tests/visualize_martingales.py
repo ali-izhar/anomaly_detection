@@ -53,14 +53,15 @@ class MartingaleVisualizer:
         # Select time points for graph visualization
         time_points = [
             0,  # Start
-            self.change_points[0] - 10,  # Before first change
-            self.change_points[0] + 10,  # After first change
-            self.change_points[-1] + 10,  # After last change
+            self.change_points[0],  # Change 1
+            self.change_points[1],  # Change 2
+            self.change_points[2],  # Change 3
+            len(self.graphs) - 1,   # End
         ]
 
         # Create figure
         fig = plt.figure(figsize=(20, 15))
-        gs = fig.add_gridspec(3, 4, height_ratios=[1, 1, 1], hspace=0.5, wspace=0.3)
+        gs = fig.add_gridspec(3, 5, height_ratios=[1, 1, 1], hspace=0.5, wspace=0.3)
 
         # Create plots
         self._plot_graph_evolution(fig, gs, time_points)
