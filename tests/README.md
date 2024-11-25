@@ -138,3 +138,76 @@ This shows how quickly information could spread from one node to all others.
 - BA networks: Hub nodes can reach others quickly
 - ER networks: Speed depends on how dense the connections are
 - NW networks: Shortcuts help information spread fast
+
+---
+
+# Understanding SHAP Values in Change Point Detection
+
+SHAP (SHapley Additive exPlanations) values help us understand how each network measure (like degree centrality or betweenness) contributes to detecting changes in the graph structure. They explain which aspects of the network changed and by how much.
+
+## SHAP Values Over Time
+
+- Shows how each centrality measure's contribution changes throughout the graph evolution
+- Spikes in SHAP values align with network structure changes
+
+## Feature Importance Heatmap
+
+- Red = Positive contribution (supports detecting change)
+- Blue = Negative contribution (against detecting change)
+- Intensity shows magnitude of contribution
+
+When a graph undergoes structural changes:
+
+1. **Degree Centrality SHAP Values**
+   - Positive spikes: Significant changes in how nodes connect
+   - Negative values: Connection patterns remain stable
+   - Large magnitude: Major redistribution of connections
+
+2. **Betweenness Centrality SHAP Values**
+   - Positive spikes: Changes in shortest paths and bridge nodes
+   - Negative values: Path structures remain similar
+   - Large magnitude: Major changes in information flow patterns
+
+3. **Eigenvector Centrality SHAP Values**
+   - Positive spikes: Changes in influence patterns
+   - Negative values: Influence structures remain stable
+   - Large magnitude: Major shifts in node importance
+
+4. **Closeness Centrality SHAP Values**
+   - Positive spikes: Changes in overall network distance patterns
+   - Negative values: Distance relationships remain similar
+   - Large magnitude: Major changes in network reachability
+
+## SHAP Value Patterns at Change Points
+
+At change points, SHAP values often show a characteristic "dip-then-spike" pattern:
+
+### Initial Dip (Negative Values)
+- Occurs immediately at the change point
+- Indicates the old network patterns becoming temporarily unreliable
+- Represents a transition phase where previous patterns are broken but new ones haven't formed
+
+### Following Spike (Positive Values)
+- Follows shortly after the initial dip
+- Shows the centrality measures strongly detecting the new network structure
+- Represents the moment when the structural change is fully captured
+
+This pattern is particularly visible in BA graphs where:
+1. Adding new hub nodes first disrupts existing centrality patterns (negative SHAP)
+2. Then the new hub structure becomes clear (positive SHAP)
+
+## Practical Example
+
+If at a change point you observe:
+- High positive SHAP value for degree centrality
+- Negative SHAP value for betweenness centrality
+
+This could indicate that while nodes gained/lost connections (degree changed), the overall path structure (betweenness) remained relatively stable. This might happen when new connections form but maintain similar routing patterns.
+
+## SHAP Value Additivity
+
+The sum of SHAP values equals the difference between the model's prediction and the average prediction.
+
+$$ \sum_{i=1}^{n} \phi_i = \mathbb{E}[\hat{y}] - \hat{y} $$
+
+This property ensures that SHAP values provide a complete explanation of how each feature contributes to detecting changes in the graph structure.

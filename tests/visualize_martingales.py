@@ -77,17 +77,6 @@ class MartingaleVisualizer:
             feature_matrix - np.mean(feature_matrix, axis=0)
         ) / np.std(feature_matrix, axis=0)
 
-        # Compute baseline prediction (expected value)
-        baseline = detector.martingale_test(
-            data=normalized_features,
-            threshold=self.threshold,
-            epsilon=self.epsilon,
-            reset=True,
-        )["martingales"]
-        baseline = np.array(
-            [x.item() if isinstance(x, np.ndarray) else x for x in baseline]
-        )
-
         # Compute SHAP values
         shap_values = np.zeros_like(normalized_features)
         for i in range(normalized_features.shape[1]):
@@ -117,16 +106,6 @@ class MartingaleVisualizer:
 
             # SHAP value calculation
             shap_values[:, i] = with_feature - without_feature
-
-        # Verify SHAP additivity property
-        shap_sum = np.sum(shap_values, axis=1)
-        expected_diff = baseline - np.mean(baseline)
-
-        # Print verification of SHAP additivity
-        print("SHAP Additivity Verification:")
-        print(
-            f"Mean absolute difference between SHAP sum and expected diff: {np.mean(np.abs(shap_sum - expected_diff)):.6f}"
-        )
 
         return shap_values
 
