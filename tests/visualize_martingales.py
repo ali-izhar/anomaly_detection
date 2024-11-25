@@ -1,3 +1,5 @@
+# tests/visualize_martingales.py
+
 """
 Martingale Visualization Module
 
@@ -14,6 +16,7 @@ from typing import Dict, List, Any
 import networkx as nx
 
 from src.graph.features import adjacency_to_graph
+from src.changepoint import ChangePointDetector
 
 
 class MartingaleVisualizer:
@@ -25,6 +28,8 @@ class MartingaleVisualizer:
         change_points: List[int],
         martingales: Dict[str, Dict[str, Any]],
         graph_type: str = "BA",
+        threshold: float = 30,
+        epsilon: float = 0.8,
         output_dir: str = "martingale_outputs",
     ):
         """Initialize visualizer with analysis results.
@@ -40,7 +45,10 @@ class MartingaleVisualizer:
         self.change_points = change_points
         self.martingales = martingales
         self.graph_type = graph_type
+        self.threshold = threshold
+        self.epsilon = epsilon
         self.output_dir = Path(output_dir)
+        self.shap_values = self._compute_shap_values()
 
         # Set style
         plt.style.use("seaborn-v0_8-whitegrid")
@@ -48,25 +56,124 @@ class MartingaleVisualizer:
         sns.set_context("notebook", font_scale=1.2)
         self.colors = sns.color_palette("Set2", len(martingales["reset"]))
 
+    def _compute_shap_values(self) -> np.ndarray:
+        """Compute SHAP values for feature importance analysis."""
+        detector = ChangePointDetector()
+        detector.initialize(self.graphs)
+        centralities = detector.extract_features()
+
+        # Convert centralities to feature matrix, ensuring consistent shape
+        feature_matrix = []
+        for values in centralities.values():
+            # Convert to numpy array and ensure 1D
+            values_array = np.array(values)
+            if values_array.ndim > 1:
+                # Take mean across nodes if we have per-node values
+                values_array = np.mean(values_array, axis=1)
+            feature_matrix.append(values_array)
+
+        feature_matrix = np.array(feature_matrix).T  # Shape: (time_steps, n_features)
+
+        # Normalize features
+        normalized_features = (
+            feature_matrix - np.mean(feature_matrix, axis=0)
+        ) / np.std(feature_matrix, axis=0)
+
+        # Simple SHAP approximation using feature contributions to martingale values
+        shap_values = np.zeros_like(normalized_features)
+        for i in range(normalized_features.shape[1]):
+            other_features = list(range(normalized_features.shape[1]))
+            other_features.remove(i)
+
+            # Compute martingale with and without feature
+            with_feature = detector.martingale_test(
+                data=normalized_features[:, [i]],
+                threshold=self.threshold,
+                epsilon=self.epsilon,
+                reset=True,
+            )["martingales"]
+
+            without_feature = detector.martingale_test(
+                data=normalized_features[:, other_features],
+                threshold=self.threshold,
+                epsilon=self.epsilon,
+                reset=True,
+            )["martingales"]
+
+            # SHAP value is the difference in martingale values
+            shap_values[:, i] = np.array(
+                [x.item() if isinstance(x, np.ndarray) else x for x in with_feature]
+            ) - np.array(
+                [x.item() if isinstance(x, np.ndarray) else x for x in without_feature]
+            )
+
+        return shap_values
+
     def create_dashboard(self) -> None:
         """Generate comprehensive dashboard with all visualizations."""
-        # Select time points for graph visualization
         time_points = [
             0,  # Start
             self.change_points[0],  # Change 1
             self.change_points[1],  # Change 2
             self.change_points[2],  # Change 3
-            len(self.graphs) - 1,   # End
+            len(self.graphs) - 1,  # End
         ]
 
-        # Create figure
-        fig = plt.figure(figsize=(20, 15))
-        gs = fig.add_gridspec(3, 5, height_ratios=[1, 1, 1], hspace=0.5, wspace=0.3)
+        fig = plt.figure(figsize=(24, 16))
+        gs = fig.add_gridspec(
+            3,
+            1,
+            height_ratios=[
+                0.6,
+                1.2,
+                1.2,
+            ],
+            hspace=0.25,
+        )
 
-        # Create plots
-        self._plot_graph_evolution(fig, gs, time_points)
-        self._plot_reset_martingales(fig, gs)
-        self._plot_cumulative_martingales(fig, gs)
+        # Row 1: Graph Evolution (5 columns)
+        gs_top = gs[0].subgridspec(1, 5, wspace=0.15)
+        for i, t in enumerate(time_points):
+            ax = fig.add_subplot(gs_top[0, i])
+            G = adjacency_to_graph(self.graphs[t])
+
+            degrees = dict(G.degree())
+            node_sizes = [
+                1000 * (v + 1) / max(degrees.values()) for v in degrees.values()
+            ]
+            node_colors = list(degrees.values())
+
+            pos = nx.spring_layout(G, k=0.8, iterations=50)
+            nx.draw(
+                G,
+                pos,
+                node_color=node_colors,
+                node_size=node_sizes,
+                with_labels=True,
+                edge_color="gray",
+                alpha=0.7,
+                ax=ax,
+                cmap=plt.cm.viridis,
+            )
+
+            stats = f"t={t} | N={G.number_of_nodes()} | E={G.number_of_edges()}"
+            ax.set_title(stats, fontsize=10, pad=5)
+
+        # Row 2: Martingales (2 columns)
+        gs_middle = gs[1].subgridspec(1, 2, wspace=0.15)
+        self._plot_reset_martingales(fig, gs_middle[0, 0])
+        self._plot_cumulative_martingales(fig, gs_middle[0, 1])
+
+        # Row 3: SHAP Analysis (2 columns)
+        gs_bottom = gs[2].subgridspec(1, 2, wspace=0.15)
+        self._plot_shap_values(fig, gs_bottom[0, 0])
+        self._plot_feature_importance(fig, gs_bottom[0, 1])
+
+        fig.suptitle(
+            f"{self.graph_type} Graph Change Point Analysis", fontsize=16, y=0.99
+        )
+
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
 
         # Save
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +239,7 @@ class MartingaleVisualizer:
                 node_color=node_colors,
                 node_size=node_sizes,
                 with_labels=True,
-                font_size=6,
+                font_size=5,
                 edge_color="gray",
                 alpha=0.7,
                 ax=ax,
@@ -147,14 +254,14 @@ class MartingaleVisualizer:
 
     def _plot_reset_martingales(self, fig: plt.Figure, gs: plt.GridSpec) -> None:
         """Plot reset martingales."""
-        ax = fig.add_subplot(gs[1, :])
+        ax = fig.add_subplot(gs)
         self._plot_martingale_sequence(
             ax, self.martingales["reset"], "Reset Martingale Measures"
         )
 
     def _plot_cumulative_martingales(self, fig: plt.Figure, gs: plt.GridSpec) -> None:
         """Plot cumulative martingales."""
-        ax = fig.add_subplot(gs[2, :])
+        ax = fig.add_subplot(gs)
         self._plot_martingale_sequence(
             ax,
             self.martingales["cumulative"],
@@ -170,11 +277,9 @@ class MartingaleVisualizer:
         cumulative: bool = False,
     ) -> None:
         """Plot martingale sequences with change points."""
-        # Add shaded background for change points
         for cp in self.change_points:
             ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
 
-        # Plot individual martingales
         for (name, results), color in zip(martingales.items(), self.colors):
             # Convert array of arrays to flat array
             martingale_values = np.array(
@@ -253,7 +358,7 @@ class MartingaleVisualizer:
             def log_format(x, p):
                 exponent = int(np.log10(x))
                 return f"$10^{{{exponent}}}$"
-            
+
             ax.yaxis.set_major_formatter(FuncFormatter(log_format))
 
         ax.set_xlabel("Time Steps", fontsize=12, labelpad=10)
@@ -275,3 +380,62 @@ class MartingaleVisualizer:
         )
         legend.get_frame().set_facecolor("none")
         legend.get_frame().set_alpha(0)
+
+    def _plot_shap_values(self, fig: plt.Figure, ax_pos: plt.GridSpec) -> None:
+        """Plot SHAP values over time."""
+        ax = fig.add_subplot(ax_pos)
+
+        for i, name in enumerate(self.martingales["reset"].keys()):
+            ax.plot(
+                self.shap_values[:, i],
+                label=name.capitalize(),
+                color=self.colors[i],
+                linewidth=1.5,
+                alpha=0.7,
+            )
+
+        # Add change point indicators
+        for cp in self.change_points:
+            ax.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+
+        ax.set_title("SHAP Values Over Time", fontsize=12, pad=20)
+        ax.set_xlabel("Time Steps", fontsize=10)
+        ax.set_ylabel("Feature Importance", fontsize=10)
+        ax.legend(fontsize=8, title="Centrality Measures")
+        ax.grid(True, alpha=0.3)
+
+    def _plot_feature_importance(self, fig: plt.Figure, ax_pos: plt.GridSpec) -> None:
+        """Plot feature importance heatmap."""
+        ax = fig.add_subplot(ax_pos)
+
+        # Normalize SHAP values for visualization
+        normalized_shap = (self.shap_values - np.min(self.shap_values)) / (
+            np.max(self.shap_values) - np.min(self.shap_values)
+        )
+
+        # Create heatmap
+        sns.heatmap(
+            normalized_shap.T,
+            ax=ax,
+            cmap="RdBu_r",
+            center=0.5,
+            xticklabels=50,
+            yticklabels=[
+                name.capitalize() for name in self.martingales["reset"].keys()
+            ],
+            cbar_kws={"label": "Relative Feature Importance"},
+        )
+
+        ax.set_title(
+            "Feature Importance Over Time\n(Red = High Impact, Blue = Low Impact)",
+            fontsize=12,
+        )
+        ax.set_xlabel("Time Steps", fontsize=10)
+
+        # Move y-axis labels to the right
+        ax.yaxis.set_label_position("right")
+        ax.yaxis.tick_right()
+
+        # Rotate x-axis labels
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+        plt.setp(ax.get_yticklabels(), rotation=0)

@@ -100,6 +100,8 @@ class BAMartingaleAnalyzer:
             change_points=change_points,
             martingales=martingales,
             graph_type="BA",
+            threshold=self.threshold,
+            epsilon=self.epsilon,
             output_dir=self.output_dir,
         )
 
