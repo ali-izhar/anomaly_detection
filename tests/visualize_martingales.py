@@ -247,8 +247,14 @@ class MartingaleVisualizer:
         # Only add minor locator for non-log scale
         if not cumulative:
             ax.yaxis.set_minor_locator(AutoMinorLocator())
-
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
+        else:
+            # Use 10^x notation for log scale
+            def log_format(x, p):
+                exponent = int(np.log10(x))
+                return f"$10^{{{exponent}}}$"
+            
+            ax.yaxis.set_major_formatter(FuncFormatter(log_format))
 
         ax.set_xlabel("Time Steps", fontsize=12, labelpad=10)
         ax.set_ylabel(
