@@ -16,7 +16,7 @@ def main():
     visualizer = GraphVisualizer(
         graphs=result["graphs"], change_points=result["change_points"], graph_type="NW"
     )
-    
+
     visualizer.create_dashboard()
 
 
