@@ -14,9 +14,12 @@ from pathlib import Path
 from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from typing import Dict, List, Any
 import networkx as nx
+import shap
+from sklearn.model_selection import train_test_split
 
 from src.graph.features import adjacency_to_graph
 from src.changepoint import ChangePointDetector
+from src.models.threshold_model import CustomThresholdModel
 
 
 class MartingaleVisualizer:
@@ -57,57 +60,55 @@ class MartingaleVisualizer:
         self.colors = sns.color_palette("Set2", len(martingales["reset"]))
 
     def _compute_shap_values(self) -> np.ndarray:
-        """Compute SHAP values for feature importance analysis."""
-        detector = ChangePointDetector()
-        detector.initialize(self.graphs)
-        centralities = detector.extract_features()
-
-        # Convert centralities to feature matrix, ensuring consistent shape
+        """Compute SHAP values using CustomThresholdModel on martingale values."""
+        # Convert martingale values to feature matrix
         feature_matrix = []
-        for values in centralities.values():
-            values_array = np.array(values)
-            if values_array.ndim > 1:
-                values_array = np.mean(values_array, axis=1)
-            feature_matrix.append(values_array)
+        feature_names = []
+        
+        # Extract martingale values from reset martingales only (like in synthetic_data.py)
+        for name, results in self.martingales["reset"].items():
+            # Convert array of arrays to flat array
+            martingale_values = np.array([
+                x.item() if isinstance(x, np.ndarray) else x 
+                for x in results["martingales"]
+            ])
+            feature_matrix.append(martingale_values)
+            feature_names.append(name)
 
-        feature_matrix = np.array(feature_matrix).T
+        X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
 
-        # Normalize features
-        normalized_features = (
-            feature_matrix - np.mean(feature_matrix, axis=0)
-        ) / np.std(feature_matrix, axis=0)
+        # Create binary labels based on change points
+        y = np.zeros(len(self.graphs))
+        for cp in self.change_points:
+            # Mark a window around each change point as positive
+            window_size = 5  # Adjust as needed
+            start_idx = max(0, cp - window_size)
+            end_idx = min(len(y), cp + window_size)
+            y[start_idx:end_idx] = 1
+        
+        # Split data for training
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
 
-        # Compute SHAP values
-        shap_values = np.zeros_like(normalized_features)
-        for i in range(normalized_features.shape[1]):
-            other_features = list(range(normalized_features.shape[1]))
-            other_features.remove(i)
+        # Train model
+        model = CustomThresholdModel(threshold=self.threshold)
+        model.fit(X_train, y_train)
 
-            # Compute martingale with and without feature
-            with_feature = detector.martingale_test(
-                data=normalized_features[:, [i]],
-                threshold=self.threshold,
-                epsilon=self.epsilon,
-                reset=True,
-            )["martingales"]
-            with_feature = np.array(
-                [x.item() if isinstance(x, np.ndarray) else x for x in with_feature]
-            )
-
-            without_feature = detector.martingale_test(
-                data=normalized_features[:, other_features],
-                threshold=self.threshold,
-                epsilon=self.epsilon,
-                reset=True,
-            )["martingales"]
-            without_feature = np.array(
-                [x.item() if isinstance(x, np.ndarray) else x for x in without_feature]
-            )
-
-            # SHAP value calculation
-            shap_values[:, i] = with_feature - without_feature
-
-        return shap_values
+        # Compute SHAP values using training data as background
+        try:
+            explainer = shap.KernelExplainer(model.predict, X_train)
+            shap_values = explainer.shap_values(X)
+            
+            # If shap_values is a list (for binary classification), take values for positive class
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]
+                
+            return shap_values
+            
+        except Exception as e:
+            print(f"SHAP computation failed: {str(e)}")
+            return np.zeros((len(X), len(feature_names)))  # Return dummy values on error
 
     def create_dashboard(self) -> None:
         """Generate comprehensive dashboard with all visualizations."""
@@ -385,6 +386,7 @@ class MartingaleVisualizer:
         """Plot SHAP values over time."""
         ax = fig.add_subplot(ax_pos)
 
+        # Plot SHAP values for each feature
         for i, name in enumerate(self.martingales["reset"].keys()):
             ax.plot(
                 self.shap_values[:, i],
@@ -408,6 +410,9 @@ class MartingaleVisualizer:
         """Plot feature importance heatmap."""
         ax = fig.add_subplot(ax_pos)
 
+        # Get feature names from reset martingales only
+        feature_names = list(self.martingales["reset"].keys())
+
         # Use raw SHAP values without normalization
         shap_values = self.shap_values
 
@@ -424,9 +429,7 @@ class MartingaleVisualizer:
             vmin=vmin,
             vmax=vmax,
             xticklabels=50,
-            yticklabels=[
-                name.capitalize() for name in self.martingales["reset"].keys()
-            ],
+            yticklabels=[name.capitalize() for name in feature_names],
             cbar_kws={
                 "label": "SHAP Value",
                 "orientation": "horizontal",

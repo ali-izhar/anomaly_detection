@@ -4,6 +4,7 @@ import numpy as np
 import logging
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+import shap  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -96,18 +97,18 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
 
         return predictions
 
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+    def predict_proba(self, X: np.ndarray, positive_class: bool = True) -> np.ndarray:
         """Compute change point probabilities.
         P(change) = sum_i x_i / (sum_i x_i + tau)
         Used for SHAP value computation to get continuous predictions.
 
         Args:
             X: Feature matrix [n_samples x n_features]
+            positive_class: If True, returns P(change), if False returns P(no change)
 
         Returns:
-            Probability matrix [n_samples x 2]
-            - Column 0: P(no change)
-            - Column 1: P(change)
+            Probability array [n_samples] containing either P(change) or P(no change)
+            depending on positive_class parameter
 
         Raises:
             ValueError: If X has wrong dimensions
@@ -126,14 +127,52 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
         logger.debug(f"Computing probabilities for {X.shape[0]} samples")
 
         # Compute change probabilities
-        sums = np.sum(X, axis=1).reshape(-1, 1)
+        sums = np.sum(X, axis=1)
         probs_change = sums / (sums + self.threshold)
 
-        # Return [P(no change), P(change)]
-        probabilities = np.hstack([1 - probs_change, probs_change])
+        # Return either P(change) or P(no change) based on positive_class parameter
+        probs = probs_change if positive_class else 1 - probs_change
 
-        logger.debug(f"Average change probability: {np.mean(probs_change)}")
-        return probabilities
+        logger.debug(f"Average probability: {np.mean(probs)}")
+        return probs
+
+    def compute_shap_values(
+        self, background: np.ndarray, X: np.ndarray, probs: bool = False
+    ) -> np.ndarray:
+        """Compute SHAP values for model interpretability.
+
+        Args:
+            background: Background data for SHAP explainer [n_background x n_features]
+            X: Data to explain [n_samples x n_features]
+            probs: If True, use predict_proba instead of predict
+
+        Returns:
+            SHAP values for predictions
+
+        Raises:
+            RuntimeError: If SHAP computation fails
+        """
+        try:
+            # Check if background data is empty using shape
+            if background is None or background.shape[0] == 0:
+                logger.warning("No background data provided, using shap.sample(data, 50)")
+                background = shap.sample(X, 50)
+
+            explainer = shap.KernelExplainer(
+                self.predict_proba if probs else self.predict, background
+            )
+            shap_values = explainer.shap_values(X)
+            logger.debug(
+                f"Generated SHAP values of shape {np.array(shap_values).shape}"
+            )
+            return shap_values
+        except Exception as e:
+            logger.error(f"SHAP computation failed: {str(e)}")
+            raise RuntimeError(f"SHAP computation failed: {str(e)}")
+
+    def get_feature_importances(self) -> np.ndarray:
+        """Get feature importances for SHAP analysis."""
+        return np.ones(self.n_features_in_) / self.n_features_in_
 
     def score(self, X: np.ndarray, y: np.ndarray) -> float:
         """Compute accuracy of change point predictions.
