@@ -65,21 +65,30 @@ class MartingaleVisualizer:
         # Convert centralities to feature matrix, ensuring consistent shape
         feature_matrix = []
         for values in centralities.values():
-            # Convert to numpy array and ensure 1D
             values_array = np.array(values)
             if values_array.ndim > 1:
-                # Take mean across nodes if we have per-node values
                 values_array = np.mean(values_array, axis=1)
             feature_matrix.append(values_array)
 
-        feature_matrix = np.array(feature_matrix).T  # Shape: (time_steps, n_features)
+        feature_matrix = np.array(feature_matrix).T
 
         # Normalize features
         normalized_features = (
             feature_matrix - np.mean(feature_matrix, axis=0)
         ) / np.std(feature_matrix, axis=0)
 
-        # Simple SHAP approximation using feature contributions to martingale values
+        # Compute baseline prediction (expected value)
+        baseline = detector.martingale_test(
+            data=normalized_features,
+            threshold=self.threshold,
+            epsilon=self.epsilon,
+            reset=True,
+        )["martingales"]
+        baseline = np.array(
+            [x.item() if isinstance(x, np.ndarray) else x for x in baseline]
+        )
+
+        # Compute SHAP values
         shap_values = np.zeros_like(normalized_features)
         for i in range(normalized_features.shape[1]):
             other_features = list(range(normalized_features.shape[1]))
@@ -92,6 +101,9 @@ class MartingaleVisualizer:
                 epsilon=self.epsilon,
                 reset=True,
             )["martingales"]
+            with_feature = np.array(
+                [x.item() if isinstance(x, np.ndarray) else x for x in with_feature]
+            )
 
             without_feature = detector.martingale_test(
                 data=normalized_features[:, other_features],
@@ -99,13 +111,22 @@ class MartingaleVisualizer:
                 epsilon=self.epsilon,
                 reset=True,
             )["martingales"]
-
-            # SHAP value is the difference in martingale values
-            shap_values[:, i] = np.array(
-                [x.item() if isinstance(x, np.ndarray) else x for x in with_feature]
-            ) - np.array(
+            without_feature = np.array(
                 [x.item() if isinstance(x, np.ndarray) else x for x in without_feature]
             )
+
+            # SHAP value calculation
+            shap_values[:, i] = with_feature - without_feature
+
+        # Verify SHAP additivity property
+        shap_sum = np.sum(shap_values, axis=1)
+        expected_diff = baseline - np.mean(baseline)
+
+        # Print verification of SHAP additivity
+        print("SHAP Additivity Verification:")
+        print(
+            f"Mean absolute difference between SHAP sum and expected diff: {np.mean(np.abs(shap_sum - expected_diff)):.6f}"
+        )
 
         return shap_values
 
@@ -128,7 +149,7 @@ class MartingaleVisualizer:
                 1.2,
                 1.2,
             ],
-            hspace=0.25,
+            hspace=0.4,
         )
 
         # Row 1: Graph Evolution (5 columns)
@@ -361,13 +382,13 @@ class MartingaleVisualizer:
 
             ax.yaxis.set_major_formatter(FuncFormatter(log_format))
 
-        ax.set_xlabel("Time Steps", fontsize=12, labelpad=10)
+        ax.set_xlabel("Time Steps", fontsize=12, labelpad=5)
         ax.set_ylabel(
             "Martingale Values" + (" (log scale)" if cumulative else ""),
             fontsize=12,
             labelpad=10,
         )
-        ax.set_title(title, fontsize=12, pad=20)
+        ax.set_title(title, fontsize=12, pad=15)
 
         legend = ax.legend(
             fontsize=10,
@@ -408,29 +429,39 @@ class MartingaleVisualizer:
         """Plot feature importance heatmap."""
         ax = fig.add_subplot(ax_pos)
 
-        # Normalize SHAP values for visualization
-        normalized_shap = (self.shap_values - np.min(self.shap_values)) / (
-            np.max(self.shap_values) - np.min(self.shap_values)
-        )
+        # Use raw SHAP values without normalization
+        shap_values = self.shap_values
 
-        # Create heatmap
+        # Get the absolute maximum for symmetric colormap
+        vmax = max(abs(np.min(shap_values)), abs(np.max(shap_values)))
+        vmin = -vmax
+
+        # Create heatmap with horizontal colorbar at bottom
         sns.heatmap(
-            normalized_shap.T,
+            shap_values.T,
             ax=ax,
             cmap="RdBu_r",
-            center=0.5,
+            center=0,
+            vmin=vmin,
+            vmax=vmax,
             xticklabels=50,
             yticklabels=[
                 name.capitalize() for name in self.martingales["reset"].keys()
             ],
-            cbar_kws={"label": "Relative Feature Importance"},
+            cbar_kws={
+                "label": "SHAP Value",
+                "orientation": "horizontal",
+                "pad": 0.2,
+                "format": "%.2f",
+            },
         )
 
         ax.set_title(
-            "Feature Importance Over Time\n(Red = High Impact, Blue = Low Impact)",
+            "Feature Importance Over Time\n(Red = Positive Impact, Blue = Negative Impact)",
             fontsize=12,
+            pad=15,
         )
-        ax.set_xlabel("Time Steps", fontsize=10)
+        ax.set_xlabel("Time Steps", fontsize=10, labelpad=10)
 
         # Move y-axis labels to the right
         ax.yaxis.set_label_position("right")
