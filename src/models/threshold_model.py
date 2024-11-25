@@ -5,6 +5,8 @@ import logging
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 import shap  # type: ignore
+from typing import List
+from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger(__name__)
 
@@ -137,38 +139,63 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
         return probs
 
     def compute_shap_values(
-        self, background: np.ndarray, X: np.ndarray, probs: bool = False
+        self,
+        X: np.ndarray,
+        change_points: List[int],
+        sequence_length: int,
+        window_size: int = 5,
+        test_size: float = 0.2,
+        random_state: int = 42,
+        probs: bool = False,
+        positive_class: bool = True,
     ) -> np.ndarray:
-        """Compute SHAP values for model interpretability.
+        """SHAP value computation including data preparation and model training.
 
         Args:
-            background: Background data for SHAP explainer [n_background x n_features]
-            X: Data to explain [n_samples x n_features]
-            probs: If True, use predict_proba instead of predict
+            X: Feature matrix [n_timesteps x n_features]
+            change_points: List of change point indices
+            sequence_length: Total length of the sequence
+            window_size: Size of window around change points to mark as positive
+            test_size: Proportion of data to use for testing
+            random_state: Random seed for reproducibility
+            probs: If True, returns SHAP values for P(change), if False returns SHAP values for P(no change)
+            positive_class: If True, returns SHAP values for positive class, if False returns SHAP values for negative class
 
         Returns:
-            SHAP values for predictions
-
-        Raises:
-            RuntimeError: If SHAP computation fails
+            SHAP values for the entire sequence
         """
-        try:
-            # Check if background data is empty using shape
-            if background is None or background.shape[0] == 0:
-                logger.warning("No background data provided, using shap.sample(data, 50)")
-                background = shap.sample(X, 50)
+        # Create binary labels based on change points
+        y = np.zeros(sequence_length)
+        for cp in change_points:
+            # Mark a window around each change point as positive
+            start_idx = max(0, cp - window_size)
+            end_idx = min(len(y), cp + window_size)
+            y[start_idx:end_idx] = 1
 
-            explainer = shap.KernelExplainer(
-                self.predict_proba if probs else self.predict, background
-            )
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state
+        )
+
+        self.fit(X_train, y_train)
+
+        # Compute SHAP values using training data as background
+        try:
+            if probs:
+                explainer = shap.KernelExplainer(self.predict_proba, X_train)
+            else:
+                explainer = shap.KernelExplainer(self.predict, X_train)
+
             shap_values = explainer.shap_values(X)
-            logger.debug(
-                f"Generated SHAP values of shape {np.array(shap_values).shape}"
-            )
+
+            # If shap_values is a list (for binary classification), take values for positive class by default
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1] if positive_class else shap_values[0]
+
             return shap_values
+
         except Exception as e:
             logger.error(f"SHAP computation failed: {str(e)}")
-            raise RuntimeError(f"SHAP computation failed: {str(e)}")
+            return np.zeros((len(X), X.shape[1]))  # Return dummy values on error
 
     def get_feature_importances(self) -> np.ndarray:
         """Get feature importances for SHAP analysis."""

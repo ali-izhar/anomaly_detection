@@ -7,18 +7,16 @@ This module provides visualization utilities for martingale-based change point d
 results across different graph types (BA, ER, NW).
 """
 
+from pathlib import Path
+from typing import Dict, List, Any
+
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-from matplotlib.ticker import AutoMinorLocator, FuncFormatter
-from typing import Dict, List, Any
 import networkx as nx
-import shap
-from sklearn.model_selection import train_test_split
+import seaborn as sns
 
+from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from src.graph.features import adjacency_to_graph
-from src.changepoint import ChangePointDetector
 from src.models.threshold_model import CustomThresholdModel
 
 
@@ -57,58 +55,46 @@ class MartingaleVisualizer:
         plt.style.use("seaborn-v0_8-whitegrid")
         sns.set_style("whitegrid")
         sns.set_context("notebook", font_scale=1.2)
-        self.colors = sns.color_palette("Set2", len(martingales["reset"]))
+        self.colors = sns.color_palette(
+            [
+                "#FF1F5B",  # bright red
+                "#009ADE",  # bright blue
+                "#F28522",  # orange
+                "#58B272",  # green
+                "#AF58BA",  # purple
+                "#00CD6C",  # emerald
+                "#FFC61E",  # yellow
+                "#1D2B5E",  # navy
+                "#E6302C",  # coral
+                "#562883",  # deep purple
+            ],
+            n_colors=len(martingales["reset"]),
+        )
 
     def _compute_shap_values(self) -> np.ndarray:
         """Compute SHAP values using CustomThresholdModel on martingale values."""
         # Convert martingale values to feature matrix
         feature_matrix = []
-        feature_names = []
-        
-        # Extract martingale values from reset martingales only (like in synthetic_data.py)
+
         for name, results in self.martingales["reset"].items():
             # Convert array of arrays to flat array
-            martingale_values = np.array([
-                x.item() if isinstance(x, np.ndarray) else x 
-                for x in results["martingales"]
-            ])
+            martingale_values = np.array(
+                [
+                    x.item() if isinstance(x, np.ndarray) else x
+                    for x in results["martingales"]
+                ]
+            )
             feature_matrix.append(martingale_values)
-            feature_names.append(name)
 
         X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
 
-        # Create binary labels based on change points
-        y = np.zeros(len(self.graphs))
-        for cp in self.change_points:
-            # Mark a window around each change point as positive
-            window_size = 5  # Adjust as needed
-            start_idx = max(0, cp - window_size)
-            end_idx = min(len(y), cp + window_size)
-            y[start_idx:end_idx] = 1
-        
-        # Split data for training
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-
-        # Train model
         model = CustomThresholdModel(threshold=self.threshold)
-        model.fit(X_train, y_train)
-
-        # Compute SHAP values using training data as background
-        try:
-            explainer = shap.KernelExplainer(model.predict, X_train)
-            shap_values = explainer.shap_values(X)
-            
-            # If shap_values is a list (for binary classification), take values for positive class
-            if isinstance(shap_values, list):
-                shap_values = shap_values[1]
-                
-            return shap_values
-            
-        except Exception as e:
-            print(f"SHAP computation failed: {str(e)}")
-            return np.zeros((len(X), len(feature_names)))  # Return dummy values on error
+        return model.compute_shap_values(
+            X=X,
+            change_points=self.change_points,
+            sequence_length=len(self.graphs),
+            window_size=5,  # Can be made configurable if needed
+        )
 
     def create_dashboard(self) -> None:
         """Generate comprehensive dashboard with all visualizations."""
