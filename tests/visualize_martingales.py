@@ -178,7 +178,9 @@ class MartingaleVisualizer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         with open(
-            self.output_dir / f"{self.graph_type.lower()}_martingale_results.txt", "w"
+            self.output_dir / f"{self.graph_type.lower()}_martingale_results.txt", 
+            "w",
+            encoding='utf-8'
         ) as f:
             f.write(f"=== {self.graph_type} Graph Martingale Analysis ===\n\n")
             f.write(f"True Change Points: {self.change_points}\n\n")
