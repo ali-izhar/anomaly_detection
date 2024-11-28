@@ -1,4 +1,4 @@
-# spatio_temporal_train.py
+# archive/spatio_temporal_train.py
 
 """Main training script for GCN-LSTM model on soccer player movement data."""
 
@@ -14,8 +14,8 @@ import numpy as np
 import yaml
 from torch.optim.lr_scheduler import _LRScheduler
 
-from src.models.spatio_temporal import GCNLSTMModel
-from src.utils.gcn_lstm import (
+from .spatio_temporal import GCNLSTMModel
+from .gcn_lstm import (
     DataLoader,
     GraphConstructor,
     SequenceProcessor,

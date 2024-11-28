@@ -26,9 +26,9 @@ from visualize_martingales import MartingaleVisualizer
 
 THRESHOLD_TEST_CONFIG = {
     "thresholds": {
-        "low": 15,      # Lower sensitivity
-        "medium": 30,   # Default sensitivity
-        "high": 45,     # Higher sensitivity
+        "low": 15,  # Lower sensitivity
+        "medium": 30,  # Default sensitivity
+        "high": 45,  # Higher sensitivity
     },
     "epsilon": 0.8,
     "output_dir": "threshold_test_outputs",
@@ -38,7 +38,7 @@ THRESHOLD_TEST_CONFIG = {
 @dataclass
 class ThresholdTester:
     """Tester for different martingale threshold values."""
-    
+
     thresholds: Dict[str, float] = None
     epsilon: float = THRESHOLD_TEST_CONFIG["epsilon"]
     output_dir: str = THRESHOLD_TEST_CONFIG["output_dir"]
@@ -97,7 +97,7 @@ class ThresholdTester:
         print("\nTesting different threshold values...")
         for threshold_name, threshold_value in self.thresholds.items():
             print(f"\nAnalyzing with {threshold_name} threshold ({threshold_value})...")
-            
+
             # Compute martingales with current threshold
             martingales = self.compute_martingales(graphs, threshold_value)
 
@@ -121,6 +121,7 @@ class ThresholdTester:
 # -----------------------------------------------------------------------------#
 #                               MAIN ENTRY POINT                               #
 # -----------------------------------------------------------------------------#
+
 
 def main():
     """Main entry point for threshold testing."""

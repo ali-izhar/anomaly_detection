@@ -1,10 +1,9 @@
-# src/models/graph_conv.py
+# archive/graph_conv.py
 
 """Graph Convolutional Network (GCN) layers for soccer player movement data."""
 
 import yaml
 from typing import Optional, Tuple, Dict, Any
-from pathlib import Path
 from abc import ABC, abstractmethod
 
 import torch

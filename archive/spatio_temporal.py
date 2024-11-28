@@ -1,4 +1,4 @@
-# src/models/spatio_temporal.py
+# archive/spatio_temporal.py
 
 """Spatio-temporal model for soccer player movement data."""
 
@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import yaml
 
-from src.models.graph_conv import CustomGCNLayer
+from .graph_conv import CustomGCNLayer
 
 
 class BaseTemporalGNN(nn.Module, ABC):
