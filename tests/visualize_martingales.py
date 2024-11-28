@@ -17,7 +17,7 @@ import seaborn as sns
 
 from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from src.graph.features import adjacency_to_graph
-from src.models.threshold_model import CustomThresholdModel
+from src.models.threshold import CustomThresholdModel
 
 
 class MartingaleVisualizer:

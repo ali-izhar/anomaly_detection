@@ -1,5 +1,5 @@
 # src/models/__init__.py
 
-from .threshold_model import CustomThresholdModel
+from .threshold import CustomThresholdModel
 
 __all__ = ["CustomThresholdModel"]
