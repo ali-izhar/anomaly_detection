@@ -36,6 +36,12 @@ class SpatioTemporalPredictor(nn.Module):
     """
 
     def __init__(self, config: STModelConfig, num_nodes: int, num_features: int):
+        """
+        Args:
+            config: Model configuration
+            num_nodes: Number of nodes in the graph
+            num_features: Number of features per node
+        """
         super().__init__()
 
         self.encoder = STEncoder(
@@ -45,14 +51,20 @@ class SpatioTemporalPredictor(nn.Module):
             dropout=config.dropout,
         )
 
+        # Project encoder output to decoder input dimension
+        self.projection = nn.Linear(num_nodes * config.hidden_dim, config.hidden_dim)
+
         self.decoder = TemporalDecoder(
             hidden_dim=config.hidden_dim,
             num_features=num_features,
+            num_nodes=num_nodes,
             num_layers=2,
             dropout=config.dropout,
         )
 
         self.config = config
+        self.num_nodes = num_nodes
+        self.num_features = num_features
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
         """
@@ -65,19 +77,19 @@ class SpatioTemporalPredictor(nn.Module):
             Predictions [batch_size, forecast_horizon, num_nodes, num_features]
         """
         # Encode spatio-temporal features
-        encoded, _ = self.encoder(x, adj)
+        encoded, _ = self.encoder(x, adj)  # [batch_size, seq_len, num_nodes, hidden_dim]
 
-        # Reshape for decoder
         batch_size, seq_len, num_nodes, hidden_dim = encoded.size()
-        decoder_input = encoded.reshape(batch_size, seq_len, -1)
+
+        # Reshape and project encoder output
+        encoder_output = encoded.reshape(batch_size, seq_len, -1)  # [batch_size, seq_len, num_nodes * hidden_dim]
+        decoder_input = self.projection(encoder_output)  # [batch_size, seq_len, hidden_dim]
 
         # Generate predictions
-        predictions = self.decoder(decoder_input, steps=self.config.forecast_horizon)
-
-        # Reshape predictions
-        predictions = predictions.reshape(
-            batch_size, self.config.forecast_horizon, num_nodes, -1
-        )
+        predictions = self.decoder(
+            decoder_input, 
+            steps=self.config.forecast_horizon
+        )  # [batch_size, forecast_horizon, num_nodes, num_features]
 
         return predictions
 
