@@ -7,7 +7,7 @@
 A **graph** $G = (V, E)$ consists of:
 - **Vertex set** $V$ with $|V| = N$ vertices
 - **Edge set** $E \subseteq V \times V$
-- **Adjacency matrix** $A \in \{0,1\}^{N \times N}$ where $A_{ij} = 1$ if $(i,j) \in E$
+- **Adjacency matrix** $A \in \\{0,1\\}^{N \times N}$ where $A_{ij} = 1$ if $(i,j) \in E$
 
 ### 1.2 Degree Matrix and Graph Laplacian
 
@@ -16,13 +16,37 @@ A **graph** $G = (V, E)$ consists of:
 - Represents the number of connections (degree) for each node
 - Critical for normalization to prevent scale issues in highly connected nodes
 
-$$D = \begin{bmatrix} d_1 & 0 & \cdots & 0 \\ 0 & d_2 & \cdots & 0 \\ \vdots & \vdots & \ddots & \vdots \\ 0 & 0 & \cdots & d_N \end{bmatrix}$$
+$$
+D = \begin{bmatrix} 
+d_1 & 0 & \cdots & 0 \\ 
+0 & d_2 & \cdots & 0 \\ 
+\vdots & \vdots & \ddots & \vdots \\ 
+0 & 0 & \cdots & d_N 
+\end{bmatrix}
+$$
 
 **Graph Laplacian** $L = D - A$:
 
 Laplacian measures how different a node's value is from its neighbors. The $D$ accounts for a node's overall connectivity (its "self-effect"). The $A$ removes direct contributions from neighbors, leaving only the "difference" between the node and its neighbors. Thus, the difference captures the "smoothness" of a function on the graph. High $L$-values indicate nodes whose value significantly differs from their neighbors. For example:
 
-$$L = D - A = \begin{bmatrix} 2 & 0 & 0 \\ 0 & 2 & 0 \\ 0 & 0 & 2 \end{bmatrix} - \begin{bmatrix} 0 & 1 & 1 \\ 1 & 0 & 1 \\ 1 & 1 & 0 \end{bmatrix} = \begin{bmatrix} 2 & -1 & -1 \\ -1 & 2 & -1 \\ -1 & -1 & 2 \end{bmatrix}$$
+$$
+L = D - A = 
+\begin{bmatrix} 
+2 & 0 & 0 \\ 
+0 & 2 & 0 \\ 
+0 & 0 & 2 
+\end{bmatrix} - 
+\begin{bmatrix} 
+0 & 1 & 1 \\ 
+1 & 0 & 1 \\ 
+1 & 1 & 0 
+\end{bmatrix} = 
+\begin{bmatrix} 
+2 & -1 & -1 \\ 
+-1 & 2 & -1 \\ 
+-1 & -1 & 2 
+\end{bmatrix}
+$$
 
 Notice that the diagonal of $L$ is the degree matrix $D$, and the off-diagonal elements are the negation of the adjacency matrix $A$. The first row of $L$ is $L_{11} = 2$, $L_{12} = -1$, and $L_{13} = -1$ because $d_1 = 2$ and node 1 is connected to nodes 2 and 3.
 
@@ -40,11 +64,36 @@ $$x^T L x = \sum_{i,j} A_{ij} (x_i - x_j)^2 \geq 0$$
 
 As a simple example, consider a graph with two nodes connected by an edge. We can write the Laplacian as:
 
-$$L = \begin{bmatrix} 1 & -1 \\ -1 & 1 \end{bmatrix}$$
+$$
+L = 
+\begin{bmatrix} 
+1 & -1 \\ 
+-1 & 1 
+\end{bmatrix}
+$$
 
-For any vector $x = \begin{bmatrix} x_1 \\ x_2 \end{bmatrix}$, we have:
+For any vector 
 
-$$x^T L x = \begin{bmatrix} x_1 & x_2 \end{bmatrix} \begin{bmatrix} 1 & -1 \\ -1 & 1 \end{bmatrix} \begin{bmatrix} x_1 \\ x_2 \end{bmatrix} = x_1^2 - 2x_1x_2 + x_2^2 = (x_1 - x_2)^2 \geq 0$$
+$$
+x = \begin{bmatrix} 
+x_1 \\ 
+x_2 
+\end{bmatrix}$$
+
+$$x^T L x = 
+\begin{bmatrix} 
+x_1 & x_2 
+\end{bmatrix} 
+\begin{bmatrix} 
+1 & -1 \\ 
+-1 & 1 
+\end{bmatrix} 
+\begin{bmatrix}
+x_1 \\
+x_2 
+\end{bmatrix}
+= x_1^2 - 2x_1x_2 + x_2^2 = (x_1 - x_2)^2 \geq 0
+$$
 
 ### 1.3 Normalized Laplacian
 
@@ -214,16 +263,14 @@ $$\text{head}_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V)$$
 
 The LSTM decoder generates multi-step predictions using:
 
-$$
-\begin{aligned}
+$$\begin{aligned}
 f_t &= \sigma(W_f [h_{t-1}, x_t] + b_f) \\
 i_t &= \sigma(W_i [h_{t-1}, x_t] + b_i) \\
-\tilde{c}_t &= \tanh(W_c [h_{t-1}, x_t] + b_c) \\
-c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c}_t \\
+\tilde{c_t} &= \tanh(W_c [h_{t-1}, x_t] + b_c) \\
+c_t &= f_t \odot c_{t-1} + i_t \odot \tilde{c_t} \\
 o_t &= \sigma(W_o [h_{t-1}, x_t] + b_o) \\
 h_t &= o_t \odot \tanh(c_t)
-\end{aligned}
-$$
+\end{aligned}$$
 
 where:
 - $f_t$: forget gate
@@ -257,7 +304,7 @@ where $\delta$ depends on Lipschitz constants of network components.
 
 A sequence $(M_n)_{n\geq 0}$ is a martingale if:
 1. $\mathbb{E}[|M_n|] < \infty$ for all $n$
-2. $\mathbb{E}[M_n|\mathcal{F}_{n-1}] = M_{n-1}$
+2. $\mathbb{E}[M_n|\mathcal{F_{n-1}}] = M_{n-1}$
 
 where $\mathcal{F}_n$ is the filtration (information up to time $n$).
 
@@ -289,7 +336,7 @@ $$\alpha_i = \min_{j=1}^k \|x_i - \mu_j\|_2$$
 
 P-value computation:
 
-$$p(\theta) = \frac{\#\{\alpha_i > \alpha_n\} + \theta\#\{\alpha_i = \alpha_n\}}{n}$$
+$$p(\theta) = \frac{\text{count} \(\{\alpha_i > \alpha_n\}\) + \theta \text{count} \(\{\alpha_i = \alpha_n\} \)}{n}$$
 
 where $\theta \sim U[0,1]$ for tie-breaking.
 
