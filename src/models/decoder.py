@@ -4,7 +4,7 @@
 
 import torch
 import torch.nn as nn
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 
 class TemporalDecoder(nn.Module):

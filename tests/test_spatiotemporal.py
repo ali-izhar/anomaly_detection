@@ -9,13 +9,20 @@ import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.graph.syn_data_generator import GenerationConfig
-from src.graph.graph_generator import GraphGenerator
-from src.graph.features import extract_centralities, compute_embeddings
-from src.models.layers import GraphConvLayer, TemporalAttention
-from src.models.encoder import STEncoder
-from src.models.decoder import TemporalDecoder
-from src.models.spatiotemporal import SpatioTemporalPredictor, STModelConfig
+from src.graph import (
+    GenerationConfig,
+    GraphGenerator,
+    extract_centralities,
+    compute_embeddings,
+)
+from src.models import (
+    GraphConvLayer,
+    TemporalAttention,
+    STEncoder,
+    TemporalDecoder,
+    SpatioTemporalPredictor,
+    STModelConfig,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
