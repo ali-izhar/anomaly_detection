@@ -77,18 +77,23 @@ class SpatioTemporalPredictor(nn.Module):
             Predictions [batch_size, forecast_horizon, num_nodes, num_features]
         """
         # Encode spatio-temporal features
-        encoded, _ = self.encoder(x, adj)  # [batch_size, seq_len, num_nodes, hidden_dim]
+        encoded, _ = self.encoder(
+            x, adj
+        )  # [batch_size, seq_len, num_nodes, hidden_dim]
 
         batch_size, seq_len, num_nodes, hidden_dim = encoded.size()
 
         # Reshape and project encoder output
-        encoder_output = encoded.reshape(batch_size, seq_len, -1)  # [batch_size, seq_len, num_nodes * hidden_dim]
-        decoder_input = self.projection(encoder_output)  # [batch_size, seq_len, hidden_dim]
+        encoder_output = encoded.reshape(
+            batch_size, seq_len, -1
+        )  # [batch_size, seq_len, num_nodes * hidden_dim]
+        decoder_input = self.projection(
+            encoder_output
+        )  # [batch_size, seq_len, hidden_dim]
 
         # Generate predictions
         predictions = self.decoder(
-            decoder_input, 
-            steps=self.config.forecast_horizon
+            decoder_input, steps=self.config.forecast_horizon
         )  # [batch_size, forecast_horizon, num_nodes, num_features]
 
         return predictions

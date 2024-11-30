@@ -45,7 +45,10 @@ class TemporalDecoder(nn.Module):
         self.fc_out = nn.Linear(hidden_dim, num_nodes * num_features)
 
     def forward(
-        self, x: torch.Tensor, steps: int, hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        self,
+        x: torch.Tensor,
+        steps: int,
+        hidden: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -57,21 +60,21 @@ class TemporalDecoder(nn.Module):
             Predictions [batch_size, steps, num_nodes, num_features]
         """
         batch_size = x.size(0)
-        
+
         # LSTM processing
         lstm_out, hidden = self.lstm(x, hidden)
-        
+
         # Generate predictions
         predictions = []
         h_t = lstm_out[:, -1:]  # Use last hidden state [batch_size, 1, hidden_dim]
-        
+
         # Autoregressive prediction
         for _ in range(steps):
             # Project to node features
             pred = self.fc_out(h_t)  # [batch_size, 1, num_nodes * num_features]
             pred = pred.reshape(batch_size, 1, self.num_nodes, self.num_features)
             predictions.append(pred)
-            
+
             # Feed prediction back as input
             h_t, hidden = self.lstm(h_t, hidden)
 
