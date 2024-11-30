@@ -1,4 +1,4 @@
-# tests/create_ba_graphs.py
+# src/models/data.py
 
 """
 Barabási-Albert (BA) Graph Sequence Generator
@@ -16,12 +16,11 @@ Usage:
 import sys
 import os
 import numpy as np
-from collections import defaultdict
 from typing import List, Dict
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from src.graph import GraphGenerator
-from src.graph.features import extract_centralities, compute_embeddings, adjacency_to_graph, compute_laplacian
+from src.graph.features import extract_centralities, compute_embeddings, adjacency_to_graph
 
 # -----------------------------------------------------------------------------#
 #                              USER CONFIGURATION                              #
@@ -182,23 +181,6 @@ def main():
         print(f"- {measure}: {count} values")
     print(f"\nSVD: {features['svd']} values")
     print(f"LSVD: {features['lsvd']} values")
-
-    # for feature in features:
-    #     print("Degree:")
-    #     print(len(feature["degree"]))
-    #     print(feature["degree"])
-
-    #     print("Centralities:")
-    #     print(len(feature["centralities"]))
-    #     print(feature["centralities"])
-
-    #     print("SVD:")
-    #     print(len(feature["svd"]))
-    #     print(feature["svd"])
-
-    #     print("LSVD:")
-    #     print(len(feature["lsvd"]))
-    #     print(feature["lsvd"])
 
 
 if __name__ == "__main__":

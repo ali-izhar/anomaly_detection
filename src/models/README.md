@@ -298,6 +298,44 @@ $$\|\epsilon_H\|_2 \leq (1 + \delta)^H\|\epsilon_1\|_2$$
 
 where $\delta$ depends on Lipschitz constants of network components.
 
+
+```mermaid
+graph TD
+    subgraph Input
+        G1[Graph Snapshot t-n] --> G2[Node Features]
+        G1 --> G3[Adjacency Matrix]
+        G2 --> |Centrality Measures| F1[Feature Vector]
+        G3 --> |Graph Structure| F1
+    end
+
+    subgraph Graph_Processing
+        F1 --> GC[Graph Convolution Network]
+        GC --> |Layer 1| GC1[GCN Hidden Layer]
+        GC1 --> |Layer 2| NE[Node Embeddings]
+        NE --> |Flatten/Pool| GE[Graph Embedding]
+    end
+
+    subgraph Temporal_Processing
+        GE --> |Sequence of Embeddings| TS[Temporal Sequence]
+        TS --> |t-n,...,t-2,t-1,t| LSTM[LSTM/GRU Layer]
+        LSTM --> |Hidden States| HS[Hidden State Vector]
+    end
+
+    subgraph Prediction_Layer
+        HS --> FC[Fully Connected Layer]
+        FC --> |Dense Layer| DO[Dropout]
+        DO --> |Activation| PR[Prediction]
+    end
+
+    PR --> |M-step Ahead| OUT[Future Anomaly Score]
+
+    style G1 fill:#e1f5fe,stroke:#01579b
+    style GC fill:#fff3e0,stroke:#ff6f00
+    style LSTM fill:#f3e5f5,stroke:#7b1fa2
+    style PR fill:#e8f5e9,stroke:#2e7d32
+    style OUT fill:#fce4ec,stroke:#c2185b
+```
+
 ## 5. Martingale Framework
 
 ### 5.1 Theoretical Foundation
