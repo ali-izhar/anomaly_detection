@@ -92,11 +92,12 @@ def compute_embeddings(
         if method == "svd":
             embedder = SVD(n_components=n_components)
             logger.debug("Using SVD embedder")
-            embeddings = [embedder.fit_transform(matrix).flatten() for matrix in graphs]
+            embeddings = [embedder.fit_transform(matrix) for matrix in graphs]
         else:
             logger.debug("Computing Laplacian SVD embeddings")
             embeddings = [
-                np.linalg.svd(compute_laplacian(matrix))[1] for matrix in graphs
+                np.linalg.svd(compute_laplacian(matrix))[1] 
+                for matrix in graphs
             ]
 
         logger.info(f"Successfully computed embeddings for {len(graphs)} graphs")
@@ -131,7 +132,10 @@ def strangeness_point(
 
     try:
         logger.debug(f"Computing strangeness with {n_clusters} clusters")
-        data_array = np.atleast_2d(data)
+        data_array = np.array(data)
+        # if data is 3D array (because embeddings are [2, n]), flatten it
+        if data_array.ndim == 3:
+            data_array = data_array.reshape(-1, data_array.shape[-1])
         kmeans = KMeans(n_clusters=n_clusters, n_init="auto", random_state=random_state)
         strangeness = kmeans.fit_transform(data_array)
         logger.debug(f"Strangeness shape: {strangeness.shape}")

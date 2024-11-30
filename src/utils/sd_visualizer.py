@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import logging
+import traceback
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -277,6 +278,28 @@ class SyntheticDataVisualizer:
             raise RuntimeError(f"Distribution visualization failed: {str(e)}")
 
     @staticmethod
+    def print_change_points(
+        martingale_result: Dict[str, Any],
+        save_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """Log detected change points with timestamps."""
+        try:
+            change_points = martingale_result.get("change_detected_instant", [])
+            message = f"Change points detected at: {change_points}"
+            logger.info(message)
+
+            if save_path:
+                save_path = Path(save_path)
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                with save_path.open("w") as f:
+                    f.write(f"{message}\n")
+                logger.debug(f"Saved change points to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Change point logging failed: {str(e)}")
+            raise RuntimeError(f"Change point logging failed: {str(e)}")
+
+    @staticmethod
     def plot_comprehensive_dashboard(
         sample_graphs: List[np.ndarray],
         sample_indices: List[int],
@@ -391,34 +414,42 @@ class SyntheticDataVisualizer:
                 "change_detected_instant", []
             )
 
-            M_sum = sum(m["martingales"] for m in martingales_detect.values())
+            M_sum = np.sum(
+                np.array([m["martingales"] for m in martingales_detect.values()]),
+                axis=0,
+            )
             M_avg = M_sum / len(martingales_detect)
 
             ax5.plot(M_sum, color="blue", alpha=0.3, label="Martingale Sum")
             ax5.plot(M_avg, color="green", alpha=0.3, label="Martingale Average")
 
-            y_max = max(M_sum) if len(M_sum) > 0 else 1
-            for cp in change_points:
-                ax5.axvline(
-                    cp,
-                    color="red",
-                    linestyle="--",
-                    alpha=0.5,
-                    label=f"Change at t={cp}",
-                )
-                logger.debug(f"Marked change point at t={cp}")
+            if len(change_points) > 0:
+                print("Plotting change points")
+                for cp in change_points:
+                    print(f"Adding change point at t={cp}")
+                    ax5.axvline(
+                        cp,
+                        color="red",
+                        linestyle="--",
+                        alpha=0.5,
+                        label=f"Change at t={cp}",
+                    )
+                    logger.debug(f"Marked change point at t={cp}")
 
             ax5.set_title("Detected Change Points", fontsize=10)
             ax5.set_xlabel("Time", fontsize=8)
             ax5.set_ylabel("Martingale Value", fontsize=8)
-            if change_points:
+            if len(change_points) > 0:  # Changed to explicit length check
                 ax5.legend(fontsize=6)
             ax5.grid(True)
 
             ax6 = fig.add_subplot(gs[3, 3:])
 
             for name, values in centralities.items():
-                flat_values = [v for graph in values for v in graph]
+                if name in ['svd', 'lsvd']:
+                    flat_values = [v[0] if isinstance(v, np.ndarray) else v for graph in values for v in graph]
+                else:
+                    flat_values = [v for graph in values for v in graph]
 
                 # Remove extreme outliers using percentiles
                 q1, q3 = np.percentile(flat_values, [1, 99])
@@ -426,7 +457,8 @@ class SyntheticDataVisualizer:
                 lower_bound = q1 - 1.5 * iqr
                 upper_bound = q3 + 1.5 * iqr
                 filtered_values = [
-                    v for v in flat_values if lower_bound <= v <= upper_bound
+                    v for v in flat_values 
+                    if isinstance(v, (int, float)) and lower_bound <= v <= upper_bound
                 ]
 
                 # Normalize the values to [0,1] range for each centrality measure
@@ -443,8 +475,8 @@ class SyntheticDataVisualizer:
                     ax=ax6,
                     fill=True,
                     alpha=0.4,
-                    bw_adjust=0.5,  # Slightly reduce bandwidth for better detail
-                    common_norm=True,  # Use common normalization for fair comparison
+                    bw_adjust=0.5,
+                    common_norm=True,
                 )
 
             ax6.set_title(
@@ -454,7 +486,6 @@ class SyntheticDataVisualizer:
             ax6.set_xlabel("Normalized Centrality Value (0-1 Scale)", fontsize=8)
             ax6.set_ylabel("Density", fontsize=8)
 
-            # Improve legend with value ranges
             ax6.legend(
                 title="Centrality Measures [min, max]",
                 fontsize=6,
@@ -463,12 +494,10 @@ class SyntheticDataVisualizer:
                 loc="upper left",
             )
 
-            # Add grid and set limits
             ax6.grid(True, alpha=0.3)
-            ax6.set_xlim(-0.05, 1.05)  # Add small padding around 0-1 range
+            ax6.set_xlim(-0.05, 1.05)
             ax6.set_ylim(bottom=0)
 
-            # Add text explaining the normalization
             ax6.text(
                 0.98,
                 0.02,
@@ -480,7 +509,6 @@ class SyntheticDataVisualizer:
                 bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
             )
 
-            # Add overall title and description
             fig.suptitle(
                 f"Comprehensive Analysis Dashboard: {graph_type}", fontsize=16, y=0.95
             )
@@ -505,26 +533,6 @@ class SyntheticDataVisualizer:
 
         except Exception as e:
             logger.error(f"Comprehensive dashboard creation failed: {str(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")  # Added traceback
             raise RuntimeError(f"Comprehensive dashboard failed: {str(e)}")
-
-    @staticmethod
-    def print_change_points(
-        martingale_result: Dict[str, Any],
-        save_path: Optional[Union[str, Path]] = None,
-    ) -> None:
-        """Log detected change points with timestamps."""
-        try:
-            change_points = martingale_result.get("change_detected_instant", [])
-            message = f"Change points detected at: {change_points}"
-            logger.info(message)
-
-            if save_path:
-                save_path = Path(save_path)
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                with save_path.open("w") as f:
-                    f.write(f"{message}\n")
-                logger.debug(f"Saved change points to {save_path}")
-
-        except Exception as e:
-            logger.error(f"Change point logging failed: {str(e)}")
-            raise RuntimeError(f"Change point logging failed: {str(e)}")
+    
