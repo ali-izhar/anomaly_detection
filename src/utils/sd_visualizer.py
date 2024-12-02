@@ -446,8 +446,12 @@ class SyntheticDataVisualizer:
             ax6 = fig.add_subplot(gs[3, 3:])
 
             for name, values in centralities.items():
-                if name in ['svd', 'lsvd']:
-                    flat_values = [v[0] if isinstance(v, np.ndarray) else v for graph in values for v in graph]
+                if name in ["svd", "lsvd"]:
+                    flat_values = [
+                        v[0] if isinstance(v, np.ndarray) else v
+                        for graph in values
+                        for v in graph
+                    ]
                 else:
                     flat_values = [v for graph in values for v in graph]
 
@@ -457,7 +461,8 @@ class SyntheticDataVisualizer:
                 lower_bound = q1 - 1.5 * iqr
                 upper_bound = q3 + 1.5 * iqr
                 filtered_values = [
-                    v for v in flat_values 
+                    v
+                    for v in flat_values
                     if isinstance(v, (int, float)) and lower_bound <= v <= upper_bound
                 ]
 
@@ -535,4 +540,3 @@ class SyntheticDataVisualizer:
             logger.error(f"Comprehensive dashboard creation failed: {str(e)}")
             print(f"Error traceback: {traceback.format_exc()}")  # Added traceback
             raise RuntimeError(f"Comprehensive dashboard failed: {str(e)}")
-    

@@ -216,34 +216,30 @@ def test_full_model(
     logger.info(f"Forward pass time: {elapsed:.4f}s")
 
 
-def visualize_synthetic_data(graphs: List[np.ndarray], metadata: Dict[str, Any]) -> None:
+def visualize_synthetic_data(
+    graphs: List[np.ndarray], metadata: Dict[str, Any]
+) -> None:
     """Visualize the generated synthetic graph sequence, martingales, and predictions."""
     logger.info("\nVisualizing graph sequence")
-    
+
     # Calculate change points based on the sequence lengths
     graphs_per_segment = metadata["total_timesteps"] // 4
-    change_points = [
-        graphs_per_segment,
-        graphs_per_segment * 2,
-        graphs_per_segment * 3
-    ]
-    
+    change_points = [graphs_per_segment, graphs_per_segment * 2, graphs_per_segment * 3]
+
     # Graph structure visualization
     visualizer = GraphVisualizer(
-        graphs=graphs,
-        change_points=change_points,
-        graph_type="BA"
+        graphs=graphs, change_points=change_points, graph_type="BA"
     )
     visualizer.create_dashboard()
-    
+
     # Martingale visualization
     logger.info("\nComputing and visualizing martingales")
     analyzer = BAMartingaleAnalyzer(
         threshold=BA_MARTINGALE_CONFIG["threshold"],
         epsilon=BA_MARTINGALE_CONFIG["epsilon"],
-        output_dir="test_outputs/martingales"
+        output_dir="test_outputs/martingales",
     )
-    
+
     martingales = analyzer.compute_martingales(graphs)
     martingale_visualizer = MartingaleVisualizer(
         graphs=graphs,
@@ -252,11 +248,11 @@ def visualize_synthetic_data(graphs: List[np.ndarray], metadata: Dict[str, Any])
         graph_type="BA",
         threshold=BA_MARTINGALE_CONFIG["threshold"],
         epsilon=BA_MARTINGALE_CONFIG["epsilon"],
-        output_dir="test_outputs/martingales"
+        output_dir="test_outputs/martingales",
     )
     martingale_visualizer.create_dashboard()
     martingale_visualizer.save_results()
-    
+
     # Change point prediction
     logger.info("\nPredicting and visualizing change points")
     predictor = ChangePointPredictor(
@@ -265,26 +261,26 @@ def visualize_synthetic_data(graphs: List[np.ndarray], metadata: Dict[str, Any])
         threshold=20.0,
         epsilon=0.8,
     )
-    
+
     # Train on first segment (before first change point)
     predictor.train(graphs, true_change_point=change_points[0])
-    
+
     # Track predictions
     predictions_log = []
-    
+
     # Make predictions using sliding window
     for t in range(change_points[0], len(graphs) - predictor.config.window_size):
         # Get current window of graphs
         current_window = graphs[t : t + predictor.config.window_size]
-        
+
         # Extract features
         centralities = extract_centralities(current_window)
         embeddings = compute_embeddings(current_window, method="svd", n_components=2)
-        
+
         # Combine features
         features = []
         n_nodes = current_window[0].shape[0]
-        
+
         for i in range(len(current_window)):
             node_features = []
             for cent_type in centralities.values():
@@ -293,14 +289,14 @@ def visualize_synthetic_data(graphs: List[np.ndarray], metadata: Dict[str, Any])
             node_features.append(embeddings[i].reshape(n_nodes, -1))
             timestep_features = np.hstack(node_features)
             features.append(timestep_features)
-        
+
         # Convert to tensor
         features_tensor = torch.FloatTensor(np.array(features))
         features_tensor = features_tensor.unsqueeze(0)
-        
+
         # Make predictions
         predictions = predictor.predict(current_window, features_tensor)
-        
+
         # Log prediction details
         pred_info = {
             "timestep": t,
@@ -310,33 +306,35 @@ def visualize_synthetic_data(graphs: List[np.ndarray], metadata: Dict[str, Any])
             "confidence": predictions["max_confidence"],
         }
         predictions_log.append(pred_info)
-    
+
     # Visualize predictions
     plt.figure(figsize=(15, 8))
-    
+
     # Plot actual change points
     for cp in change_points:
-        plt.axvline(x=cp, color='r', linestyle='--', label='Actual Change Point')
-    
+        plt.axvline(x=cp, color="r", linestyle="--", label="Actual Change Point")
+
     # Plot predicted martingale values
     timesteps = [p["timestep"] for p in predictions_log]
     martingale_values = [p["max_martingale"] for p in predictions_log]
-    plt.plot(timesteps, martingale_values, label='Predicted Martingale')
-    
+    plt.plot(timesteps, martingale_values, label="Predicted Martingale")
+
     # Plot confidence scores
     confidence_scores = [p["confidence"] for p in predictions_log]
-    plt.plot(timesteps, confidence_scores, label='Confidence Score')
-    
-    plt.axhline(y=predictor.threshold, color='g', linestyle=':', label='Detection Threshold')
-    
-    plt.title('Change Point Prediction Results')
-    plt.xlabel('Time Step')
-    plt.ylabel('Value')
+    plt.plot(timesteps, confidence_scores, label="Confidence Score")
+
+    plt.axhline(
+        y=predictor.threshold, color="g", linestyle=":", label="Detection Threshold"
+    )
+
+    plt.title("Change Point Prediction Results")
+    plt.xlabel("Time Step")
+    plt.ylabel("Value")
     plt.legend()
     plt.grid(True)
-    
+
     # Save prediction visualization
-    plt.savefig('test_outputs/predictions/prediction_results.png')
+    plt.savefig("test_outputs/predictions/prediction_results.png")
     plt.close()
 
 
@@ -356,19 +354,17 @@ def main():
 
     # Generate synthetic data
     features, adj, metadata, graphs = generate_synthetic_data(
-        n_nodes=n_nodes, 
-        n_graphs=n_graphs, 
-        config=custom_config
+        n_nodes=n_nodes, n_graphs=n_graphs, config=custom_config
     )
-    
+
     logger.info(f"Generated features shape: {features.shape}")
     logger.info(f"Adjacency matrix shape: {adj.shape}")
     logger.info(f"Feature metadata: {metadata}")
-    
+
     # Create output directories
     os.makedirs("test_outputs/martingales", exist_ok=True)
     os.makedirs("test_outputs/predictions", exist_ok=True)
-    
+
     # Visualize the graphs, martingales, and predictions
     visualize_synthetic_data(graphs, metadata)
 

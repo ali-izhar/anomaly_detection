@@ -20,7 +20,11 @@ from typing import List, Dict
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from src.graph import GraphGenerator
-from src.graph.features import extract_centralities, compute_embeddings, adjacency_to_graph
+from src.graph.features import (
+    extract_centralities,
+    compute_embeddings,
+    adjacency_to_graph,
+)
 
 # -----------------------------------------------------------------------------#
 #                              USER CONFIGURATION                              #
@@ -124,13 +128,16 @@ def extract_features(graphs: List[np.ndarray]) -> Dict[str, List[float]]:
         centralities = extract_centralities([adj_matrix])
         svd_emb = compute_embeddings([adj_matrix], method="svd")
         lsvd_emb = compute_embeddings([adj_matrix], method="lsvd")
-        results.append({
-            "degree": degrees,
-            "centralities": centralities,
-            "svd": svd_emb,
-            "lsvd": lsvd_emb,
-        })
+        results.append(
+            {
+                "degree": degrees,
+                "centralities": centralities,
+                "svd": svd_emb,
+                "lsvd": lsvd_emb,
+            }
+        )
     return results
+
 
 # -----------------------------------------------------------------------------#
 #                               MAIN ENTRY POINT                               #
@@ -163,21 +170,21 @@ def main():
     print(features[0])
 
     features = {
-        'degree': len(features[0]['degree']),  # Direct list
-        'centralities': {
-            'degree': len(features[0]['centralities']['degree'][0]),
-            'betweenness': len(features[0]['centralities']['betweenness'][0]),
-            'eigenvector': len(features[0]['centralities']['eigenvector'][0]),
-            'closeness': len(features[0]['centralities']['closeness'][0])
+        "degree": len(features[0]["degree"]),  # Direct list
+        "centralities": {
+            "degree": len(features[0]["centralities"]["degree"][0]),
+            "betweenness": len(features[0]["centralities"]["betweenness"][0]),
+            "eigenvector": len(features[0]["centralities"]["eigenvector"][0]),
+            "closeness": len(features[0]["centralities"]["closeness"][0]),
         },
-        'svd': len(features[0]['svd'][0]),
-        'lsvd': len(features[0]['lsvd'][0])
+        "svd": len(features[0]["svd"][0]),
+        "lsvd": len(features[0]["lsvd"][0]),
     }
 
     print("Feature counts:")
     print(f"Degree: {features['degree']} values")
     print("\nCentrality measures:")
-    for measure, count in features['centralities'].items():
+    for measure, count in features["centralities"].items():
         print(f"- {measure}: {count} values")
     print(f"\nSVD: {features['svd']} values")
     print(f"LSVD: {features['lsvd']} values")

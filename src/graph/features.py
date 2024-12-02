@@ -96,8 +96,7 @@ def compute_embeddings(
         else:
             logger.debug("Computing Laplacian SVD embeddings")
             embeddings = [
-                np.linalg.svd(compute_laplacian(matrix))[1] 
-                for matrix in graphs
+                np.linalg.svd(compute_laplacian(matrix))[1] for matrix in graphs
             ]
 
         logger.info(f"Successfully computed embeddings for {len(graphs)} graphs")
