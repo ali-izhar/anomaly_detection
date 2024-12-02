@@ -88,6 +88,7 @@ Date: [Date]
 """
 
 import os
+import sys
 import numpy as np
 import h5py
 import random
@@ -124,11 +125,10 @@ BA_CONFIG = {
         "change_max": 8,  # Maximum change in edge count
     },
     "sequence_length": 200,  # Total number of graphs per sequence
-    # "num_sequences": 1500,         # Total sequences to generate
-    "num_sequences": 10,  # Total sequences to generate
+    "num_sequences": 50,  # Total sequences to generate
     "change_points_per_sequence": 3,  # Number of change points in each sequence
     "prediction_horizon": 5,  # Number of steps to predict ahead
-    "threshold_tau": 30,  # Threshold for martingale sum to label anomalies
+    "threshold_tau": 20,  # Threshold for martingale sum to label anomalies
     "feature_dimension": 7,  # Number of features per node
     "output_dir": "dataset",  # Directory to save datasets
     "split_ratio": {"train": 0.7, "val": 0.15, "test": 0.15},
@@ -436,44 +436,47 @@ def extract_features_from_sequence(
     return np.array(features)  # Shape: (sequence_length, n, feature_dimension)
 
 
-def compute_martingale_sum(features: np.ndarray) -> np.ndarray:
-    """
-    Computes the martingale sum at each timestep based on features.
-
+def create_labels(features: np.ndarray, config: Dict) -> np.ndarray:
+    """Creates binary labels using martingale-based change point detection.
+    
     Parameters:
-        features (np.ndarray): Array of shape (sequence_length, n, feature_dimension).
-
+        features (np.ndarray): Array of shape (sequence_length, n, feature_dimension)
+        config (Dict): Configuration dictionary from BA_CONFIG
+        
     Returns:
-        martingale_sum (np.ndarray): Array of shape (sequence_length,) containing martingale sums.
+        labels (np.ndarray): Binary array indicating anomalies, shape (sequence_length,)
     """
-    # Placeholder implementation
-    # Replace with actual martingale computation based on your framework
-    # For demonstration, sum all feature values across nodes and features
-    martingale_sum = features.sum(axis=(1, 2))  # Shape: (sequence_length,)
-    return martingale_sum
-
-
-def create_labels(
-    martingale_sum: np.ndarray, threshold: float, prediction_horizon: int
-) -> np.ndarray:
-    """
-    Creates binary labels indicating if the martingale sum exceeds the threshold within the prediction horizon.
-
-    Parameters:
-        martingale_sum (np.ndarray): Array of martingale sums at each timestep.
-        threshold (float): Threshold to determine anomalies.
-        prediction_horizon (int): Number of future steps to look ahead for threshold breach.
-
-    Returns:
-        labels (np.ndarray): Binary array indicating anomalies, shape (sequence_length,).
-    """
-    labels = np.zeros_like(martingale_sum, dtype=int)
-    for t in range(len(martingale_sum)):
-        # Check if any of the next M steps exceed the threshold
-        future_steps = martingale_sum[t : t + prediction_horizon]
-        if np.any(future_steps > threshold):
-            labels[t] = 1
-    return labels  # Shape: (sequence_length,)
+    from src.changepoint import ChangePointDetector
+    detector = ChangePointDetector()
+    
+    # Reshape features to create a sequence of feature vectors
+    sequence_length, n_nodes, feature_dim = features.shape
+    flattened_features = features.reshape(sequence_length, -1)  # (sequence_length, n_nodes * feature_dim)
+    
+    # Convert to list of sequences, ensuring each sequence is 2D
+    feature_sequences = []
+    for feature_idx in range(flattened_features.shape[1]):
+        # Reshape each feature sequence to be 2D: (sequence_length, 1)
+        sequence = flattened_features[:, feature_idx].reshape(-1, 1).tolist()
+        feature_sequences.append(sequence)
+    
+    # Run multiview martingale test
+    results = detector.multiview_martingale_test(
+        data=feature_sequences,
+        threshold=config["threshold_tau"],
+        epsilon=0.8  # Default sensitivity parameter
+    )
+    
+    # Create binary labels
+    labels = np.zeros(sequence_length, dtype=int)
+    
+    # Mark change points and prediction horizon
+    for cp in results["change_detected_instant"]:
+        start_idx = max(0, cp - config["prediction_horizon"])
+        end_idx = min(cp + 1, sequence_length)
+        labels[start_idx:end_idx] = 1
+        
+    return labels
 
 
 def normalize_features(features: np.ndarray) -> np.ndarray:
@@ -589,10 +592,10 @@ def main():
         features = extract_features_from_sequence(
             graphs, use_gpu=GPU_AVAILABLE
         )  # Shape: (sequence_length, n, feature_dim)
-        martingale_sum = compute_martingale_sum(features)  # Shape: (sequence_length,)
-        labels = create_labels(
-            martingale_sum, BA_CONFIG["threshold_tau"], BA_CONFIG["prediction_horizon"]
-        )  # Shape: (sequence_length,)
+        
+        # Replace simple threshold-based labeling with martingale-based detection
+        labels = create_labels(features, BA_CONFIG)
+        
         all_sequences.append(features)
         all_labels.append(labels)
 
