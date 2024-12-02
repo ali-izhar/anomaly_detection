@@ -1,4 +1,28 @@
-<i>This document outlines the intuition and design of the experiments located in the `tests` directory.</i>
+<i>This document outlines the intuition and design of the experiments located in the `experiments` directory.</i>
+
+## Quick Start
+
+Run experiments using the main CLI:
+
+```bash
+# Run synthetic data experiments
+python main.py synthetic -c config/synthetic_data.yaml
+
+# Run reality mining analysis
+python main.py reality -c config/reality_mining.yaml
+
+# Run linear model experiments
+python main.py linear -c config/linear_models.yaml
+```
+
+Available experiments:
+- `synthetic`: Run synthetic data experiments (requires `config/synthetic_data.yaml`)
+- `reality`: Analyze Reality Mining dataset (requires `config/reality_mining.yaml`)
+- `linear`: Run linear model experiments (requires `config/linear_models.yaml`)
+
+Each experiment requires a corresponding YAML configuration file specified with the `-c` flag.
+
+---
 
 # 1. Linear Models Experiment
 
@@ -182,7 +206,6 @@ Key findings:
   - **Raw Martingale Values:** Illustrate gradual deviations from the baseline, revealing metric-specific response patterns to structural changes.
 - **Interpretability (Bottom Rows):**
   - **SHAP Values:** Display feature importance over time, providing insights into which metrics contribute most to change detection.
-  - **Centrality Distributions:** Capture shifts in network structure, such as transitions from power-law to modified degree distributions and changes in global network properties.
 
 ## 2.5 Network Growth Dynamics
 

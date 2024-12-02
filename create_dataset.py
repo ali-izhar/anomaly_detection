@@ -438,44 +438,47 @@ def extract_features_from_sequence(
 
 def create_labels(features: np.ndarray, config: Dict) -> np.ndarray:
     """Creates binary labels using martingale-based change point detection.
-    
+
     Parameters:
         features (np.ndarray): Array of shape (sequence_length, n, feature_dimension)
         config (Dict): Configuration dictionary from BA_CONFIG
-        
+
     Returns:
         labels (np.ndarray): Binary array indicating anomalies, shape (sequence_length,)
     """
     from src.changepoint import ChangePointDetector
+
     detector = ChangePointDetector()
-    
+
     # Reshape features to create a sequence of feature vectors
     sequence_length, n_nodes, feature_dim = features.shape
-    flattened_features = features.reshape(sequence_length, -1)  # (sequence_length, n_nodes * feature_dim)
-    
+    flattened_features = features.reshape(
+        sequence_length, -1
+    )  # (sequence_length, n_nodes * feature_dim)
+
     # Convert to list of sequences, ensuring each sequence is 2D
     feature_sequences = []
     for feature_idx in range(flattened_features.shape[1]):
         # Reshape each feature sequence to be 2D: (sequence_length, 1)
         sequence = flattened_features[:, feature_idx].reshape(-1, 1).tolist()
         feature_sequences.append(sequence)
-    
+
     # Run multiview martingale test
     results = detector.multiview_martingale_test(
         data=feature_sequences,
         threshold=config["threshold_tau"],
-        epsilon=0.8  # Default sensitivity parameter
+        epsilon=0.8,  # Default sensitivity parameter
     )
-    
+
     # Create binary labels
     labels = np.zeros(sequence_length, dtype=int)
-    
+
     # Mark change points and prediction horizon
     for cp in results["change_detected_instant"]:
         start_idx = max(0, cp - config["prediction_horizon"])
         end_idx = min(cp + 1, sequence_length)
         labels[start_idx:end_idx] = 1
-        
+
     return labels
 
 
@@ -592,10 +595,10 @@ def main():
         features = extract_features_from_sequence(
             graphs, use_gpu=GPU_AVAILABLE
         )  # Shape: (sequence_length, n, feature_dim)
-        
+
         # Replace simple threshold-based labeling with martingale-based detection
         labels = create_labels(features, BA_CONFIG)
-        
+
         all_sequences.append(features)
         all_labels.append(labels)
 

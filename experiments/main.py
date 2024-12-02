@@ -1,4 +1,4 @@
-# main.py
+# experiments/main.py
 
 #!/usr/bin/env python3
 
@@ -8,15 +8,15 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from src.utils.log_handling import setup_root_logger, get_logger
-from config.config import load_config
-
 
 def setup_paths() -> None:
     """Add project root to system path for imports."""
-    project_root = Path(__file__).parent.resolve()
+    project_root = Path(__file__).parent.parent.resolve()
     if str(project_root) not in sys.path:
         sys.path.append(str(project_root))
+
+
+from config.config import load_config
 
 
 def run_experiment(experiment: str, config_path: str) -> None:
@@ -25,13 +25,11 @@ def run_experiment(experiment: str, config_path: str) -> None:
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     try:
-        # Load experiment-specific config
         config = load_config(config_path)
-
-        # Setup directories
         _setup_directories(config)
 
-        # Setup logging for this experiment
+        from src.utils.log_handling import setup_root_logger, get_logger
+
         setup_root_logger(config, experiment)
         logger = get_logger(__name__)
 
@@ -104,17 +102,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Main entry point for the CLI."""
     try:
-        # Parse arguments
         args = parse_args()
-
-        # Setup environment
         setup_paths()
-
-        # Run experiment (logging setup moved inside run_experiment)
         run_experiment(args.experiment, args.config)
-
     except Exception as e:
-        # Basic logging for startup errors
         logging.basicConfig(level=logging.ERROR)
         logging.error(f"Execution failed: {str(e)}", exc_info=True)
         sys.exit(1)
