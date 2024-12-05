@@ -62,55 +62,60 @@ def _generate_graph_segment(
     return graphs
 
 
-def _calculate_change_points(config: Dict) -> List[int]:
-    """Calculate the indices where parameter changes occur."""
+def generate_ba_graphs() -> Dict:
+    """Generate BA graph sequence with multiple parameter changes."""
+    config = BA_CONFIG
+    n = config["n"]
+    edges = config["edges"]
     seq_len = config["sequence_length"]
-    return [
-        seq_len["before_change"],
-        seq_len["before_change"] + seq_len["after_change1"],
-        seq_len["before_change"] + seq_len["after_change1"] + seq_len["after_change2"],
+    
+    # Define actual change points where graph parameters change
+    change_points = [
+        config["sequence_length"]["before_change"],
+        config["sequence_length"]["before_change"] + config["sequence_length"]["after_change1"],
+        config["sequence_length"]["before_change"] + config["sequence_length"]["after_change1"] + 
+        config["sequence_length"]["after_change2"]
     ]
-
-
-def generate_ba_graphs(config: Dict = BA_CONFIG) -> Dict[str, List[np.ndarray]]:
-    """Generate Barabási-Albert graph sequence with multiple parameter changes."""
+    
+    # Generate graphs with parameter changes at these points
     generator = GraphGenerator()
     graphs1 = _generate_graph_segment(
         generator,
-        config["n"],
-        config["edges"]["initial"],
-        config["edges"]["change1"],
+        n,
+        edges["initial"],
+        edges["change1"],
         config["sequence_length"]["before_change"],
-        config["sequence_length"]["after_change1"],
+        config["sequence_length"]["after_change1"]
     )
-
+    
     graphs2 = _generate_graph_segment(
         generator,
-        config["n"],
-        config["edges"]["change1"],
-        config["edges"]["change2"],
+        n,
+        edges["change1"],
+        edges["change2"],
         config["sequence_length"]["after_change1"],
         config["sequence_length"]["after_change2"],
-        skip_first=True,
+        skip_first=True
     )
-
+    
     graphs3 = _generate_graph_segment(
         generator,
-        config["n"],
-        config["edges"]["change2"],
-        config["edges"]["change3"],
+        n,
+        edges["change2"],
+        edges["change3"],
         config["sequence_length"]["after_change2"],
         config["sequence_length"]["after_change3"],
-        skip_first=True,
+        skip_first=True
     )
-
+    
     all_graphs = graphs1 + graphs2 + graphs3
-    change_points = _calculate_change_points(config)
-
+    
     return {
         "graphs": all_graphs,
-        "params": config,
         "change_points": change_points,
+        "params": {
+            "edges": [edges["initial"], edges["change1"], edges["change2"], edges["change3"]]
+        }
     }
 
 
@@ -128,7 +133,7 @@ def main():
     print(f"  - Edge parameters: {BA_CONFIG['edges']}")
     print(f"  - Sequence lengths: {BA_CONFIG['sequence_length']}")
 
-    result = generate_ba_graphs(BA_CONFIG)
+    result = generate_ba_graphs()
 
     print("\nResults:")
     print(f"  - Generated {len(result['graphs'])} graphs")
