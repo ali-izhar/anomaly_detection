@@ -7,12 +7,18 @@ This script reads the training data from the dataset directory and creates visua
 3. Training data statistics and balance
 """
 
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, Tuple, List
 from pathlib import Path
 import h5py
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
 from src.changepoint import ChangePointDetector
 
 class DatasetVisualizer:
@@ -34,7 +40,14 @@ class DatasetVisualizer:
         with h5py.File(train_dir / "data.h5", "r") as hf:
             sequences = hf["sequences"][:]
             labels = hf["labels"][:]
-            change_points = hf["change_points"][:]
+            padded_change_points = hf["change_points"][:]
+            lengths = hf["change_point_lengths"][:]
+            
+            # Unpad change points
+            change_points = [
+                cp[:length].tolist() 
+                for cp, length in zip(padded_change_points, lengths)
+            ]
             
         return sequences, labels, change_points
     

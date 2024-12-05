@@ -13,14 +13,20 @@ martingale computations. Each graph in the sequence is represented by 6 features
 The anomaly labels are computed using martingale-based change point detection.
 """
 
-import numpy as np
-import os
-import h5py
-from typing import Dict, List, Tuple, Optional
 import logging
+import os
+import sys
+import h5py
+import numpy as np
+from pathlib import Path
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 
-from tests.create_ba_graphs import generate_ba_graphs
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
+from synthetic_data.create_graphs import generate_ba_graphs
 from src.changepoint import ChangePointDetector
 from src.graph.features import extract_centralities, compute_embeddings
 
@@ -199,14 +205,25 @@ class GraphDataset:
             split_dir = os.path.join(self.config.output_dir, split_name)
             os.makedirs(split_dir, exist_ok=True)
             
+            # Pad change points to max length
+            max_changes = max(len(cp) for cp in data["change_points"])
+            padded_change_points = np.array([
+                cp + [-1] * (max_changes - len(cp)) 
+                for cp in data["change_points"]
+            ])
+            
             with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
                 hf.create_dataset("sequences", data=data["sequences"], compression="gzip")
                 hf.create_dataset("labels", data=data["labels"], compression="gzip")
-                hf.create_dataset("change_points", data=data["change_points"], compression="gzip")
+                hf.create_dataset("change_points", data=padded_change_points, compression="gzip")
+                # Store the actual lengths
+                hf.create_dataset("change_point_lengths", 
+                                data=[len(cp) for cp in data["change_points"]], 
+                                compression="gzip")
             
             logger.info(f"Saved {split_name} data: {data['sequences'].shape} sequences, "
-                       f"{data['labels'].shape} labels, {len(data['change_points'])} change points")
-    
+                    f"{data['labels'].shape} labels, {len(data['change_points'])} change points")
+
     def generate(self, save_to_disk: bool = True) -> Dict:
         """Generate complete dataset with train/val/test splits."""
         try:
