@@ -1,0 +1,12 @@
+# DATASET GENERATION PARAMETERS
+dataset:
+  num_sequences: 30                # Number of sequences per graph type
+  graph_types: ["BA", "ER", "NW"]  # Types of graphs to generate
+  split_ratio: 
+    train: 0.6                     # Train split ratio
+    val: 0.2                       # Validation split ratio
+    test: 0.2                      # Test split ratio
+  threshold: 30.0                  # Martingale threshold for sum and avg models
+  epsilon: 0.8                     # Sensitivity parameter for sum and avg models
+  window_size: 5                   # Window size around change points
+  output_dir: "dataset"            # Output directory

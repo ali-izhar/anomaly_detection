@@ -1,0 +1,28 @@
+# GRAPH GENERATION PARAMETERS
+common:
+  n: 50                 # Number of nodes in each graph
+  sequence_length: 200  # Total sequence length
+  min_segment: 40       # Minimum length between changes
+  min_changes: 2        # Minimum number of change points
+  max_changes: 5        # Maximum number of change points
+
+# BARABASI-ALBERT PARAMETERS
+ba:
+  initial_edges: 3      # Initial number of edges
+  min_edges: 2          # Minimum number of edges after change
+  max_edges: 8          # Maximum number of edges after change
+
+# ERDOS-RENYI PARAMETERS
+er:
+  initial_p: 0.1        # Initial p parameter
+  min_p: 0.05           # Minimum p parameter after change
+  max_p: 0.3            # Maximum p parameter after change
+
+# NEWMAN-WATTS PARAMETERS
+nw:
+  initial_k: 4          # Initial k parameter
+  min_k: 2              # Minimum k parameter after change
+  max_k: 6              # Maximum k parameter after change
+  initial_p: 0.1        # Initial p parameter
+  min_p: 0.05           # Minimum p parameter after change
+  max_p: 0.3            # Maximum p parameter after change
