@@ -1,6 +1,6 @@
 # DATASET GENERATION PARAMETERS
 dataset:
-  num_sequences: 30                # Number of sequences per graph type
+  num_sequences: 6                 # Number of sequences per graph type
   graph_types: ["BA", "ER", "NW"]  # Types of graphs to generate
   split_ratio: 
     train: 0.6                     # Train split ratio

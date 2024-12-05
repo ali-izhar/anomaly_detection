@@ -1,3 +1,5 @@
+# synthetic_data/visualize_dataset.py
+
 """
 Dataset Visualization Script
 
@@ -11,31 +13,38 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Dict, Tuple, List
+from typing import Tuple, List
 from pathlib import Path
 import h5py
+import yaml
+import argparse
 
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
 from src.changepoint import ChangePointDetector
+from visualize_martingales import MartingaleVisualizer
 
 
 class DatasetVisualizer:
     """Visualizer for graph anomaly detection dataset."""
 
-    def __init__(self, data_dir: str = "dataset"):
+    def __init__(self, data_dir: str = "dataset", config_path: str = None):
         self.data_dir = Path(data_dir)
-        self.feature_names = [
-            "Degree",
-            "Betweenness",
-            "Eigenvector",
-            "Closeness",
-            "SVD",
-            "LSVD",
-        ]
-        self.colors = sns.color_palette("husl", n_colors=len(self.feature_names))
+
+        # Load martingale config
+        if config_path is None:
+            config_path = Path(__file__).parent / "martingale_config.yaml"
+
+        with open(config_path, "r") as f:
+            self.config = yaml.safe_load(f)
+
+        # Get visualization parameters from config
+        self.feature_names = self.config["visualization"]["feature_names"]
+        self.colors = sns.color_palette(
+            self.config["visualization"]["colors"], n_colors=len(self.feature_names)
+        )
         plt.style.use("seaborn-v0_8-darkgrid")
 
     def load_training_data(self) -> Tuple[np.ndarray, np.ndarray, List[List[int]]]:
@@ -66,8 +75,6 @@ class DatasetVisualizer:
     ) -> None:
         """Plot timeline view of a single sequence with features, martingales, and labels."""
         plt.figure(figsize=(15, 12))
-
-        # Create three subplots
         gs = plt.GridSpec(3, 1, height_ratios=[2, 2, 1], hspace=0.3)
 
         # Get change points for this sequence
@@ -93,43 +100,103 @@ class DatasetVisualizer:
 
         # Middle subplot: Martingales
         ax2 = plt.subplot(gs[1])
+        martingale_config = self.config["martingale"]
+        
+        # Extract features for this sequence
+        seq_features = features[sequence_idx]  # Shape: (sequence_length, num_features)
+        
+        # First compute all martingales
+        martingales = {"reset": {}}
         detector = ChangePointDetector()
+        
+        # Normalize entire feature sequence first
+        normalized_features = np.zeros_like(seq_features)
+        for i in range(seq_features.shape[1]):  # For each feature
+            feature_values = seq_features[:, i]
+            normalized_features[:, i] = (feature_values - np.mean(feature_values)) / (np.std(feature_values) + 1e-8)
 
         # Compute martingales for each feature
-        martingales = []
-        for i, (name, color) in enumerate(zip(self.feature_names, self.colors)):
-            feature_values = features[sequence_idx, :, i]
-            normalized_values = (feature_values - np.mean(feature_values)) / np.std(
-                feature_values
-            )
-            feature_2d = normalized_values.reshape(-1, 1)
-
+        for i, name in enumerate(self.feature_names):
+            # Get normalized feature values
+            feature_values = normalized_features[:, i].reshape(-1, 1)
+            
+            # Compute martingales
             result = detector.martingale_test(
-                data=feature_2d, threshold=30.0, epsilon=0.8, reset=True
+                data=feature_values,
+                threshold=martingale_config["threshold"],
+                epsilon=martingale_config["epsilon"],
+                reset=True,
             )
-            martingales.append(result["martingales"])
-            ax2.plot(result["martingales"], label=name, color=color, alpha=0.7)
+            martingales["reset"][name] = result
 
-        # Plot combined martingales
-        combined_martingales = np.maximum.reduce(martingales)
-        ax2.plot(
-            combined_martingales,
-            label="Combined",
-            color="black",
-            linewidth=2,
+        # Plot martingales directly
+        for (name, results), color in zip(martingales["reset"].items(), self.colors):
+            martingale_values = np.array([
+                x.item() if isinstance(x, np.ndarray) else x 
+                for x in results["martingales"]
+            ])
+            ax2.semilogy(
+                np.maximum(martingale_values, 1e-10),  # Ensure positive values for log scale
+                label=name,
+                color=color,
+                linewidth=1.5,
+                alpha=0.6,
+            )
+
+        # Compute and plot combined martingales
+        martingale_arrays = []
+        for name in self.feature_names:
+            values = np.array([
+                x.item() if isinstance(x, np.ndarray) else x 
+                for x in martingales["reset"][name]["martingales"]
+            ])
+            martingale_arrays.append(values)
+
+        M_sum = np.sum(martingale_arrays, axis=0)
+        M_avg = M_sum / len(self.feature_names)
+
+        ax2.semilogy(
+            M_avg,
+            color="#FF4B4B",
+            label="Average",
+            linewidth=2.5,
+            alpha=0.9,
+        )
+        ax2.semilogy(
+            M_sum,
+            color="#2F2F2F",
+            label="Sum",
+            linewidth=2.5,
+            linestyle="-.",
             alpha=0.8,
         )
 
-        # Add threshold line and change points
-        ax2.axhline(y=30.0, color="r", linestyle="--", label="Threshold")
+        # Add threshold line
+        ax2.axhline(
+            y=martingale_config["threshold"],
+            color="r",
+            linestyle="--",
+            label="Threshold",
+        )
+
+        # Add change points
         for cp in seq_change_points:
             ax2.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
 
+        # Customize plot
+        ax2.grid(True, linestyle="--", alpha=0.3)
         ax2.set_title("Martingale Values Over Time")
         ax2.set_xlabel("Time Step")
-        ax2.set_ylabel("Martingale Value")
-        ax2.set_yscale("log")
-        ax2.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax2.set_ylabel("Martingale Value (log scale)")
+        ax2.legend(
+            fontsize=10,
+            ncol=3,
+            loc="upper left",
+            bbox_to_anchor=(0, 1.02),
+            frameon=True,
+            facecolor="none",
+            edgecolor="none",
+        )
 
         # Bottom subplot: Labels
         ax3 = plt.subplot(gs[2])
@@ -280,8 +347,26 @@ class DatasetVisualizer:
 
 def main():
     """Main entry point for visualization."""
+    parser = argparse.ArgumentParser(description="Visualize graph sequence dataset")
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        help="Path to martingale config YAML file",
+        default="martingale_config.yaml",
+    )
+    parser.add_argument(
+        "--data-dir",
+        "-d",
+        type=str,
+        default="dataset",
+        help="Path to dataset directory",
+    )
+
+    args = parser.parse_args()
+
     print("Visualizing training data...")
-    visualizer = DatasetVisualizer()
+    visualizer = DatasetVisualizer(data_dir=args.data_dir, config_path=args.config)
     visualizer.visualize_training_data()
 
 

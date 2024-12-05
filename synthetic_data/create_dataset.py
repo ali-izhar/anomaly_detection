@@ -25,7 +25,6 @@ if str(project_root) not in sys.path:
 
 from create_graph_sequences import GraphConfig, GraphType, generate_graph_sequence
 from src.changepoint import ChangePointDetector
-from src.graph.features import extract_centralities, compute_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,7 @@ class DatasetConfig(GraphConfig):
     window_size: int = 5
     split_ratio: Dict[str, float] = None
     output_dir: str = "dataset"
+    graph_params: Dict[str, Dict] = None
 
     @classmethod
     def from_yaml(
@@ -57,6 +57,17 @@ class DatasetConfig(GraphConfig):
         with open(config_path, "r") as f:
             dataset_config = yaml.safe_load(f)["dataset"]
 
+        # Load graph config
+        with open(graph_config_path, "r") as f:
+            graph_config_data = yaml.safe_load(f)
+
+        # Get parameters for each graph type
+        graph_params = {
+            "ba": graph_config_data["ba"],
+            "er": graph_config_data["er"],
+            "nw": graph_config_data["nw"],
+        }
+
         # Create base GraphConfig for first graph type
         graph_config = super().from_yaml(
             GraphType[dataset_config["graph_types"][0]], graph_config_path
@@ -65,11 +76,11 @@ class DatasetConfig(GraphConfig):
         return cls(
             # Inherit GraphConfig parameters
             graph_type=graph_config.graph_type,
-            n=graph_config.n,
-            sequence_length=graph_config.sequence_length,
-            min_segment=graph_config.min_segment,
-            min_changes=graph_config.min_changes,
-            max_changes=graph_config.max_changes,
+            n=graph_config_data["common"]["n"],
+            sequence_length=graph_config_data["common"]["sequence_length"],
+            min_segment=graph_config_data["common"]["min_segment"],
+            min_changes=graph_config_data["common"]["min_changes"],
+            max_changes=graph_config_data["common"]["max_changes"],
             params=graph_config.params,
             # Add dataset-specific parameters
             num_sequences=dataset_config["num_sequences"],
@@ -79,6 +90,7 @@ class DatasetConfig(GraphConfig):
             window_size=dataset_config["window_size"],
             split_ratio=dataset_config["split_ratio"],
             output_dir=dataset_config["output_dir"],
+            graph_params=graph_params,
         )
 
 
@@ -104,33 +116,22 @@ class DatasetGenerator:
     def _compute_features(self, graphs: List[np.ndarray]) -> np.ndarray:
         """Extract and combine all features for each graph."""
         try:
-            # Get centrality features
-            centralities = extract_centralities(graphs)
+            # Initialize detector and get features properly
+            detector = ChangePointDetector()
+            detector.initialize(graphs)
+            centralities = detector.extract_features()
 
-            # Get both SVD and LSVD embedding features
-            svd_embeddings = compute_embeddings(graphs, method="svd", n_components=1)
-            lsvd_embeddings = compute_embeddings(graphs, method="lsvd", n_components=1)
-
-            # Combine all features
+            # Convert to feature matrix
             features = []
-            for i in tqdm(
-                range(len(graphs)), desc="Computing Features", position=2, leave=False
-            ):
+            for t in range(len(graphs)):
                 graph_features = []
-                # Add centrality features
-                for centrality_name in [
-                    "degree",
-                    "betweenness",
-                    "eigenvector",
-                    "closeness",
-                ]:
-                    graph_features.append(np.mean(centralities[centrality_name][i]))
-                # Add embedding features
-                graph_features.append(float(svd_embeddings[i].mean()))
-                graph_features.append(float(lsvd_embeddings[i].mean()))
+                for name in centralities:
+                    # Take mean of each centrality measure to get a single value
+                    feature_value = np.mean(centralities[name][t])
+                    graph_features.append(feature_value)
                 features.append(graph_features)
 
-            return np.array(features)
+            return np.array(features)  # Shape: (sequence_length, num_features)
 
         except Exception as e:
             logger.error(f"Feature computation failed: {str(e)}")
@@ -255,14 +256,16 @@ class DatasetGenerator:
         data = {"sequences": [], "labels": [], "change_points": [], "graph_types": []}
 
         # Main progress bar for graph types
-        for graph_type_str in tqdm(
-            self.config.graph_types, desc="Graph Types", position=0
-        ):
+        for graph_type_str in tqdm(self.config.graph_types, desc="Graph Types", position=0):
             try:
                 graph_type = GraphType[graph_type_str.upper()]
-                logger.info(
-                    f"Generating {self.config.num_sequences} sequences for {graph_type.value}"
-                )
+                logger.info(f"Generating {self.config.num_sequences} sequences for {graph_type.value}")
+
+                # Get parameters for this graph type
+                graph_params = self.config.graph_params[graph_type_str.lower()]
+                if not graph_params:
+                    logger.error(f"No parameters found for graph type: {graph_type_str}")
+                    continue
 
                 # Create a new GraphConfig for each graph type
                 graph_config = GraphConfig(
@@ -272,7 +275,7 @@ class DatasetGenerator:
                     min_segment=self.config.min_segment,
                     min_changes=self.config.min_changes,
                     max_changes=self.config.max_changes,
-                    params=self.config.params,
+                    params=graph_params,
                 )
 
                 # Nested progress bar for sequences of each type

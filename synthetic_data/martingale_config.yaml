@@ -1,0 +1,16 @@
+# MARTINGALE TEST PARAMETERS
+martingale:
+  threshold: 30.0   # Threshold for detecting change points
+  epsilon: 0.8      # Sensitivity parameter
+  reset: true       # Whether to reset martingale values after detection
+
+# VISUALIZATION PARAMETERS
+visualization:
+  colors: "husl"
+  feature_names:
+    - "Degree"
+    - "Betweenness" 
+    - "Eigenvector"
+    - "Closeness"
+    - "SVD"
+    - "LSVD"
