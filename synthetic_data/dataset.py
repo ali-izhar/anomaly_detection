@@ -32,8 +32,8 @@ class DatasetConfig:
     # Graph generation parameters
     n_nodes: int = 30  # Number of nodes in each graph
     edges: Dict[str, int] = None  # Edge parameters for BA graphs
-    sequence_length: int = 100  # Total graphs per sequence
-    num_sequences: int = 5  # Number of sequences to generate
+    sequence_length: int = 200  # Total graphs per sequence
+    num_sequences: int = 20  # Increased from 5 to 20 sequences
     change_points_per_sequence: int = 3  # Number of change points per sequence
     
     # Anomaly detection parameters
@@ -53,10 +53,11 @@ class DatasetConfig:
                 "change_max": 8
             }
         if self.split_ratio is None:
+            # Adjusted split ratios for small datasets
             self.split_ratio = {
-                "train": 0.7,
-                "val": 0.15,
-                "test": 0.15
+                "train": 0.6,  # 60%
+                "val": 0.2,    # 20%
+                "test": 0.2    # 20%
             }
 
 class GraphDataset:
@@ -265,8 +266,8 @@ def main():
     # Create configuration
     config = DatasetConfig(
         n_nodes=30,
-        sequence_length=100,
-        num_sequences=5,
+        sequence_length=200,
+        num_sequences=20,
         change_points_per_sequence=3,
         threshold=30.0,
         epsilon=0.8,
