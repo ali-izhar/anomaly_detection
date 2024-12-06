@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import yaml
 from tqdm import tqdm
@@ -185,7 +185,8 @@ class DatasetGenerator:
         return (features - mean) / std
 
     def _split_dataset(
-        self, sequences: np.ndarray, labels: np.ndarray, change_points: List[List[int]]
+        self, sequences: np.ndarray, labels: np.ndarray, 
+        change_points: List[List[int]], martingales: List[Dict]
     ) -> Dict:
         """Split dataset into train, validation, and test sets."""
         num_sequences = len(sequences)
@@ -204,16 +205,19 @@ class DatasetGenerator:
                 "sequences": sequences[train_idx],
                 "labels": labels[train_idx],
                 "change_points": [change_points[i] for i in train_idx],
+                "martingales": [martingales[i] for i in train_idx],
             },
             "val": {
                 "sequences": sequences[val_idx],
                 "labels": labels[val_idx],
                 "change_points": [change_points[i] for i in val_idx],
+                "martingales": [martingales[i] for i in val_idx],
             },
             "test": {
                 "sequences": sequences[test_idx],
                 "labels": labels[test_idx],
                 "change_points": [change_points[i] for i in test_idx],
+                "martingales": [martingales[i] for i in test_idx],
             },
         }
 
@@ -232,39 +236,120 @@ class DatasetGenerator:
             )
 
             with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
-                hf.create_dataset(
-                    "sequences", data=data["sequences"], compression="gzip"
+                # Create main group for sequence data
+                seq_group = hf.create_group("sequences")
+                seq_group.create_dataset("features", data=data["sequences"], compression="gzip")
+                seq_group.create_dataset("labels", data=data["labels"], compression="gzip")
+                
+                # Create group for change points
+                cp_group = hf.create_group("change_points")
+                cp_group.create_dataset("points", data=padded_change_points, compression="gzip")
+                cp_group.create_dataset(
+                    "lengths", 
+                    data=[len(cp) for cp in data["change_points"]], 
+                    compression="gzip"
                 )
-                hf.create_dataset("labels", data=data["labels"], compression="gzip")
-                hf.create_dataset(
-                    "change_points", data=padded_change_points, compression="gzip"
-                )
-                # Store the actual lengths
-                hf.create_dataset(
-                    "change_point_lengths",
-                    data=[len(cp) for cp in data["change_points"]],
-                    compression="gzip",
-                )
+
+                # Create group for martingales
+                mart_group = hf.create_group("martingales")
+                
+                # Store martingales for each sequence
+                for seq_idx, martingales in enumerate(data["martingales"]):
+                    seq_group = mart_group.create_group(f"sequence_{seq_idx}")
+                    
+                    # Store reset and cumulative martingales
+                    for mart_type in ["reset", "cumulative"]:
+                        type_group = seq_group.create_group(mart_type)
+                        
+                        # Store martingales for each feature
+                        for feat_name, mart_data in martingales[mart_type].items():
+                            mart_values = np.array(mart_data["martingales"], dtype=np.float64)
+                            type_group.create_dataset(
+                                feat_name,
+                                data=mart_values,
+                                compression="gzip"
+                            )
 
             logger.info(
                 f"Saved {split_name} data: {data['sequences'].shape} sequences, "
                 f"{data['labels'].shape} labels, {len(data['change_points'])} change points"
             )
 
+    def _compute_martingales(self, graphs: List[np.ndarray]) -> Dict[str, Any]:
+        """Compute both reset and cumulative martingales for the graph sequence.
+        Consistent with visualization scripts implementation.
+
+        Parameters:
+            graphs (List[np.ndarray]): List of adjacency matrices
+            
+        Returns:
+            Dict[str, Dict[str, Any]]: Dictionary with 'reset' and 'cumulative' martingales
+        """
+        detector = ChangePointDetector()
+        detector.initialize(graphs)
+        centralities = detector.extract_features()
+
+        martingales_reset = {}
+        martingales_cumulative = {}
+
+        for name, values in centralities.items():
+            # Normalize values
+            values_array = np.array(values)
+            normalized_values = (values_array - np.mean(values_array, axis=0)) / np.std(
+                values_array, axis=0
+            )
+
+            # Compute martingales
+            martingales_reset[name] = detector.martingale_test(
+                data=normalized_values,
+                threshold=self.config.threshold,
+                epsilon=self.config.epsilon,
+                reset=True,
+            )
+
+            cumulative_result = detector.martingale_test(
+                data=normalized_values,
+                threshold=self.config.threshold,
+                epsilon=self.config.epsilon,
+                reset=False,
+            )
+
+            # Convert to cumulative sum
+            cumulative_values = np.array(cumulative_result["martingales"])
+            cumulative_result["martingales"] = np.cumsum(cumulative_values)
+            martingales_cumulative[name] = cumulative_result
+
+        return {
+            "reset": martingales_reset,
+            "cumulative": martingales_cumulative
+        }
+
     def generate_sequences(self) -> Dict:
         """Generate sequences for all specified graph types."""
-        data = {"sequences": [], "labels": [], "change_points": [], "graph_types": []}
+        data = {
+            "sequences": [],
+            "labels": [],
+            "change_points": [],
+            "graph_types": [],
+            "martingales": [],
+        }
 
         # Main progress bar for graph types
-        for graph_type_str in tqdm(self.config.graph_types, desc="Graph Types", position=0):
+        for graph_type_str in tqdm(
+            self.config.graph_types, desc="Graph Types", position=0
+        ):
             try:
                 graph_type = GraphType[graph_type_str.upper()]
-                logger.info(f"Generating {self.config.num_sequences} sequences for {graph_type.value}")
+                logger.info(
+                    f"Generating {self.config.num_sequences} sequences for {graph_type.value}"
+                )
 
                 # Get parameters for this graph type
                 graph_params = self.config.graph_params[graph_type_str.lower()]
                 if not graph_params:
-                    logger.error(f"No parameters found for graph type: {graph_type_str}")
+                    logger.error(
+                        f"No parameters found for graph type: {graph_type_str}"
+                    )
                     continue
 
                 # Create a new GraphConfig for each graph type
@@ -286,7 +371,14 @@ class DatasetGenerator:
                     leave=False,
                 ):
                     result = generate_graph_sequence(graph_config)
+
+                    # Compute features and martingales directly from graphs
                     features = self._compute_features(result["graphs"])
+                    martingales = self._compute_martingales(
+                        result["graphs"]
+                    )  # Pass graphs instead of features
+
+                    # Compute labels using martingale detection points
                     labels = self._compute_anomaly_labels(
                         features, result["change_points"]
                     )
@@ -295,6 +387,7 @@ class DatasetGenerator:
                     data["labels"].append(labels)
                     data["change_points"].append(result["change_points"])
                     data["graph_types"].append(graph_type.value)
+                    data["martingales"].append(martingales)
 
             except KeyError:
                 logger.error(f"Invalid graph type: {graph_type_str}")
@@ -320,7 +413,10 @@ def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
 
     # Split and save the dataset
     split_data = generator._split_dataset(
-        data["sequences"], data["labels"], data["change_points"]
+        data["sequences"], 
+        data["labels"], 
+        data["change_points"],
+        data["martingales"]  # Add martingales to split
     )
 
     generator._save_to_hdf5(split_data)

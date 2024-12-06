@@ -7,6 +7,7 @@ This module generates sequences of graphs (BA, ER, or NW) with a random number o
 Each sequence has between 3-7 change points at random locations, with random parameters.
 """
 
+import sys
 import numpy as np
 import yaml
 from typing import List, Dict, Tuple
@@ -14,7 +15,12 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
 from src.graph import GraphGenerator, SyntheticDataGenerator
+from tests.visualize_graphs import GraphVisualizer
 
 
 class GraphType(Enum):
@@ -158,13 +164,12 @@ def generate_graph_sequence(config: GraphConfig) -> Dict:
     }
 
 
-def main():
+def main(visualize: bool = False):
     """Main entry point for graph generation."""
-    # Example: Generate all three types of graphs
     graph_types = [GraphType.BA, GraphType.ER, GraphType.NW]
 
     for graph_type in graph_types:
-        config = GraphConfig.from_yaml(graph_type)
+        config = GraphConfig.from_yaml(graph_type, config_path="graph_config.yaml")
         print(f"\nGenerating {graph_type.value} Graph Sequence")
         print("-" * 50)
         print(f"Configuration:")
@@ -183,6 +188,14 @@ def main():
         print(f"  - Change points at t={result['change_points']}")
         print(f"  - Parameters at each segment: {result['params']}")
 
+        if visualize:
+            visualizer = GraphVisualizer(
+                graphs=result["graphs"],
+                change_points=result["change_points"],
+                graph_type=result["graph_type"],
+            )
+            visualizer.create_dashboard()
+
 
 if __name__ == "__main__":
-    main()
+    main(visualize=True)

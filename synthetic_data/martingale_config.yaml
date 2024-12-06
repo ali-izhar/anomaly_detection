@@ -8,9 +8,7 @@ martingale:
 visualization:
   colors: "husl"
   feature_names:
-    - "Degree"
-    - "Betweenness" 
-    - "Eigenvector"
-    - "Closeness"
-    - "SVD"
-    - "LSVD"
+    - "degree"
+    - "betweenness"
+    - "eigenvector"
+    - "closeness"

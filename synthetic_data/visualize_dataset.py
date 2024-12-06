@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
 from pathlib import Path
 import h5py
 import yaml
@@ -22,9 +22,6 @@ import argparse
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
-
-from src.changepoint import ChangePointDetector
-from visualize_martingales import MartingaleVisualizer
 
 
 class DatasetVisualizer:
@@ -47,155 +44,94 @@ class DatasetVisualizer:
         )
         plt.style.use("seaborn-v0_8-darkgrid")
 
-    def load_training_data(self) -> Tuple[np.ndarray, np.ndarray, List[List[int]]]:
-        """Load training sequences, labels and change points from H5 files."""
+    def load_training_data(self) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict]]:
+        """Load training sequences, labels, change points and martingales from H5 files."""
         train_dir = self.data_dir / "train"
 
         with h5py.File(train_dir / "data.h5", "r") as hf:
-            sequences = hf["sequences"][:]
-            labels = hf["labels"][:]
-            padded_change_points = hf["change_points"][:]
-            lengths = hf["change_point_lengths"][:]
+            # Load sequences and labels from sequences group
+            sequences = hf["sequences/features"][:]
+            labels = hf["sequences/labels"][:]
 
-            # Unpad change points
+            # Load change points
+            padded_change_points = hf["change_points/points"][:]
+            lengths = hf["change_points/lengths"][:]
             change_points = [
                 cp[:length].tolist()
                 for cp, length in zip(padded_change_points, lengths)
             ]
 
-        return sequences, labels, change_points
+            # Load martingales
+            martingales = []
+            mart_group = hf["martingales"]
+            
+            # Get feature names from first sequence's martingales
+            first_seq = mart_group["sequence_0"]
+            feature_names = list(first_seq["reset"].keys())
+            self.feature_names = feature_names  # Update feature names from data
+            
+            # Update colors to match number of features
+            self.colors = sns.color_palette(
+                self.config["visualization"]["colors"], 
+                n_colors=len(self.feature_names)
+            )
+            
+            # Iterate through sequences
+            for seq_idx in range(len(sequences)):
+                seq_group = mart_group[f"sequence_{seq_idx}"]
+                
+                # Load reset and cumulative martingales
+                seq_mart = {
+                    "reset": {},
+                    "cumulative": {}
+                }
+                
+                for mart_type in ["reset", "cumulative"]:
+                    type_group = seq_group[mart_type]
+                    for feat_name in feature_names:
+                        seq_mart[mart_type][feat_name] = {
+                            "martingales": type_group[feat_name][:]
+                        }
+                
+                martingales.append(seq_mart)
+
+        return sequences, labels, change_points, martingales
 
     def plot_sequence_timeline(
         self,
         features: np.ndarray,
         labels: np.ndarray,
         change_points: List[List[int]],
+        martingales: List[Dict],
         sequence_idx: int,
         save_path: str = None,
     ) -> None:
-        """Plot timeline view of a single sequence with features, martingales, and labels."""
+        """Plot timeline view of a single sequence with martingales and labels."""
         plt.figure(figsize=(15, 12))
         gs = plt.GridSpec(3, 1, height_ratios=[2, 2, 1], hspace=0.3)
 
-        # Get change points for this sequence
+        # Get change points and martingales for this sequence
         seq_change_points = change_points[sequence_idx]
+        seq_martingales = martingales[sequence_idx]
 
-        # Top subplot: Features
+        # Top subplot: Reset Martingales
         ax1 = plt.subplot(gs[0])
-        for i, (name, color) in enumerate(zip(self.feature_names, self.colors)):
-            feature_values = features[sequence_idx, :, i]
-            normalized_values = (feature_values - np.mean(feature_values)) / np.std(
-                feature_values
-            )
-            ax1.plot(normalized_values, label=name, color=color, alpha=0.7)
+        self._plot_martingale_sequence(
+            ax1, 
+            seq_martingales["reset"], 
+            "Reset Martingale Measures",
+            seq_change_points,
+            cumulative=False
+        )
 
-        # Add change point vertical lines
-        for cp in seq_change_points:
-            ax1.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
-
-        ax1.set_title(f"Sequence {sequence_idx}: Feature Values Over Time")
-        ax1.set_xlabel("Time Step")
-        ax1.set_ylabel("Feature Value (Normalized)")
-        ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-
-        # Middle subplot: Martingales
+        # Middle subplot: Cumulative Martingales
         ax2 = plt.subplot(gs[1])
-        martingale_config = self.config["martingale"]
-        
-        # Extract features for this sequence
-        seq_features = features[sequence_idx]  # Shape: (sequence_length, num_features)
-        
-        # First compute all martingales
-        martingales = {"reset": {}}
-        detector = ChangePointDetector()
-        
-        # Normalize entire feature sequence first
-        normalized_features = np.zeros_like(seq_features)
-        for i in range(seq_features.shape[1]):  # For each feature
-            feature_values = seq_features[:, i]
-            normalized_features[:, i] = (feature_values - np.mean(feature_values)) / (np.std(feature_values) + 1e-8)
-
-        # Compute martingales for each feature
-        for i, name in enumerate(self.feature_names):
-            # Get normalized feature values
-            feature_values = normalized_features[:, i].reshape(-1, 1)
-            
-            # Compute martingales
-            result = detector.martingale_test(
-                data=feature_values,
-                threshold=martingale_config["threshold"],
-                epsilon=martingale_config["epsilon"],
-                reset=True,
-            )
-            martingales["reset"][name] = result
-
-        # Plot martingales directly
-        for (name, results), color in zip(martingales["reset"].items(), self.colors):
-            martingale_values = np.array([
-                x.item() if isinstance(x, np.ndarray) else x 
-                for x in results["martingales"]
-            ])
-            ax2.semilogy(
-                np.maximum(martingale_values, 1e-10),  # Ensure positive values for log scale
-                label=name,
-                color=color,
-                linewidth=1.5,
-                alpha=0.6,
-            )
-
-        # Compute and plot combined martingales
-        martingale_arrays = []
-        for name in self.feature_names:
-            values = np.array([
-                x.item() if isinstance(x, np.ndarray) else x 
-                for x in martingales["reset"][name]["martingales"]
-            ])
-            martingale_arrays.append(values)
-
-        M_sum = np.sum(martingale_arrays, axis=0)
-        M_avg = M_sum / len(self.feature_names)
-
-        ax2.semilogy(
-            M_avg,
-            color="#FF4B4B",
-            label="Average",
-            linewidth=2.5,
-            alpha=0.9,
-        )
-        ax2.semilogy(
-            M_sum,
-            color="#2F2F2F",
-            label="Sum",
-            linewidth=2.5,
-            linestyle="-.",
-            alpha=0.8,
-        )
-
-        # Add threshold line
-        ax2.axhline(
-            y=martingale_config["threshold"],
-            color="r",
-            linestyle="--",
-            label="Threshold",
-        )
-
-        # Add change points
-        for cp in seq_change_points:
-            ax2.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
-
-        # Customize plot
-        ax2.grid(True, linestyle="--", alpha=0.3)
-        ax2.set_title("Martingale Values Over Time")
-        ax2.set_xlabel("Time Step")
-        ax2.set_ylabel("Martingale Value (log scale)")
-        ax2.legend(
-            fontsize=10,
-            ncol=3,
-            loc="upper left",
-            bbox_to_anchor=(0, 1.02),
-            frameon=True,
-            facecolor="none",
-            edgecolor="none",
+        self._plot_martingale_sequence(
+            ax2, 
+            seq_martingales["cumulative"], 
+            "Cumulative Martingale Measures",
+            seq_change_points,
+            cumulative=True
         )
 
         # Bottom subplot: Labels
@@ -223,6 +159,105 @@ class DatasetVisualizer:
         if save_path:
             plt.savefig(save_path, bbox_inches="tight", dpi=300)
         plt.show()
+
+    def _plot_martingale_sequence(
+        self,
+        ax: plt.Axes,
+        martingales: Dict[str, Dict[str, Any]],
+        title: str,
+        change_points: List[int],
+        cumulative: bool = False,
+    ) -> None:
+        """Plot martingale sequences with change points.
+        Similar to visualize_martingales.py implementation.
+        """
+        # Add change point indicators
+        for cp in change_points:
+            ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
+
+        # Plot individual feature martingales
+        for (name, color) in zip(self.feature_names, self.colors):
+            martingale_values = np.array(martingales[name]["martingales"])
+            
+            if cumulative:
+                ax.semilogy(
+                    martingale_values,
+                    color=color,
+                    label=name.capitalize(),
+                    linewidth=1.5,
+                    alpha=0.6,
+                )
+            else:
+                ax.plot(
+                    martingale_values,
+                    color=color,
+                    label=name.capitalize(),
+                    linewidth=1.5,
+                    alpha=0.6,
+                )
+
+        # Compute and plot combined martingales
+        martingale_arrays = []
+        for name in self.feature_names:
+            values = np.array(martingales[name]["martingales"])
+            martingale_arrays.append(values)
+
+        martingale_arrays = np.array(martingale_arrays)
+        M_sum = np.sum(martingale_arrays, axis=0)
+        M_avg = M_sum / len(self.feature_names)
+
+        if cumulative:
+            ax.semilogy(
+                M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
+            )
+            ax.semilogy(
+                M_sum,
+                color="#2F2F2F",
+                label="Sum",
+                linewidth=2.5,
+                linestyle="-.",
+                alpha=0.8,
+            )
+        else:
+            ax.plot(M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9)
+            ax.plot(
+                M_sum,
+                color="#2F2F2F",
+                label="Sum",
+                linewidth=2.5,
+                linestyle="-.",
+                alpha=0.8,
+            )
+
+        # Add threshold line
+        ax.axhline(
+            y=self.config["martingale"]["threshold"],
+            color="r",
+            linestyle="--",
+            label="Threshold",
+        )
+
+        # Customize plot
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.set_title(title, fontsize=12, pad=15)
+        ax.set_xlabel("Time Steps", fontsize=10)
+        ax.set_ylabel(
+            "Martingale Values" + (" (log scale)" if cumulative else ""),
+            fontsize=10,
+        )
+        
+        # Add legend
+        legend = ax.legend(
+            fontsize=10,
+            ncol=3,
+            loc="upper right" if not cumulative else "upper left",
+            bbox_to_anchor=(1, 1.02) if not cumulative else (0, 1.02),
+            frameon=True,
+            facecolor="none",
+            edgecolor="none",
+        )
+        legend.get_frame().set_facecolor("none")
+        legend.get_frame().set_alpha(0)
 
     def plot_feature_distributions(
         self, features: np.ndarray, save_path: str = None
@@ -300,7 +335,7 @@ class DatasetVisualizer:
     def visualize_training_data(self, output_dir: str = "visualizations") -> None:
         """Create comprehensive visualizations of the training data."""
         print("Loading training data...")
-        sequences, labels, change_points = self.load_training_data()
+        sequences, labels, change_points, martingales = self.load_training_data()
 
         # Create output directory
         output_dir = Path(output_dir)
@@ -313,13 +348,14 @@ class DatasetVisualizer:
         print(f"Sequence length: {seq_length}")
         print(f"Number of features: {n_features}")
 
-        # 1. Plot example sequences with change points
+        # Plot example sequences with change points and martingales
         print("\nPlotting example sequences...")
         for i in range(min(5, n_sequences)):
             self.plot_sequence_timeline(
                 sequences,
                 labels,
                 change_points,
+                martingales,
                 i,
                 save_path=output_dir / f"sequence_{i}.png",
             )
