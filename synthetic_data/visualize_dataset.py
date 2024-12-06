@@ -44,7 +44,9 @@ class DatasetVisualizer:
         )
         plt.style.use("seaborn-v0_8-darkgrid")
 
-    def load_training_data(self) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict]]:
+    def load_training_data(
+        self,
+    ) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict]]:
         """Load training sequences, labels, change points and martingales from H5 files."""
         train_dir = self.data_dir / "train"
 
@@ -64,35 +66,31 @@ class DatasetVisualizer:
             # Load martingales
             martingales = []
             mart_group = hf["martingales"]
-            
+
             # Get feature names from first sequence's martingales
             first_seq = mart_group["sequence_0"]
             feature_names = list(first_seq["reset"].keys())
             self.feature_names = feature_names  # Update feature names from data
-            
+
             # Update colors to match number of features
             self.colors = sns.color_palette(
-                self.config["visualization"]["colors"], 
-                n_colors=len(self.feature_names)
+                self.config["visualization"]["colors"], n_colors=len(self.feature_names)
             )
-            
+
             # Iterate through sequences
             for seq_idx in range(len(sequences)):
                 seq_group = mart_group[f"sequence_{seq_idx}"]
-                
+
                 # Load reset and cumulative martingales
-                seq_mart = {
-                    "reset": {},
-                    "cumulative": {}
-                }
-                
+                seq_mart = {"reset": {}, "cumulative": {}}
+
                 for mart_type in ["reset", "cumulative"]:
                     type_group = seq_group[mart_type]
                     for feat_name in feature_names:
                         seq_mart[mart_type][feat_name] = {
                             "martingales": type_group[feat_name][:]
                         }
-                
+
                 martingales.append(seq_mart)
 
         return sequences, labels, change_points, martingales
@@ -117,21 +115,21 @@ class DatasetVisualizer:
         # Top subplot: Reset Martingales
         ax1 = plt.subplot(gs[0])
         self._plot_martingale_sequence(
-            ax1, 
-            seq_martingales["reset"], 
+            ax1,
+            seq_martingales["reset"],
             "Reset Martingale Measures",
             seq_change_points,
-            cumulative=False
+            cumulative=False,
         )
 
         # Middle subplot: Cumulative Martingales
         ax2 = plt.subplot(gs[1])
         self._plot_martingale_sequence(
-            ax2, 
-            seq_martingales["cumulative"], 
+            ax2,
+            seq_martingales["cumulative"],
             "Cumulative Martingale Measures",
             seq_change_points,
-            cumulative=True
+            cumulative=True,
         )
 
         # Bottom subplot: Labels
@@ -176,9 +174,9 @@ class DatasetVisualizer:
             ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
 
         # Plot individual feature martingales
-        for (name, color) in zip(self.feature_names, self.colors):
+        for name, color in zip(self.feature_names, self.colors):
             martingale_values = np.array(martingales[name]["martingales"])
-            
+
             if cumulative:
                 ax.semilogy(
                     martingale_values,
@@ -245,7 +243,7 @@ class DatasetVisualizer:
             "Martingale Values" + (" (log scale)" if cumulative else ""),
             fontsize=10,
         )
-        
+
         # Add legend
         legend = ax.legend(
             fontsize=10,

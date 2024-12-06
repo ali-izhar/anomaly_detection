@@ -185,8 +185,11 @@ class DatasetGenerator:
         return (features - mean) / std
 
     def _split_dataset(
-        self, sequences: np.ndarray, labels: np.ndarray, 
-        change_points: List[List[int]], martingales: List[Dict]
+        self,
+        sequences: np.ndarray,
+        labels: np.ndarray,
+        change_points: List[List[int]],
+        martingales: List[Dict],
     ) -> Dict:
         """Split dataset into train, validation, and test sets."""
         num_sequences = len(sequences)
@@ -238,36 +241,42 @@ class DatasetGenerator:
             with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
                 # Create main group for sequence data
                 seq_group = hf.create_group("sequences")
-                seq_group.create_dataset("features", data=data["sequences"], compression="gzip")
-                seq_group.create_dataset("labels", data=data["labels"], compression="gzip")
-                
+                seq_group.create_dataset(
+                    "features", data=data["sequences"], compression="gzip"
+                )
+                seq_group.create_dataset(
+                    "labels", data=data["labels"], compression="gzip"
+                )
+
                 # Create group for change points
                 cp_group = hf.create_group("change_points")
-                cp_group.create_dataset("points", data=padded_change_points, compression="gzip")
                 cp_group.create_dataset(
-                    "lengths", 
-                    data=[len(cp) for cp in data["change_points"]], 
-                    compression="gzip"
+                    "points", data=padded_change_points, compression="gzip"
+                )
+                cp_group.create_dataset(
+                    "lengths",
+                    data=[len(cp) for cp in data["change_points"]],
+                    compression="gzip",
                 )
 
                 # Create group for martingales
                 mart_group = hf.create_group("martingales")
-                
+
                 # Store martingales for each sequence
                 for seq_idx, martingales in enumerate(data["martingales"]):
                     seq_group = mart_group.create_group(f"sequence_{seq_idx}")
-                    
+
                     # Store reset and cumulative martingales
                     for mart_type in ["reset", "cumulative"]:
                         type_group = seq_group.create_group(mart_type)
-                        
+
                         # Store martingales for each feature
                         for feat_name, mart_data in martingales[mart_type].items():
-                            mart_values = np.array(mart_data["martingales"], dtype=np.float64)
+                            mart_values = np.array(
+                                mart_data["martingales"], dtype=np.float64
+                            )
                             type_group.create_dataset(
-                                feat_name,
-                                data=mart_values,
-                                compression="gzip"
+                                feat_name, data=mart_values, compression="gzip"
                             )
 
             logger.info(
@@ -281,7 +290,7 @@ class DatasetGenerator:
 
         Parameters:
             graphs (List[np.ndarray]): List of adjacency matrices
-            
+
         Returns:
             Dict[str, Dict[str, Any]]: Dictionary with 'reset' and 'cumulative' martingales
         """
@@ -319,10 +328,7 @@ class DatasetGenerator:
             cumulative_result["martingales"] = np.cumsum(cumulative_values)
             martingales_cumulative[name] = cumulative_result
 
-        return {
-            "reset": martingales_reset,
-            "cumulative": martingales_cumulative
-        }
+        return {"reset": martingales_reset, "cumulative": martingales_cumulative}
 
     def generate_sequences(self) -> Dict:
         """Generate sequences for all specified graph types."""
@@ -413,10 +419,10 @@ def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
 
     # Split and save the dataset
     split_data = generator._split_dataset(
-        data["sequences"], 
-        data["labels"], 
+        data["sequences"],
+        data["labels"],
         data["change_points"],
-        data["martingales"]  # Add martingales to split
+        data["martingales"],  # Add martingales to split
     )
 
     generator._save_to_hdf5(split_data)

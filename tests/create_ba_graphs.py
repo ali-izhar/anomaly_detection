@@ -68,15 +68,17 @@ def generate_ba_graphs() -> Dict:
     n = config["n"]
     edges = config["edges"]
     seq_len = config["sequence_length"]
-    
+
     # Define actual change points where graph parameters change
     change_points = [
         config["sequence_length"]["before_change"],
-        config["sequence_length"]["before_change"] + config["sequence_length"]["after_change1"],
-        config["sequence_length"]["before_change"] + config["sequence_length"]["after_change1"] + 
-        config["sequence_length"]["after_change2"]
+        config["sequence_length"]["before_change"]
+        + config["sequence_length"]["after_change1"],
+        config["sequence_length"]["before_change"]
+        + config["sequence_length"]["after_change1"]
+        + config["sequence_length"]["after_change2"],
     ]
-    
+
     # Generate graphs with parameter changes at these points
     generator = GraphGenerator()
     graphs1 = _generate_graph_segment(
@@ -85,9 +87,9 @@ def generate_ba_graphs() -> Dict:
         edges["initial"],
         edges["change1"],
         config["sequence_length"]["before_change"],
-        config["sequence_length"]["after_change1"]
+        config["sequence_length"]["after_change1"],
     )
-    
+
     graphs2 = _generate_graph_segment(
         generator,
         n,
@@ -95,9 +97,9 @@ def generate_ba_graphs() -> Dict:
         edges["change2"],
         config["sequence_length"]["after_change1"],
         config["sequence_length"]["after_change2"],
-        skip_first=True
+        skip_first=True,
     )
-    
+
     graphs3 = _generate_graph_segment(
         generator,
         n,
@@ -105,17 +107,22 @@ def generate_ba_graphs() -> Dict:
         edges["change3"],
         config["sequence_length"]["after_change2"],
         config["sequence_length"]["after_change3"],
-        skip_first=True
+        skip_first=True,
     )
-    
+
     all_graphs = graphs1 + graphs2 + graphs3
-    
+
     return {
         "graphs": all_graphs,
         "change_points": change_points,
         "params": {
-            "edges": [edges["initial"], edges["change1"], edges["change2"], edges["change3"]]
-        }
+            "edges": [
+                edges["initial"],
+                edges["change1"],
+                edges["change2"],
+                edges["change3"],
+            ]
+        },
     }
 
 
