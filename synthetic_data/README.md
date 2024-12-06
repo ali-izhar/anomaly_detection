@@ -23,12 +23,11 @@ Configuration files in `configs/`:
 
 2. Parameter Changes:
    - Initial parameters set from config
-   - At each change point, parameters randomly sampled from configured ranges
-   - Ensures minimum 30% relative change in key parameters:
+   - At each change point, parameters randomly sampled from configured ranges:
      - BA: Number of edges ($m$)
      - ER: Connection probability ($p$)
-     - NW: Either $k$ or $p$ parameter
-   - Changes maintain statistical significance while preserving natural variation
+     - NW: Both $k$ and $p$ parameters
+   - Changes can range from subtle to dramatic
 
 3. Visualization:
    - Dashboard shows graph structure evolution

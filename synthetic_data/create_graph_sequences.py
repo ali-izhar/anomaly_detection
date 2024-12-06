@@ -112,74 +112,35 @@ def _generate_random_change_points(
         params.append(
             {"m1": config.params["initial_edges"], "m2": config.params["initial_edges"]}
         )
-
-        prev_m = config.params["initial_edges"]
-
+        
         for _ in range(len(points)):
-            # Ensure significant change in number of edges
-            while True:
-                m = np.random.randint(
-                    config.params["min_edges"], config.params["max_edges"] + 1
-                )
-                m_change = abs(m - prev_m) / max(prev_m, m)
-
-                # Ensure at least 30% change in m
-                if m_change > 0.3:
-                    break
-
+            # Simply generate random edges without threshold
+            m = np.random.randint(config.params["min_edges"], config.params["max_edges"] + 1)
             params.append({"m1": m, "m2": m})
-            prev_m = m
 
     elif config.graph_type == GraphType.ER:
         params.append(
             {"p1": config.params["initial_p"], "p2": config.params["initial_p"]}
         )
-
-        prev_p = config.params["initial_p"]
-
+        
         for _ in range(len(points)):
-            # Ensure significant change in probability
-            while True:
-                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
-                p_change = abs(p - prev_p) / max(prev_p, p)
-
-                # Ensure at least 30% change in p
-                if p_change > 0.3:
-                    break
-
+            # Simply generate random probability without threshold
+            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
             params.append({"p1": p, "p2": p})
-            prev_p = p
 
     elif config.graph_type == GraphType.NW:
-        params.append(
-            {
-                "k1": config.params["initial_k"],
-                "k2": config.params["initial_k"],
-                "p1": config.params["initial_p"],
-                "p2": config.params["initial_p"],
-            }
-        )
-
-        prev_k = config.params["initial_k"]
-        prev_p = config.params["initial_p"]
-
+        params.append({
+            "k1": config.params["initial_k"],
+            "k2": config.params["initial_k"],
+            "p1": config.params["initial_p"],
+            "p2": config.params["initial_p"],
+        })
+        
         for _ in range(len(points)):
-            # Ensure at least one parameter changes significantly
-            while True:
-                k = np.random.randint(
-                    config.params["min_k"], config.params["max_k"] + 1
-                )
-                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
-
-                k_change = abs(k - prev_k) / max(prev_k, k)
-                p_change = abs(p - prev_p) / max(prev_p, p)
-
-                # Ensure at least 30% change in either k or p
-                if k_change > 0.3 or p_change > 0.3:
-                    break
-
+            # Simply generate random k and p without threshold
+            k = np.random.randint(config.params["min_k"], config.params["max_k"] + 1)
+            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
             params.append({"k1": k, "k2": k, "p1": p, "p2": p})
-            prev_k, prev_p = k, p
 
     return points, params, seq_len, n
 
