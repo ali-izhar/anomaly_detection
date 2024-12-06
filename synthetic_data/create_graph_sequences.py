@@ -20,7 +20,7 @@ if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
 from src.graph import GraphGenerator, SyntheticDataGenerator
-from tests.visualize_graphs import GraphVisualizer
+from visualize_graphs import GraphVisualizer
 
 
 class GraphType(Enum):
@@ -34,8 +34,10 @@ class GraphConfig:
     """Configuration for graph generation"""
 
     graph_type: GraphType
-    n: int
-    sequence_length: int
+    min_n: int
+    max_n: int
+    min_seq_length: int
+    max_seq_length: int
     min_segment: int
     min_changes: int
     max_changes: int
@@ -45,7 +47,7 @@ class GraphConfig:
     def from_yaml(cls, graph_type: GraphType, config_path: str = None) -> "GraphConfig":
         """Create configuration from YAML file"""
         if config_path is None:
-            config_path = Path(__file__).parent / "graph_config.yaml"
+            config_path = Path(__file__).parent / "configs/graph_config.yaml"
 
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
@@ -58,8 +60,10 @@ class GraphConfig:
 
         return cls(
             graph_type=graph_type,
-            n=common["n"],
-            sequence_length=common["sequence_length"],
+            min_n=common["min_n"],
+            max_n=common["max_n"],
+            min_seq_length=common["min_seq_length"],
+            max_seq_length=common["max_seq_length"],
             min_segment=common["min_segment"],
             min_changes=common["min_changes"],
             max_changes=common["max_changes"],
@@ -67,9 +71,13 @@ class GraphConfig:
         )
 
 
-def _generate_random_change_points(config: GraphConfig) -> Tuple[List[int], List[Dict]]:
+def _generate_random_change_points(
+    config: GraphConfig,
+) -> Tuple[List[int], List[Dict], int, int]:
     """Generate random change points and corresponding parameters."""
-    seq_len = config.sequence_length
+    # Generate random sequence length and number of nodes
+    seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
+    n = np.random.randint(config.min_n, config.max_n + 1)
     min_seg = config.min_segment
 
     # Generate change points
@@ -93,19 +101,43 @@ def _generate_random_change_points(config: GraphConfig) -> Tuple[List[int], List
         params.append(
             {"m1": config.params["initial_edges"], "m2": config.params["initial_edges"]}
         )
+
+        prev_m = config.params["initial_edges"]
+
         for _ in range(len(points)):
-            m = np.random.randint(
-                config.params["min_edges"], config.params["max_edges"] + 1
-            )
+            # Ensure significant change in number of edges
+            while True:
+                m = np.random.randint(
+                    config.params["min_edges"], config.params["max_edges"] + 1
+                )
+                m_change = abs(m - prev_m) / max(prev_m, m)
+
+                # Ensure at least 30% change in m
+                if m_change > 0.3:
+                    break
+
             params.append({"m1": m, "m2": m})
+            prev_m = m
 
     elif config.graph_type == GraphType.ER:
         params.append(
             {"p1": config.params["initial_p"], "p2": config.params["initial_p"]}
         )
+
+        prev_p = config.params["initial_p"]
+
         for _ in range(len(points)):
-            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+            # Ensure significant change in probability
+            while True:
+                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+                p_change = abs(p - prev_p) / max(prev_p, p)
+
+                # Ensure at least 30% change in p
+                if p_change > 0.3:
+                    break
+
             params.append({"p1": p, "p2": p})
+            prev_p = p
 
     elif config.graph_type == GraphType.NW:
         params.append(
@@ -116,18 +148,35 @@ def _generate_random_change_points(config: GraphConfig) -> Tuple[List[int], List
                 "p2": config.params["initial_p"],
             }
         )
-        for _ in range(len(points)):
-            k = np.random.randint(config.params["min_k"], config.params["max_k"] + 1)
-            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
-            params.append({"k1": k, "k2": k, "p1": p, "p2": p})
 
-    return points, params
+        prev_k = config.params["initial_k"]
+        prev_p = config.params["initial_p"]
+
+        for _ in range(len(points)):
+            # Ensure at least one parameter changes significantly
+            while True:
+                k = np.random.randint(
+                    config.params["min_k"], config.params["max_k"] + 1
+                )
+                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+
+                k_change = abs(k - prev_k) / max(prev_k, k)
+                p_change = abs(p - prev_p) / max(prev_p, p)
+
+                # Ensure at least 30% change in either k or p
+                if k_change > 0.3 or p_change > 0.3:
+                    break
+
+            params.append({"k1": k, "k2": k, "p1": p, "p2": p})
+            prev_k, prev_p = k, p
+
+    return points, params, seq_len, n
 
 
 def generate_graph_sequence(config: GraphConfig) -> Dict:
     """Generate graph sequence with random number of parameter changes."""
-    # Generate random change points and parameters
-    change_points, params = _generate_random_change_points(config)
+    # Generate random change points, parameters, sequence length and number of nodes
+    change_points, params, seq_length, n = _generate_random_change_points(config)
 
     # Initialize generators
     graph_generator = GraphGenerator()
@@ -143,15 +192,15 @@ def generate_graph_sequence(config: GraphConfig) -> Dict:
         length = end - start
 
         # Create generation config for this segment
-        gen_config = {"n": config.n, "set1": length, "set2": 0, **params[i]}
+        gen_config = {"n": n, "set1": length, "set2": 0, **params[i]}
 
         # Generate segment
         segment = generator_method(**gen_config)
         all_graphs.extend(segment)
 
     # Generate final segment
-    final_length = config.sequence_length - (change_points[-1] if change_points else 0)
-    final_config = {"n": config.n, "set1": final_length, "set2": 0, **params[-1]}
+    final_length = seq_length - (change_points[-1] if change_points else 0)
+    final_config = {"n": n, "set1": final_length, "set2": 0, **params[-1]}
     final_segment = generator_method(**final_config)
     all_graphs.extend(final_segment)
 
@@ -161,6 +210,8 @@ def generate_graph_sequence(config: GraphConfig) -> Dict:
         "params": params,
         "graph_type": config.graph_type.value,
         "num_changes": len(change_points),
+        "n": n,
+        "sequence_length": seq_length,
     }
 
 
@@ -169,13 +220,17 @@ def main(visualize: bool = False):
     graph_types = [GraphType.BA, GraphType.ER, GraphType.NW]
 
     for graph_type in graph_types:
-        config = GraphConfig.from_yaml(graph_type, config_path="graph_config.yaml")
+        config = GraphConfig.from_yaml(
+            graph_type, config_path="configs/graph_config.yaml"
+        )
         print(f"\nGenerating {graph_type.value} Graph Sequence")
         print("-" * 50)
         print(f"Configuration:")
         print(f"  - Graph type: {config.graph_type.value}")
-        print(f"  - Nodes per graph: {config.n}")
-        print(f"  - Sequence length: {config.sequence_length}")
+        print(f"  - Nodes per graph range: [{config.min_n}, {config.max_n}]")
+        print(
+            f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
+        )
         print(f"  - Minimum segment length: {config.min_segment}")
         print(f"  - Change points range: [{config.min_changes}, {config.max_changes}]")
         print(f"  - Parameters: {config.params}")
@@ -183,7 +238,10 @@ def main(visualize: bool = False):
         result = generate_graph_sequence(config)
 
         print("\nResults:")
-        print(f"  - Generated {len(result['graphs'])} graphs")
+        print(
+            f"  - Generated {len(result['graphs'])} graphs with {result['n']} nodes each"
+        )
+        print(f"  - Sequence length: {result['sequence_length']}")
         print(f"  - Number of change points: {result['num_changes']}")
         print(f"  - Change points at t={result['change_points']}")
         print(f"  - Parameters at each segment: {result['params']}")
