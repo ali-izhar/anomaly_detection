@@ -49,9 +49,9 @@ class DatasetConfig(GraphConfig):
     ) -> "DatasetConfig":
         """Create configuration from YAML files"""
         if config_path is None:
-            config_path = Path(__file__).parent / "dataset_config.yaml"
+            config_path = Path(__file__).parent / "configs/dataset_config.yaml"
         if graph_config_path is None:
-            graph_config_path = Path(__file__).parent / "graph_config.yaml"
+            graph_config_path = Path(__file__).parent / "configs/graph_config.yaml"
 
         # Load dataset config
         with open(config_path, "r") as f:
@@ -76,8 +76,10 @@ class DatasetConfig(GraphConfig):
         return cls(
             # Inherit GraphConfig parameters
             graph_type=graph_config.graph_type,
-            n=graph_config_data["common"]["n"],
-            sequence_length=graph_config_data["common"]["sequence_length"],
+            min_n=graph_config_data["common"]["min_n"],
+            max_n=graph_config_data["common"]["max_n"],
+            min_seq_length=graph_config_data["common"]["min_seq_length"],
+            max_seq_length=graph_config_data["common"]["max_seq_length"],
             min_segment=graph_config_data["common"]["min_segment"],
             min_changes=graph_config_data["common"]["min_changes"],
             max_changes=graph_config_data["common"]["max_changes"],
@@ -190,6 +192,7 @@ class DatasetGenerator:
         labels: np.ndarray,
         change_points: List[List[int]],
         martingales: List[Dict],
+        sequence_lengths: np.ndarray,
     ) -> Dict:
         """Split dataset into train, validation, and test sets."""
         num_sequences = len(sequences)
@@ -209,18 +212,21 @@ class DatasetGenerator:
                 "labels": labels[train_idx],
                 "change_points": [change_points[i] for i in train_idx],
                 "martingales": [martingales[i] for i in train_idx],
+                "sequence_lengths": sequence_lengths[train_idx],
             },
             "val": {
                 "sequences": sequences[val_idx],
                 "labels": labels[val_idx],
                 "change_points": [change_points[i] for i in val_idx],
                 "martingales": [martingales[i] for i in val_idx],
+                "sequence_lengths": sequence_lengths[val_idx],
             },
             "test": {
                 "sequences": sequences[test_idx],
                 "labels": labels[test_idx],
                 "change_points": [change_points[i] for i in test_idx],
                 "martingales": [martingales[i] for i in test_idx],
+                "sequence_lengths": sequence_lengths[test_idx],
             },
         }
 
@@ -246,6 +252,9 @@ class DatasetGenerator:
                 )
                 seq_group.create_dataset(
                     "labels", data=data["labels"], compression="gzip"
+                )
+                seq_group.create_dataset(
+                    "lengths", data=data["sequence_lengths"], compression="gzip"
                 )
 
                 # Create group for change points
@@ -338,6 +347,7 @@ class DatasetGenerator:
             "change_points": [],
             "graph_types": [],
             "martingales": [],
+            "sequence_lengths": [],
         }
 
         # Main progress bar for graph types
@@ -361,8 +371,10 @@ class DatasetGenerator:
                 # Create a new GraphConfig for each graph type
                 graph_config = GraphConfig(
                     graph_type=graph_type,
-                    n=self.config.n,
-                    sequence_length=self.config.sequence_length,
+                    min_n=self.config.min_n,
+                    max_n=self.config.max_n,
+                    min_seq_length=self.config.min_seq_length,
+                    max_seq_length=self.config.max_seq_length,
                     min_segment=self.config.min_segment,
                     min_changes=self.config.min_changes,
                     max_changes=self.config.max_changes,
@@ -380,9 +392,7 @@ class DatasetGenerator:
 
                     # Compute features and martingales directly from graphs
                     features = self._compute_features(result["graphs"])
-                    martingales = self._compute_martingales(
-                        result["graphs"]
-                    )  # Pass graphs instead of features
+                    martingales = self._compute_martingales(result["graphs"])
 
                     # Compute labels using martingale detection points
                     labels = self._compute_anomaly_labels(
@@ -394,6 +404,7 @@ class DatasetGenerator:
                     data["change_points"].append(result["change_points"])
                     data["graph_types"].append(graph_type.value)
                     data["martingales"].append(martingales)
+                    data["sequence_lengths"].append(len(result["graphs"]))
 
             except KeyError:
                 logger.error(f"Invalid graph type: {graph_type_str}")
@@ -402,9 +413,23 @@ class DatasetGenerator:
         # Clear the progress bars
         print("\n")
 
-        # Convert to numpy arrays
-        data["sequences"] = np.array(data["sequences"])
-        data["labels"] = np.array(data["labels"])
+        # Convert to numpy arrays with padding
+        max_length = max(data["sequence_lengths"])
+        num_features = data["sequences"][0].shape[1]  # Number of features per timestep
+
+        # Pad sequences and labels
+        padded_sequences = np.zeros((len(data["sequences"]), max_length, num_features))
+        padded_labels = np.zeros((len(data["labels"]), max_length))
+
+        for i, (seq, lab, length) in enumerate(
+            zip(data["sequences"], data["labels"], data["sequence_lengths"])
+        ):
+            padded_sequences[i, :length] = seq
+            padded_labels[i, :length] = lab
+
+        data["sequences"] = padded_sequences
+        data["labels"] = padded_labels
+        data["sequence_lengths"] = np.array(data["sequence_lengths"])
 
         return data
 
@@ -422,7 +447,8 @@ def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
         data["sequences"],
         data["labels"],
         data["change_points"],
-        data["martingales"],  # Add martingales to split
+        data["martingales"],
+        data["sequence_lengths"],
     )
 
     generator._save_to_hdf5(split_data)
@@ -439,14 +465,14 @@ def main():
         "-dc",
         type=str,
         help="Path to dataset config YAML file",
-        default="dataset_config.yaml",
+        default="configs/dataset_config.yaml",
     )
     parser.add_argument(
         "--graph-config",
         "-gc",
         type=str,
         help="Path to graph config YAML file",
-        default="graph_config.yaml",
+        default="configs/graph_config.yaml",
     )
     parser.add_argument("--output", "-o", type=str, help="Override output directory")
     parser.add_argument("--graph-types", "-gt", nargs="+", help="Override graph types")
@@ -474,14 +500,17 @@ def main():
     print(f"Configuration:")
     print(f"  - Graph types: {config.graph_types}")
     print(f"  - Sequences per type: {config.num_sequences}")
-    print(f"  - Sequence length: {config.sequence_length}")
-    print(f"  - Nodes per graph: {config.n}")
+    print(
+        f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
+    )
+    print(f"  - Nodes per graph range: [{config.min_n}, {config.max_n}]")
     print(f"  - Min changes: {config.min_changes}")
     print(f"  - Max changes: {config.max_changes}")
     print(f"  - Min segment length: {config.min_segment}")
     print(f"  - Output directory: {config.output_dir}")
     print(f"\nGraph Parameters:")
-    print(f"  - {config.graph_type.value}: {config.params}")
+    for graph_type in config.graph_types:
+        print(f"  - {graph_type}: {config.graph_params[graph_type.lower()]}")
     print(f"\nDataset Parameters:")
     print(f"  - Threshold: {config.threshold}")
     print(f"  - Epsilon: {config.epsilon}")

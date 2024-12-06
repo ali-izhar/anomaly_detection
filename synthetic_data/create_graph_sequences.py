@@ -82,18 +82,29 @@ def _generate_random_change_points(
 
     # Generate change points
     num_changes = np.random.randint(config.min_changes, config.max_changes + 1)
-    points = []
-    available_positions = list(range(min_seg, seq_len - min_seg))
 
-    for _ in range(num_changes):
-        if len(available_positions) < min_seg:
+    # Keep trying until we get enough valid change points
+    while True:
+        points = []
+        available_positions = list(range(min_seg, seq_len - min_seg))
+
+        for _ in range(num_changes):
+            if len(available_positions) < min_seg:
+                break
+            point = np.random.choice(available_positions)
+            points.append(point)
+            # Remove positions that are too close to the chosen point
+            mask = np.abs(np.array(available_positions) - point) >= min_seg
+            available_positions = [
+                p for i, p in enumerate(available_positions) if mask[i]
+            ]
+
+        points = sorted(points)
+        # Only accept if we have at least minimum required changes
+        if len(points) >= config.min_changes:
             break
-        point = np.random.choice(available_positions)
-        points.append(point)
-        mask = np.abs(np.array(available_positions) - point) >= min_seg
-        available_positions = [p for i, p in enumerate(available_positions) if mask[i]]
-
-    points = sorted(points)
+        # If we failed, try with a new sequence length
+        seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
 
     # Generate parameters based on graph type
     params = []

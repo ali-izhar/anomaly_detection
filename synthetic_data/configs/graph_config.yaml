@@ -2,11 +2,11 @@
 common:
   min_n: 30            # Minimum number of nodes in each graph
   max_n: 100           # Maximum number of nodes in each graph
-  min_seq_length: 150  # Minimum sequence length
-  max_seq_length: 400  # Maximum sequence length
+  min_seq_length: 75   # Minimum sequence length
+  max_seq_length: 250  # Maximum sequence length
   min_segment: 30      # Minimum length between changes
   min_changes: 2       # Minimum number of change points
-  max_changes: 8       # Maximum number of change points
+  max_changes: 7       # Maximum number of change points
 
 # BARABASI-ALBERT PARAMETERS
 ba:

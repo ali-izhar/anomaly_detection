@@ -46,14 +46,15 @@ class DatasetVisualizer:
 
     def load_training_data(
         self,
-    ) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict]]:
-        """Load training sequences, labels, change points and martingales from H5 files."""
+    ) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict], np.ndarray]:
+        """Load training sequences, labels, change points, martingales and sequence lengths from H5 files."""
         train_dir = self.data_dir / "train"
 
         with h5py.File(train_dir / "data.h5", "r") as hf:
-            # Load sequences and labels from sequences group
+            # Load sequences, labels and lengths from sequences group
             sequences = hf["sequences/features"][:]
             labels = hf["sequences/labels"][:]
+            sequence_lengths = hf["sequences/lengths"][:]
 
             # Load change points
             padded_change_points = hf["change_points/points"][:]
@@ -93,7 +94,7 @@ class DatasetVisualizer:
 
                 martingales.append(seq_mart)
 
-        return sequences, labels, change_points, martingales
+        return sequences, labels, change_points, martingales, sequence_lengths
 
     def plot_sequence_timeline(
         self,
@@ -102,9 +103,13 @@ class DatasetVisualizer:
         change_points: List[List[int]],
         martingales: List[Dict],
         sequence_idx: int,
+        sequence_lengths: np.ndarray,
         save_path: str = None,
     ) -> None:
         """Plot timeline view of a single sequence with martingales and labels."""
+        # Get actual sequence length
+        seq_length = int(sequence_lengths[sequence_idx])
+
         plt.figure(figsize=(15, 12))
         gs = plt.GridSpec(3, 1, height_ratios=[2, 2, 1], hspace=0.3)
 
@@ -120,6 +125,7 @@ class DatasetVisualizer:
             "Reset Martingale Measures",
             seq_change_points,
             cumulative=False,
+            sequence_length=seq_length,
         )
 
         # Middle subplot: Cumulative Martingales
@@ -130,13 +136,14 @@ class DatasetVisualizer:
             "Cumulative Martingale Measures",
             seq_change_points,
             cumulative=True,
+            sequence_length=seq_length,
         )
 
         # Bottom subplot: Labels
         ax3 = plt.subplot(gs[2])
-        sequence_labels = labels[sequence_idx]
+        sequence_labels = labels[sequence_idx, :seq_length]
         ax3.fill_between(
-            range(len(sequence_labels)),
+            range(seq_length),
             0,
             sequence_labels,
             color="red",
@@ -146,9 +153,11 @@ class DatasetVisualizer:
 
         # Add change points
         for cp in seq_change_points:
-            ax3.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
+            if cp < seq_length:
+                ax3.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
 
         ax3.set_ylim(-0.1, 1.1)
+        ax3.set_xlim(0, seq_length)
         ax3.set_title("Anomaly Labels")
         ax3.set_xlabel("Time Step")
         ax3.set_ylabel("Label")
@@ -165,17 +174,19 @@ class DatasetVisualizer:
         title: str,
         change_points: List[int],
         cumulative: bool = False,
+        sequence_length: int = None,
     ) -> None:
-        """Plot martingale sequences with change points.
-        Similar to visualize_martingales.py implementation.
-        """
+        """Plot martingale sequences with change points."""
         # Add change point indicators
         for cp in change_points:
-            ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
+            if cp < sequence_length:
+                ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
 
         # Plot individual feature martingales
         for name, color in zip(self.feature_names, self.colors):
             martingale_values = np.array(martingales[name]["martingales"])
+            if sequence_length:
+                martingale_values = martingale_values[:sequence_length]
 
             if cumulative:
                 ax.semilogy(
@@ -198,6 +209,8 @@ class DatasetVisualizer:
         martingale_arrays = []
         for name in self.feature_names:
             values = np.array(martingales[name]["martingales"])
+            if sequence_length:
+                values = values[:sequence_length]
             martingale_arrays.append(values)
 
         martingale_arrays = np.array(martingale_arrays)
@@ -234,6 +247,10 @@ class DatasetVisualizer:
             linestyle="--",
             label="Threshold",
         )
+
+        # Set x-axis limit to sequence length
+        if sequence_length:
+            ax.set_xlim(0, sequence_length)
 
         # Customize plot
         ax.grid(True, linestyle="--", alpha=0.3)
@@ -333,17 +350,25 @@ class DatasetVisualizer:
     def visualize_training_data(self, output_dir: str = "visualizations") -> None:
         """Create comprehensive visualizations of the training data."""
         print("Loading training data...")
-        sequences, labels, change_points, martingales = self.load_training_data()
+        sequences, labels, change_points, martingales, sequence_lengths = (
+            self.load_training_data()
+        )
 
         # Create output directory
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get shapes
-        n_sequences, seq_length, n_features = sequences.shape
+        # Get shapes and statistics
+        n_sequences = len(sequences)
+        max_seq_length = sequences.shape[1]
+        n_features = sequences.shape[2]
+        avg_seq_length = np.mean(sequence_lengths)
+        std_seq_length = np.std(sequence_lengths)
+
         print(f"\nTraining Data Shape:")
         print(f"Number of sequences: {n_sequences}")
-        print(f"Sequence length: {seq_length}")
+        print(f"Maximum sequence length: {max_seq_length}")
+        print(f"Average sequence length: {avg_seq_length:.1f} ± {std_seq_length:.1f}")
         print(f"Number of features: {n_features}")
 
         # Plot example sequences with change points and martingales
@@ -355,25 +380,38 @@ class DatasetVisualizer:
                 change_points,
                 martingales,
                 i,
+                sequence_lengths,
                 save_path=output_dir / f"sequence_{i}.png",
             )
 
-        # 2. Plot feature distributions
+        # For feature distributions and correlations, use only valid timesteps
+        valid_features = []
+        valid_labels = []
+        for i, length in enumerate(sequence_lengths):
+            valid_features.append(sequences[i, : int(length)])
+            valid_labels.append(labels[i, : int(length)])
+
+        valid_features = np.concatenate(valid_features)
+        valid_labels = np.concatenate(valid_labels)
+
+        # Plot feature distributions using only valid timesteps
         print("\nPlotting feature distributions...")
         self.plot_feature_distributions(
-            sequences, save_path=output_dir / "feature_distributions.png"
+            valid_features.reshape(1, -1, sequences.shape[-1]),
+            save_path=output_dir / "feature_distributions.png",
         )
 
-        # 3. Plot feature correlations
+        # Plot feature correlations using only valid timesteps
         print("\nPlotting feature correlations...")
         self.plot_feature_correlations(
-            sequences, save_path=output_dir / "feature_correlations.png"
+            valid_features.reshape(1, -1, sequences.shape[-1]),
+            save_path=output_dir / "feature_correlations.png",
         )
 
-        # 4. Plot label statistics
+        # Plot label statistics using only valid timesteps
         print("\nPlotting label statistics...")
         self.plot_label_statistics(
-            labels, save_path=output_dir / "label_statistics.png"
+            valid_labels.reshape(1, -1), save_path=output_dir / "label_statistics.png"
         )
 
         print(f"\nVisualizations saved to: {output_dir}/")
@@ -387,7 +425,7 @@ def main():
         "-c",
         type=str,
         help="Path to martingale config YAML file",
-        default="martingale_config.yaml",
+        default="configs/martingale_config.yaml",
     )
     parser.add_argument(
         "--data-dir",
