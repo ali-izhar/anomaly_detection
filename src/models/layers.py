@@ -13,22 +13,24 @@ class GraphConvLayer(nn.Module):
     H^(l+1) = sigma(D^(-1/2) * A * D^(-1/2) * H^(l) * W^(l))
 
     where:
-    - H^(l) is in R^(N x d) and is the node feature matrix at layer l
+    - H^(l) is in R^(N x d) (per sequence element) and is the node feature matrix at layer l
     - A is in R^(N x N) and is the adjacency matrix with self-loops
     - D is the degree matrix where D_ii = sum_j A_ij
     - W^(l) is the trainable weight matrix
     - sigma is a nonlinear activation function
     """
 
-    def __init__(self, in_dim: int, out_dim: int):
+    def __init__(self, in_dim: int, out_dim: int, activation: nn.Module = None):
         """
         Args:
             in_dim: Input feature dimension d
             out_dim: Output feature dimension d'
+            activation: Optional nonlinear activation function (e.g., nn.ReLU())
         """
         super().__init__()
         self.weights = nn.Parameter(torch.FloatTensor(in_dim, out_dim))
         self.bias = nn.Parameter(torch.FloatTensor(out_dim))
+        self.activation = activation
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -40,25 +42,32 @@ class GraphConvLayer(nn.Module):
         """
         Args:
             x: Node features matrix H in R^(B x N x d)
-               where B is batch size, N is number of nodes
-            adj: Normalized adjacency matrix D^(-1/2) * A * D^(-1/2) in R^(N x N)
-
-        Returns:
-            Updated node features H' in R^(B x N x d')
+               B: batch size (32)
+               N: number of nodes (100)
+               d: feature dim (varies by feature type)
+            adj: Normalized adjacency matrix D^(-1/2) * A * D^(-1/2) 
+                Either [N x N] or [B x N x N]
         """
-        support = torch.matmul(x, self.weights)  # H * W
-        output = torch.matmul(adj, support)  # D^(-1/2) * A * D^(-1/2) * H * W
-        return output + self.bias
+        # (B x N x d) * (d x d') -> (B x N x d')
+        support = torch.matmul(x, self.weights)
+        
+        # Handle batched or single adjacency matrix
+        if adj.dim() == 2:
+            # Expand adjacency matrix for batch processing
+            adj = adj.unsqueeze(0).expand(x.size(0), -1, -1)
+        
+        # (B x N x N) * (B x N x d') -> (B x N x d')
+        output = torch.matmul(adj, support)
+        output = output + self.bias
+        return output if self.activation is None else self.activation(output)
 
 
 class TemporalAttention(nn.Module):
-    """Temporal self-attention mechanism computing:
+    """Temporal self-attention mechanism:
 
-    Attention(Q, K, V) = softmax(Q * K^T / sqrt(d_k)) * V
+    Attention(Q, K, V) = softmax((Q * K^T) / sqrt(d_k)) * V
 
-    where Q, K, V are learned linear transformations of the input.
-    This captures temporal dependencies between node features
-    across different timesteps.
+    This captures temporal dependencies between node features across timesteps.
     """
 
     def __init__(self, hidden_dim: int):
@@ -74,22 +83,28 @@ class TemporalAttention(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Input tensor in R^(B x T x N x d) where:
-               B is batch size
-               T is sequence length
-               N is number of nodes
-               d is hidden dimension
+            x: Input tensor in R^(B x T x N x d)
+               B: batch size (32)
+               T: sequence length (window_size=20)
+               N: number of nodes (100)
+               d: feature dimension (hidden_dim)
 
         Returns:
             Attended features in R^(B x T x N x d)
         """
-        q = self.query(x)  # Q = X * W_q
-        k = self.key(x)  # K = X * W_k
-        v = self.value(x)  # V = X * W_v
+        # Add shape assertions for validation
+        batch_size, seq_len, num_nodes, hidden_dim = x.size()
+        assert num_nodes == 100, f"Expected 100 nodes, got {num_nodes}"
+        assert seq_len == 20, f"Expected sequence length 20, got {seq_len}"
+        
+        q = self.query(x)  # (B x T x N x d)
+        k = self.key(x)    # (B x T x N x d)
+        v = self.value(x)  # (B x T x N x d)
 
-        # Scaled dot-product attention
-        scores = torch.matmul(q, k.transpose(-2, -1))
-        scores = scores / torch.sqrt(torch.tensor(x.size(-1), dtype=torch.float32))
+        # Compute attention scores (B x T x N x N)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (hidden_dim ** 0.5)
         attention = F.softmax(scores, dim=-1)
-
-        return torch.matmul(attention, v)
+        
+        # Weighted sum of values (B x T x N x d)
+        output = torch.matmul(attention, v)
+        return output

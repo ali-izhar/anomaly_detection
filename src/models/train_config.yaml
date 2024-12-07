@@ -1,0 +1,72 @@
+# Training Configuration
+paths:
+  data_dir: "dataset"
+  output_dir: "outputs"
+
+data:
+  # Sequence parameters
+  window_size: 20          # Input sequence length
+  stride: 5               # Window stride
+  forecast_horizon: 10     # Number of steps to predict
+  batch_size: 16          # Reduced from 32
+  
+  # Feature selection
+  use_centrality: true
+  use_spectral: true
+  enable_augmentation: false
+  noise_level: 0.01
+  
+  # Dataset constants
+  num_nodes: 100
+  max_seq_length: 200
+  min_seq_length: 161
+  num_change_points: 2
+  
+  # Feature dimensions
+  svd_dim: 2
+  lsvd_dim: 16
+
+model:
+  # Model architecture
+  hidden_dim: 64         # Reduced from 128
+  num_layers: 2          # Reduced from 3
+  dropout: 0.2          # Increased for regularization
+  
+  # Feature processing
+  use_node_features: true
+  use_edge_features: true
+  combine_features: "concat"  # How to combine different feature types
+  
+  # GNN parameters
+  gnn_type: "gcn"        # Graph convolution type
+  attention_heads: 4     # For attention-based layers
+  
+  # LSTM parameters
+  lstm_layers: 2
+  bidirectional: false  # Disabled bidirectional
+  
+  # Training parameters
+  learning_rate: 0.001
+  weight_decay: 1.0e-5    # Fixed scientific notation
+  clip_grad_norm: 1.0
+
+training:
+  epochs: 100
+  patience: 10           # Early stopping patience
+  val_interval: 1        # Validate every N epochs
+  save_interval: 5       # Save model every N epochs
+  
+  # Loss function weights
+  loss_weights:
+    centrality: 1.0
+    spectral: 0.5
+    
+  # Learning rate schedule
+  lr_schedule:
+    factor: 0.5
+    patience: 5
+    min_lr: 1.0e-6      # Fixed scientific notation
+
+  # Logging
+  log_interval: 100      # Log every N batches
+  tensorboard: true

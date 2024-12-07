@@ -25,16 +25,26 @@ class GraphDataConfig:
     """Configuration for data loading and preprocessing."""
 
     # Data loading
-    window_size: int = 10  # Sequence window for training
-    stride: int = 1  # Stride for sliding window
-    forecast_horizon: int = 5  # Number of steps to predict
-    batch_size: int = 32  # Training batch size
+    window_size: int = 20  # Increased from 10 to handle longer sequences
+    stride: int = 5  # Increased for more efficient sampling
+    forecast_horizon: int = 10  # Increased to match sequence scales
+    batch_size: int = 32  # Keep as is
+
+    # Constants from dataset
+    num_nodes: int = 100  # Fixed number of nodes
+    max_seq_length: int = 200  # Maximum sequence length
+    min_seq_length: int = 161  # Minimum sequence length from inspection
+    num_change_points: int = 2  # Fixed number of change points
+
+    # Feature dimensions
+    svd_dim: int = 2  # SVD embedding dimension
+    lsvd_dim: int = 16  # LSVD embedding dimension
 
     # Feature selection
-    use_centrality: bool = True  # Use centrality features
-    use_spectral: bool = True  # Use spectral embeddings
-    centrality_features: List[str] = None  # Specific centrality features to use
-    spectral_features: List[str] = None  # Specific spectral features to use
+    use_centrality: bool = True
+    use_spectral: bool = True
+    centrality_features: List[str] = None
+    spectral_features: List[str] = None
 
     # Data augmentation
     enable_augmentation: bool = False
@@ -51,6 +61,19 @@ class GraphDataConfig:
         if self.spectral_features is None:
             self.spectral_features = ["svd", "lsvd"]
 
+        # Validate configuration
+        self.validate_config()
+
+    def validate_config(self):
+        """Validate configuration parameters."""
+        assert self.window_size > 0, "Window size must be positive"
+        assert self.forecast_horizon > 0, "Forecast horizon must be positive"
+        assert (
+            self.window_size + self.forecast_horizon <= self.min_seq_length
+        ), "Window size + forecast horizon exceeds minimum sequence length"
+        assert self.stride > 0, "Stride must be positive"
+        assert self.batch_size > 0, "Batch size must be positive"
+
 
 class GraphSequenceDataset(Dataset):
     """Dataset for graph sequences with features and change points."""
@@ -65,11 +88,55 @@ class GraphSequenceDataset(Dataset):
         self.split = split
         self.config = config or GraphDataConfig()
         self.data = self._load_data()
+        self.validate_data()
         self.indices = self._create_sequence_indices()
+
+    def validate_data(self):
+        """Validate loaded data dimensions."""
+        # Check sequence lengths
+        assert len(self.data["sequence_lengths"]) > 0, "No sequences found"
+        assert (
+            min(self.data["sequence_lengths"]) >= self.config.min_seq_length
+        ), f"Sequence length below minimum: {min(self.data['sequence_lengths'])}"
+        assert (
+            max(self.data["sequence_lengths"]) <= self.config.max_seq_length
+        ), f"Sequence length exceeds maximum: {max(self.data['sequence_lengths'])}"
+
+        # Validate feature dimensions
+        num_sequences = len(self.data["sequence_lengths"])
+        for feat_name, feat_data in self.data["features"].items():
+            if feat_name in self.config.centrality_features:
+                assert feat_data.shape == (
+                    num_sequences,
+                    self.config.max_seq_length,
+                    self.config.num_nodes,
+                ), f"Invalid shape for {feat_name}: {feat_data.shape}"
+            elif feat_name == "svd":
+                assert feat_data.shape == (
+                    num_sequences,
+                    self.config.max_seq_length,
+                    self.config.num_nodes,
+                    self.config.svd_dim,
+                ), f"Invalid shape for SVD: {feat_data.shape}"
+            elif feat_name == "lsvd":
+                assert feat_data.shape == (
+                    num_sequences,
+                    self.config.max_seq_length,
+                    self.config.num_nodes,
+                    self.config.lsvd_dim,
+                ), f"Invalid shape for LSVD: {feat_data.shape}"
+
+        # Validate change points
+        if self.data["change_points"]:
+            for cp in self.data["change_points"]:
+                assert (
+                    len(cp) == self.config.num_change_points
+                ), f"Invalid number of change points: {len(cp)}"
 
     def _load_data(self) -> Dict:
         """Load data from HDF5 file."""
         path = self.data_dir / self.split / "data.h5"
+        logger.info(f"Loading data from {path}")
         if not path.exists():
             raise FileNotFoundError(f"No data found at {path}")
 
@@ -112,17 +179,16 @@ class GraphSequenceDataset(Dataset):
             "change_points": change_points,
         }
 
-    def _create_sequence_indices(self) -> List[Tuple[int, int]]:
+    def _create_sequence_indices(self) -> List[Tuple[int, int, int]]:
         """Create sliding window indices for sequences."""
         indices = []
 
         for seq_idx, length in enumerate(self.data["sequence_lengths"]):
+            # Ensure we have enough room for both input window and forecast horizon
+            max_start = length - (self.config.window_size + self.config.forecast_horizon)
+            
             # Create windows with given size and stride
-            for start in range(
-                0,
-                length - self.config.window_size - self.config.forecast_horizon + 1,
-                self.config.stride,
-            ):
+            for start in range(0, max_start + 1, self.config.stride):
                 end = start + self.config.window_size
                 indices.append((seq_idx, start, end))
 
@@ -136,23 +202,25 @@ class GraphSequenceDataset(Dataset):
         seq_idx, start, end = self.indices[idx]
 
         # Get input window
-        x = self._get_features(seq_idx, start, end)
+        x = self._get_features(seq_idx, start, end)  # window_size length
 
         # Get target window
         target_start = end
         target_end = end + self.config.forecast_horizon
-        y = self._get_features(seq_idx, target_start, target_end)
+        y = self._get_features(seq_idx, target_start, target_end)  # forecast_horizon length
 
-        # Get adjacency matrices
-        adj = self.data["adjacency"][seq_idx][start:end]
+        # Get adjacency matrices for the input window
+        # Take first adjacency matrix as representative for the window
+        # since graph structure changes are captured in features
+        adj = self.data["adjacency"][seq_idx][start]  # [N x N]
 
         # Get change points in the sequence window
         cp = self._get_change_points(seq_idx, start, target_end)
 
         sample = {
-            "x": x,  # Input features
-            "y": y,  # Target features
-            "adj": adj,  # Adjacency matrices
+            "x": x,  # Input features (window_size length)
+            "y": y,  # Target features (forecast_horizon length)
+            "adj": adj,  # Adjacency matrix [N x N]
             "change_points": cp,  # Change points
             "seq_idx": seq_idx,  # Sequence index
             "window": (start, end),  # Window indices
@@ -168,16 +236,29 @@ class GraphSequenceDataset(Dataset):
     ) -> Dict[str, torch.Tensor]:
         """Get features for a specific sequence window."""
         features = {}
+        window_length = end - start  # Calculate actual window length
 
         if self.config.use_centrality:
             for feat in self.config.centrality_features:
                 if feat in self.data["features"]:
-                    features[feat] = self.data["features"][feat][seq_idx, start:end]
+                    feat_data = self.data["features"][feat][seq_idx, start:end]
+                    assert feat_data.shape == (
+                        window_length,
+                        self.config.num_nodes,
+                    ), f"Invalid feature shape for {feat}: {feat_data.shape}, expected ({window_length}, {self.config.num_nodes})"
+                    features[feat] = feat_data
 
         if self.config.use_spectral:
             for feat in self.config.spectral_features:
                 if feat in self.data["features"]:
-                    features[feat] = self.data["features"][feat][seq_idx, start:end]
+                    feat_data = self.data["features"][feat][seq_idx, start:end]
+                    emb_dim = self.config.svd_dim if feat == "svd" else self.config.lsvd_dim
+                    assert feat_data.shape == (
+                        window_length,
+                        self.config.num_nodes,
+                        emb_dim,
+                    ), f"Invalid embedding shape for {feat}: {feat_data.shape}, expected ({window_length}, {self.config.num_nodes}, {emb_dim})"
+                    features[feat] = feat_data
 
         return features
 
