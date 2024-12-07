@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 import yaml
 from tqdm import tqdm
@@ -33,12 +33,9 @@ logger = logging.getLogger(__name__)
 class DatasetConfig(GraphConfig):
     """Configuration for dataset generation, extends GraphConfig."""
 
-    # Dataset-specific parameters (not in GraphConfig)
+    # Dataset-specific parameters
     num_sequences: int = 20
     graph_types: List[str] = None
-    threshold: float = 30.0
-    epsilon: float = 0.8
-    window_size: int = 5
     split_ratio: Dict[str, float] = None
     output_dir: str = "dataset"
     graph_params: Dict[str, Dict] = None
@@ -87,9 +84,6 @@ class DatasetConfig(GraphConfig):
             # Add dataset-specific parameters
             num_sequences=dataset_config["num_sequences"],
             graph_types=dataset_config["graph_types"],
-            threshold=dataset_config["threshold"],
-            epsilon=dataset_config["epsilon"],
-            window_size=dataset_config["window_size"],
             split_ratio=dataset_config["split_ratio"],
             output_dir=dataset_config["output_dir"],
             graph_params=graph_params,
@@ -97,7 +91,7 @@ class DatasetConfig(GraphConfig):
 
 
 class DatasetGenerator:
-    """Generator for graph anomaly detection datasets."""
+    """Generator for graph sequences dataset."""
 
     def __init__(self, config: Optional[DatasetConfig] = None):
         """Initialize dataset generator with configuration."""
@@ -115,69 +109,60 @@ class DatasetGenerator:
             change_points.append(cp)
         return sorted(change_points)
 
-    def _compute_features(self, graphs: List[np.ndarray]) -> np.ndarray:
-        """Extract and combine all features for each graph."""
+    def _compute_features(self, graphs: List[np.ndarray]) -> Dict[str, np.ndarray]:
+        """Extract node-level features for each graph.
+        
+        Args:
+            graphs: List of adjacency matrices [num_nodes, num_nodes]
+        
+        Returns:
+            Dictionary with features:
+            - Centralities: [sequence_length, num_nodes]
+            - Embeddings: [sequence_length, num_nodes, embedding_dim]
+        """
         try:
-            # Initialize detector and get features properly
+            # Validate input graphs
+            validate_graph_shapes(graphs)
+            
+            # Extract features
             detector = ChangePointDetector()
             detector.initialize(graphs)
-            centralities = detector.extract_features()
-
-            # Convert to feature matrix
-            features = []
-            for t in range(len(graphs)):
-                graph_features = []
-                for name in centralities:
-                    # Take mean of each centrality measure to get a single value
-                    feature_value = np.mean(centralities[name][t])
-                    graph_features.append(feature_value)
-                features.append(graph_features)
-
-            return np.array(features)  # Shape: (sequence_length, num_features)
-
+            raw_features = detector.extract_features()
+            
+            # Convert features to numpy arrays
+            processed_features = {}
+            
+            # Process centrality features
+            for name in ["degree", "betweenness", "closeness", "eigenvector"]:
+                if name in raw_features:
+                    # Convert list of lists to numpy array [sequence_length, num_nodes]
+                    processed_features[name] = np.array(raw_features[name], dtype=np.float32)
+                    logger.debug(f"{name} shape: {processed_features[name].shape}")
+            
+            # Process embedding features
+            embedding_dim = 16  # Set desired embedding dimension
+            for name in ["svd", "lsvd"]:
+                if name in raw_features:
+                    feat = np.array(raw_features[name], dtype=np.float32)
+                    # If feature is 2D, reshape to 3D with embedding_dim
+                    if len(feat.shape) == 2:
+                        seq_len, n_nodes = feat.shape
+                        feat = feat.reshape(seq_len, n_nodes, 1)
+                        # Repeat the single dimension to match embedding_dim
+                        feat = np.tile(feat, (1, 1, embedding_dim))
+                    processed_features[name] = feat
+                    logger.debug(f"{name} shape: {processed_features[name].shape}")
+            
+            # Validate processed features
+            validate_feature_shapes(processed_features, len(graphs), graphs[0].shape[0])
+            
+            return processed_features
+            
         except Exception as e:
-            logger.error(f"Feature computation failed: {str(e)}")
-            raise RuntimeError(f"Feature computation failed: {str(e)}")
-
-    def _compute_anomaly_labels(
-        self, features: np.ndarray, change_points: List[int]
-    ) -> np.ndarray:
-        """Compute binary anomaly labels using martingales."""
-        try:
-            # Compute martingales for each feature dimension
-            martingales = []
-
-            for feature_idx in range(features.shape[1]):
-                feature_values = features[:, feature_idx]
-                normalized_values = (feature_values - np.mean(feature_values)) / np.std(
-                    feature_values
-                )
-
-                detector = ChangePointDetector()
-                feature_2d = normalized_values.reshape(-1, 1)
-
-                result = detector.martingale_test(
-                    data=feature_2d,
-                    threshold=self.config.threshold,
-                    epsilon=self.config.epsilon,
-                    reset=True,
-                )
-                martingales.append(result["martingales"])
-
-            # Create labels: 1 for anomalies (within window of change points), 0 otherwise
-            labels = np.zeros(len(features))
-            w = self.config.window_size
-
-            for cp in change_points:
-                start_idx = max(0, cp - w)
-                end_idx = min(len(features), cp + w + 1)
-                labels[start_idx:end_idx] = 1
-
-            return labels
-
-        except Exception as e:
-            logger.error(f"Label computation failed: {str(e)}")
-            raise RuntimeError(f"Label computation failed: {str(e)}")
+            logger.error(f"Feature extraction failed: {str(e)}")
+            logger.error(f"Raw feature types: {[(k, type(v)) for k, v in raw_features.items()]}")
+            logger.error(f"Raw feature shapes: {[(k, np.array(v).shape if isinstance(v, list) else v.shape) for k, v in raw_features.items()]}")
+            raise RuntimeError(f"Feature extraction failed: {str(e)}")
 
     def _normalize_features(self, features: np.ndarray) -> np.ndarray:
         """Normalize features to have zero mean and unit variance."""
@@ -188,14 +173,21 @@ class DatasetGenerator:
 
     def _split_dataset(
         self,
-        sequences: np.ndarray,
-        labels: np.ndarray,
-        change_points: List[List[int]],
-        martingales: List[Dict],
+        sequences: Dict[str, np.ndarray],
+        graphs: np.ndarray,
         sequence_lengths: np.ndarray,
     ) -> Dict:
-        """Split dataset into train, validation, and test sets."""
-        num_sequences = len(sequences)
+        """Split dataset into train, validation, and test sets.
+        
+        Args:
+            sequences: Dictionary of feature arrays
+            graphs: Padded graph adjacency matrices [num_sequences, max_seq_len, num_nodes, num_nodes]
+            sequence_lengths: Array of sequence lengths
+        
+        Returns:
+            Dictionary containing train, val, test splits
+        """
+        num_sequences = len(sequence_lengths)
         indices = np.arange(num_sequences)
         np.random.shuffle(indices)
 
@@ -206,232 +198,216 @@ class DatasetGenerator:
         val_idx = indices[train_end:val_end]
         test_idx = indices[val_end:]
 
+        def subset_features(features, idx):
+            return {k: v[idx] for k, v in features.items()}
+
         return {
             "train": {
-                "sequences": sequences[train_idx],
-                "labels": labels[train_idx],
-                "change_points": [change_points[i] for i in train_idx],
-                "martingales": [martingales[i] for i in train_idx],
+                "features": subset_features(sequences, train_idx),
+                "graphs": graphs[train_idx],
                 "sequence_lengths": sequence_lengths[train_idx],
             },
             "val": {
-                "sequences": sequences[val_idx],
-                "labels": labels[val_idx],
-                "change_points": [change_points[i] for i in val_idx],
-                "martingales": [martingales[i] for i in val_idx],
+                "features": subset_features(sequences, val_idx),
+                "graphs": graphs[val_idx],
                 "sequence_lengths": sequence_lengths[val_idx],
             },
             "test": {
-                "sequences": sequences[test_idx],
-                "labels": labels[test_idx],
-                "change_points": [change_points[i] for i in test_idx],
-                "martingales": [martingales[i] for i in test_idx],
+                "features": subset_features(sequences, test_idx),
+                "graphs": graphs[test_idx],
                 "sequence_lengths": sequence_lengths[test_idx],
             },
         }
 
+    def _normalize_features_global(self, sequences: List[np.ndarray]) -> np.ndarray:
+        """Normalize features globally across all sequences.
+
+        Args:
+            sequences: List of feature matrices [seq_len, num_features]
+
+        Returns:
+            Normalized features with zero mean and unit variance
+        """
+        # Stack all sequences
+        all_features = np.vstack(sequences)  # Shape: [total_timesteps, num_features]
+
+        # Compute global statistics
+        mean = np.mean(all_features, axis=0)
+        std = np.std(all_features, axis=0) + 1e-8  # Prevent division by zero
+
+        # Normalize each sequence
+        normalized = []
+        for seq in sequences:
+            normalized.append((seq - mean) / std)
+
+        return normalized
+
+    def generate_sequences(self) -> Dict:
+        """Generate sequences for all specified graph types."""
+        data = {
+            "features": {
+                "degree": [], "betweenness": [], "closeness": [],
+                "eigenvector": [], "svd": [], "lsvd": []
+            },
+            "graphs": [],
+            "sequence_lengths": [],
+            "graph_types": []
+        }
+
+        # Generate sequences for each graph type
+        for graph_type_str in tqdm(self.config.graph_types, desc="Graph Types", position=0):
+            try:
+                graph_type = GraphType[graph_type_str.upper()]
+
+                # Create graph config for this type
+                graph_config = GraphConfig(
+                    graph_type=graph_type,
+                    min_n=self.config.min_n,
+                    max_n=self.config.min_n,  # Use same value for min and max to ensure constant node count
+                    min_seq_length=self.config.min_seq_length,
+                    max_seq_length=self.config.max_seq_length,
+                    min_segment=self.config.min_segment,
+                    min_changes=self.config.min_changes,
+                    max_changes=self.config.max_changes,
+                    params=self.config.graph_params[graph_type_str.lower()],
+                )
+
+                for _ in tqdm(range(self.config.num_sequences),
+                             desc=f"Sequences ({graph_type.value})",
+                             position=1,
+                             leave=False):
+                    
+                    # Generate graph sequence
+                    result = generate_graph_sequence(graph_config)
+                    
+                    # Compute features
+                    features = self._compute_features(result["graphs"])
+                    
+                    # Store results
+                    for feat_name in features:
+                        data["features"][feat_name].append(features[feat_name])
+                    data["graphs"].append(result["graphs"])
+                    data["sequence_lengths"].append(len(result["graphs"]))
+                    data["graph_types"].append(graph_type.value)
+
+            except KeyError:
+                logger.error(f"Invalid graph type: {graph_type_str}")
+                continue
+
+        # Find maximum sequence length and get dimensions
+        max_seq_len = max(data["sequence_lengths"])
+        num_sequences = len(data["graphs"])
+        n_nodes = data["graphs"][0][0].shape[0]
+        
+        # Initialize padded arrays with correct shapes
+        padded_features = {}
+        
+        # Centrality features: [num_sequences, max_seq_len, num_nodes]
+        for feat_name in ["degree", "betweenness", "closeness", "eigenvector"]:
+            padded_features[feat_name] = np.zeros((num_sequences, max_seq_len, n_nodes))
+            for i, seq in enumerate(data["features"][feat_name]):
+                seq_len = seq.shape[0]
+                padded_features[feat_name][i, :seq_len, :] = seq
+        
+        # Embedding features: [num_sequences, max_seq_len, num_nodes, embedding_dim]
+        for feat_name in ["svd", "lsvd"]:
+            # Get embedding dimension from the first sequence
+            embedding_dim = data["features"][feat_name][0].shape[-1]
+            padded_features[feat_name] = np.zeros((num_sequences, max_seq_len, n_nodes, embedding_dim))
+            for i, seq in enumerate(data["features"][feat_name]):
+                if seq.shape[-1] != embedding_dim:
+                    # Resize embedding if dimensions don't match
+                    resized_seq = np.zeros((seq.shape[0], seq.shape[1], embedding_dim))
+                    min_dim = min(seq.shape[-1], embedding_dim)
+                    resized_seq[..., :min_dim] = seq[..., :min_dim]
+                    seq = resized_seq
+                seq_len = seq.shape[0]
+                padded_features[feat_name][i, :seq_len, :, :] = seq
+        
+        # Graphs: [num_sequences, max_seq_len, num_nodes, num_nodes]
+        padded_graphs = np.zeros((num_sequences, max_seq_len, n_nodes, n_nodes))
+        for i, graphs in enumerate(data["graphs"]):
+            seq_len = len(graphs)
+            padded_graphs[i, :seq_len] = np.stack(graphs)
+
+        # After padding, validate shapes
+        validate_padded_shapes(
+            data={"features": padded_features, "graphs": padded_graphs},
+            num_sequences=num_sequences,
+            max_seq_len=max_seq_len,
+            n_nodes=n_nodes
+        )
+
+        return {
+            "features": padded_features,
+            "graphs": padded_graphs,
+            "sequence_lengths": np.array(data["sequence_lengths"]),
+            "graph_types": data["graph_types"]
+        }
+
     def _save_to_hdf5(self, data_split: Dict):
-        """Save dataset splits to HDF5 files."""
+        """Save dataset splits to HDF5 files.
+
+        Saves:
+        - Graph adjacency matrices [sequence_length, num_nodes, num_nodes]
+        - Node features:
+            - Centralities [sequence_length, num_nodes]
+            - Embeddings [sequence_length, num_nodes, embedding_dim]
+        - Sequence lengths
+        - Graph types
+        """
         os.makedirs(self.config.output_dir, exist_ok=True)
 
         for split_name, data in data_split.items():
             split_dir = os.path.join(self.config.output_dir, split_name)
             os.makedirs(split_dir, exist_ok=True)
 
-            # Pad change points to max length
-            max_changes = max(len(cp) for cp in data["change_points"])
-            padded_change_points = np.array(
-                [cp + [-1] * (max_changes - len(cp)) for cp in data["change_points"]]
-            )
-
             with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
-                # Create main group for sequence data
-                seq_group = hf.create_group("sequences")
-                seq_group.create_dataset(
-                    "features", data=data["sequences"], compression="gzip"
+                # Validate shapes before saving
+                num_sequences = len(data["graphs"])
+                max_seq_len = data["graphs"].shape[1]
+                n_nodes = data["graphs"].shape[2]
+                
+                validate_padded_shapes(
+                    data=data,
+                    num_sequences=num_sequences,
+                    max_seq_len=max_seq_len,
+                    n_nodes=n_nodes
                 )
-                seq_group.create_dataset(
-                    "labels", data=data["labels"], compression="gzip"
-                )
-                seq_group.create_dataset(
+                
+                # Save sequence lengths
+                hf.create_dataset(
                     "lengths", data=data["sequence_lengths"], compression="gzip"
                 )
 
-                # Create group for change points
-                cp_group = hf.create_group("change_points")
-                cp_group.create_dataset(
-                    "points", data=padded_change_points, compression="gzip"
-                )
-                cp_group.create_dataset(
-                    "lengths",
-                    data=[len(cp) for cp in data["change_points"]],
-                    compression="gzip",
-                )
+                # Save graph types
+                if "graph_types" in data:
+                    dt = h5py.special_dtype(vlen=str)
+                    hf.create_dataset("graph_types", data=data["graph_types"], dtype=dt)
 
-                # Create group for martingales
-                mart_group = hf.create_group("martingales")
-
-                # Store martingales for each sequence
-                for seq_idx, martingales in enumerate(data["martingales"]):
-                    seq_group = mart_group.create_group(f"sequence_{seq_idx}")
-
-                    # Store reset and cumulative martingales
-                    for mart_type in ["reset", "cumulative"]:
-                        type_group = seq_group.create_group(mart_type)
-
-                        # Store martingales for each feature
-                        for feat_name, mart_data in martingales[mart_type].items():
-                            mart_values = np.array(
-                                mart_data["martingales"], dtype=np.float64
-                            )
-                            type_group.create_dataset(
-                                feat_name, data=mart_values, compression="gzip"
-                            )
-
-            logger.info(
-                f"Saved {split_name} data: {data['sequences'].shape} sequences, "
-                f"{data['labels'].shape} labels, {len(data['change_points'])} change points"
-            )
-
-    def _compute_martingales(self, graphs: List[np.ndarray]) -> Dict[str, Any]:
-        """Compute both reset and cumulative martingales for the graph sequence.
-        Consistent with visualization scripts implementation.
-
-        Parameters:
-            graphs (List[np.ndarray]): List of adjacency matrices
-
-        Returns:
-            Dict[str, Dict[str, Any]]: Dictionary with 'reset' and 'cumulative' martingales
-        """
-        detector = ChangePointDetector()
-        detector.initialize(graphs)
-        centralities = detector.extract_features()
-
-        martingales_reset = {}
-        martingales_cumulative = {}
-
-        for name, values in centralities.items():
-            # Normalize values
-            values_array = np.array(values)
-            normalized_values = (values_array - np.mean(values_array, axis=0)) / np.std(
-                values_array, axis=0
-            )
-
-            # Compute martingales
-            martingales_reset[name] = detector.martingale_test(
-                data=normalized_values,
-                threshold=self.config.threshold,
-                epsilon=self.config.epsilon,
-                reset=True,
-            )
-
-            cumulative_result = detector.martingale_test(
-                data=normalized_values,
-                threshold=self.config.threshold,
-                epsilon=self.config.epsilon,
-                reset=False,
-            )
-
-            # Convert to cumulative sum
-            cumulative_values = np.array(cumulative_result["martingales"])
-            cumulative_result["martingales"] = np.cumsum(cumulative_values)
-            martingales_cumulative[name] = cumulative_result
-
-        return {"reset": martingales_reset, "cumulative": martingales_cumulative}
-
-    def generate_sequences(self) -> Dict:
-        """Generate sequences for all specified graph types."""
-        data = {
-            "sequences": [],
-            "labels": [],
-            "change_points": [],
-            "graph_types": [],
-            "martingales": [],
-            "sequence_lengths": [],
-        }
-
-        # Main progress bar for graph types
-        for graph_type_str in tqdm(
-            self.config.graph_types, desc="Graph Types", position=0
-        ):
-            try:
-                graph_type = GraphType[graph_type_str.upper()]
-                logger.info(
-                    f"Generating {self.config.num_sequences} sequences for {graph_type.value}"
-                )
-
-                # Get parameters for this graph type
-                graph_params = self.config.graph_params[graph_type_str.lower()]
-                if not graph_params:
-                    logger.error(
-                        f"No parameters found for graph type: {graph_type_str}"
-                    )
-                    continue
-
-                # Create a new GraphConfig for each graph type
-                graph_config = GraphConfig(
-                    graph_type=graph_type,
-                    min_n=self.config.min_n,
-                    max_n=self.config.max_n,
-                    min_seq_length=self.config.min_seq_length,
-                    max_seq_length=self.config.max_seq_length,
-                    min_segment=self.config.min_segment,
-                    min_changes=self.config.min_changes,
-                    max_changes=self.config.max_changes,
-                    params=graph_params,
-                )
-
-                # Nested progress bar for sequences of each type
-                for _ in tqdm(
-                    range(self.config.num_sequences),
-                    desc=f"Sequences ({graph_type.value})",
-                    position=1,
-                    leave=False,
-                ):
-                    result = generate_graph_sequence(graph_config)
-
-                    # Compute features and martingales directly from graphs
-                    features = self._compute_features(result["graphs"])
-                    martingales = self._compute_martingales(result["graphs"])
-
-                    # Compute labels using martingale detection points
-                    labels = self._compute_anomaly_labels(
-                        features, result["change_points"]
+                # Save adjacency matrices
+                adj_group = hf.create_group("adjacency")
+                for seq_idx, graphs in enumerate(data["graphs"]):
+                    adj_group.create_dataset(
+                        f"sequence_{seq_idx}", data=graphs, compression="gzip"
                     )
 
-                    data["sequences"].append(features)
-                    data["labels"].append(labels)
-                    data["change_points"].append(result["change_points"])
-                    data["graph_types"].append(graph_type.value)
-                    data["martingales"].append(martingales)
-                    data["sequence_lengths"].append(len(result["graphs"]))
-
-            except KeyError:
-                logger.error(f"Invalid graph type: {graph_type_str}")
-                continue
-
-        # Clear the progress bars
-        print("\n")
-
-        # Convert to numpy arrays with padding
-        max_length = max(data["sequence_lengths"])
-        num_features = data["sequences"][0].shape[1]  # Number of features per timestep
-
-        # Pad sequences and labels
-        padded_sequences = np.zeros((len(data["sequences"]), max_length, num_features))
-        padded_labels = np.zeros((len(data["labels"]), max_length))
-
-        for i, (seq, lab, length) in enumerate(
-            zip(data["sequences"], data["labels"], data["sequence_lengths"])
-        ):
-            padded_sequences[i, :length] = seq
-            padded_labels[i, :length] = lab
-
-        data["sequences"] = padded_sequences
-        data["labels"] = padded_labels
-        data["sequence_lengths"] = np.array(data["sequence_lengths"])
-
-        return data
+                # Save node features
+                feat_group = hf.create_group("features")
+                for feat_name in [
+                    "degree",
+                    "betweenness",
+                    "closeness",
+                    "eigenvector",
+                    "svd",
+                    "lsvd",
+                ]:
+                    if feat_name in data["features"]:
+                        feat_group.create_dataset(
+                            feat_name,
+                            data=data["features"][feat_name],
+                            compression="gzip",
+                        )
 
 
 def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
@@ -444,11 +420,9 @@ def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
 
     # Split and save the dataset
     split_data = generator._split_dataset(
-        data["sequences"],
-        data["labels"],
-        data["change_points"],
-        data["martingales"],
-        data["sequence_lengths"],
+        sequences=data["features"],
+        graphs=data["graphs"],
+        sequence_lengths=data["sequence_lengths"]
     )
 
     generator._save_to_hdf5(split_data)
@@ -504,17 +478,11 @@ def main():
         f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
     )
     print(f"  - Nodes per graph range: [{config.min_n}, {config.max_n}]")
-    print(f"  - Min changes: {config.min_changes}")
-    print(f"  - Max changes: {config.max_changes}")
-    print(f"  - Min segment length: {config.min_segment}")
     print(f"  - Output directory: {config.output_dir}")
     print(f"\nGraph Parameters:")
     for graph_type in config.graph_types:
         print(f"  - {graph_type}: {config.graph_params[graph_type.lower()]}")
     print(f"\nDataset Parameters:")
-    print(f"  - Threshold: {config.threshold}")
-    print(f"  - Epsilon: {config.epsilon}")
-    print(f"  - Window size: {config.window_size}")
     print(f"  - Split ratio: {config.split_ratio}")
 
     # Create and save dataset
@@ -522,12 +490,93 @@ def main():
 
     # Print dataset statistics
     for split_name, split_data in data.items():
-        sequences = split_data["sequences"]
-        labels = split_data["labels"]
         print(f"\n{split_name.capitalize()} set:")
-        print(f"  - Sequences shape: {sequences.shape}")
-        print(f"  - Labels shape: {labels.shape}")
-        print(f"  - Anomaly ratio: {np.mean(labels):.2%}")
+        print(f"  - Number of sequences: {len(split_data['graphs'])}")
+        print(f"  - Feature types: {list(split_data['features'].keys())}")
+        for feat_name, feat_array in split_data["features"].items():
+            print(f"  - {feat_name} shape: {feat_array.shape}")
+        print(f"  - Graph sequence lengths: {split_data['sequence_lengths']}")
+
+
+def validate_graph_shapes(graphs: List[np.ndarray]) -> None:
+    """Validate shapes of graph adjacency matrices.
+    
+    Args:
+        graphs: List of adjacency matrices [num_nodes, num_nodes]
+        
+    Raises:
+        ValueError: If shapes are invalid
+    """
+    if not graphs:
+        raise ValueError("Empty graph sequence")
+        
+    n_nodes = graphs[0].shape[0]
+    if graphs[0].shape != (n_nodes, n_nodes):
+        raise ValueError(f"First graph has invalid shape: {graphs[0].shape}, expected square matrix")
+        
+    for i, g in enumerate(graphs):
+        if not isinstance(g, np.ndarray):
+            raise ValueError(f"Graph {i} is not a numpy array")
+        if g.shape != (n_nodes, n_nodes):
+            raise ValueError(f"Graph {i} has inconsistent shape: {g.shape}, expected {(n_nodes, n_nodes)}")
+            
+def validate_feature_shapes(features: Dict[str, np.ndarray], seq_len: int, n_nodes: int) -> None:
+    """Validate shapes of extracted features."""
+    # Check centrality features
+    for name in ["degree", "betweenness", "closeness", "eigenvector"]:
+        if name not in features:
+            raise ValueError(f"Missing centrality feature: {name}")
+        feat = features[name]
+        if not isinstance(feat, np.ndarray):
+            raise ValueError(f"{name} is not a numpy array, got {type(feat)}")
+        if feat.shape != (seq_len, n_nodes):
+            raise ValueError(f"{name} has invalid shape: {feat.shape}, expected {(seq_len, n_nodes)}")
+            
+    # Check embedding features
+    for name in ["svd", "lsvd"]:
+        if name not in features:
+            raise ValueError(f"Missing embedding feature: {name}")
+        feat = features[name]
+        if not isinstance(feat, np.ndarray):
+            raise ValueError(f"{name} is not a numpy array, got {type(feat)}")
+        if len(feat.shape) != 3:
+            raise ValueError(f"{name} should be 3D array, got shape {feat.shape}")
+        if feat.shape[:2] != (seq_len, n_nodes):
+            raise ValueError(f"{name} has invalid sequence/node dimensions: {feat.shape[:2]}, expected {(seq_len, n_nodes)}")
+        if feat.shape[2] < 2:  # Ensure at least 2D embeddings
+            raise ValueError(f"{name} embedding dimension too small: {feat.shape[2]}, expected at least 2")
+
+def validate_padded_shapes(data: Dict, num_sequences: int, max_seq_len: int, n_nodes: int) -> None:
+    """Validate shapes of padded arrays.
+    
+    Args:
+        data: Dictionary containing padded features and graphs
+        num_sequences: Expected number of sequences
+        max_seq_len: Expected maximum sequence length
+        n_nodes: Expected number of nodes
+        
+    Raises:
+        ValueError: If shapes are invalid
+    """
+    # Validate graph shapes
+    if data["graphs"].shape != (num_sequences, max_seq_len, n_nodes, n_nodes):
+        raise ValueError(f"Padded graphs have invalid shape: {data['graphs'].shape}, "
+                       f"expected {(num_sequences, max_seq_len, n_nodes, n_nodes)}")
+    
+    # Validate feature shapes
+    for name in ["degree", "betweenness", "closeness", "eigenvector"]:
+        feat = data["features"][name]
+        expected_shape = (num_sequences, max_seq_len, n_nodes)
+        if feat.shape != expected_shape:
+            raise ValueError(f"Padded {name} has invalid shape: {feat.shape}, expected {expected_shape}")
+    
+    for name in ["svd", "lsvd"]:
+        feat = data["features"][name]
+        if len(feat.shape) != 4:
+            raise ValueError(f"Padded {name} should be 4D array, got shape {feat.shape}")
+        if feat.shape[:3] != (num_sequences, max_seq_len, n_nodes):
+            raise ValueError(f"Padded {name} has invalid dimensions: {feat.shape}, "
+                           f"expected first 3 dims to be {(num_sequences, max_seq_len, n_nodes)}")
 
 
 if __name__ == "__main__":

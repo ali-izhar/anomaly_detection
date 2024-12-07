@@ -1,8 +1,19 @@
 # MARTINGALE TEST PARAMETERS
 martingale:
-  threshold: 30.0   # Threshold for detecting change points
-  epsilon: 0.8      # Sensitivity parameter
-  reset: true       # Whether to reset martingale values after detection
+  # Strangeness measure parameters
+  strangeness:
+    window_size: 10    # Size of sliding window
+    n_neighbors: 5     # Number of nearest neighbors for density estimation
+    
+  # Martingale parameters
+  epsilon: 0.8         # Betting parameter
+  threshold: 30.0      # Detection threshold
+  reset: true          # Reset martingale after each change point
+  
+  # Change point detection
+  detection:
+    min_interval: 20   # Minimum interval between change points
+    window_size: 5     # Window size for smoothing
 
 # VISUALIZATION PARAMETERS
 visualization:

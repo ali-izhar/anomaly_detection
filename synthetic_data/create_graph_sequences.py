@@ -112,30 +112,34 @@ def _generate_random_change_points(
         params.append(
             {"m1": config.params["initial_edges"], "m2": config.params["initial_edges"]}
         )
-        
+
         for _ in range(len(points)):
             # Simply generate random edges without threshold
-            m = np.random.randint(config.params["min_edges"], config.params["max_edges"] + 1)
+            m = np.random.randint(
+                config.params["min_edges"], config.params["max_edges"] + 1
+            )
             params.append({"m1": m, "m2": m})
 
     elif config.graph_type == GraphType.ER:
         params.append(
             {"p1": config.params["initial_p"], "p2": config.params["initial_p"]}
         )
-        
+
         for _ in range(len(points)):
             # Simply generate random probability without threshold
             p = np.random.uniform(config.params["min_p"], config.params["max_p"])
             params.append({"p1": p, "p2": p})
 
     elif config.graph_type == GraphType.NW:
-        params.append({
-            "k1": config.params["initial_k"],
-            "k2": config.params["initial_k"],
-            "p1": config.params["initial_p"],
-            "p2": config.params["initial_p"],
-        })
-        
+        params.append(
+            {
+                "k1": config.params["initial_k"],
+                "k2": config.params["initial_k"],
+                "p1": config.params["initial_p"],
+                "p2": config.params["initial_p"],
+            }
+        )
+
         for _ in range(len(points)):
             # Simply generate random k and p without threshold
             k = np.random.randint(config.params["min_k"], config.params["max_k"] + 1)

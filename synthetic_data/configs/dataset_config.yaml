@@ -1,12 +1,21 @@
-# DATASET GENERATION PARAMETERS
+# Dataset generation configuration
 dataset:
-  num_sequences: 6                 # Number of sequences per graph type
-  graph_types: ["BA", "ER", "NW"]  # Types of graphs to generate
-  split_ratio: 
-    train: 0.6                     # Train split ratio
-    val: 0.2                       # Validation split ratio
-    test: 0.2                      # Test split ratio
-  threshold: 30.0                  # Martingale threshold for sum and avg models
-  epsilon: 0.8                     # Sensitivity parameter for sum and avg models
-  window_size: 5                   # Window size around change points
-  output_dir: "dataset"            # Output directory
+  # Number of sequences to generate per graph type
+  num_sequences: 6
+
+  # Types of graphs to generate (ba: Barabasi-Albert, er: Erdos-Renyi, nw: Newman-Watts)
+  graph_types: ["BA", "ER", "NW"]
+
+  # Martingale detection parameters
+  threshold: 30.0  # Threshold for anomaly detection
+  epsilon: 0.8    # Epsilon for martingale calculation
+  window_size: 5  # Window size for labeling anomalies
+
+  # Dataset split ratios
+  split_ratio:
+    train: 0.7  # 70% for training
+    val: 0.15   # 15% for validation
+    test: 0.15  # 15% for testing
+
+  # Output directory for the dataset
+  output_dir: "dataset"
