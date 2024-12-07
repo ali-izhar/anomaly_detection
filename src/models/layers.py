@@ -5,6 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 class GraphConvLayer(nn.Module):
@@ -37,74 +38,137 @@ class GraphConvLayer(nn.Module):
         """Initialize weights using Glorot/Xavier initialization."""
         nn.init.xavier_uniform_(self.weights)
         nn.init.zeros_(self.bias)
+        self.weights.requires_grad_(True)
+        self.bias.requires_grad_(True)
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Node features matrix H in R^(B x N x d)
-               B: batch size (32)
-               N: number of nodes (100)
-               d: feature dim (varies by feature type)
-            adj: Normalized adjacency matrix D^(-1/2) * A * D^(-1/2) 
-                Either [N x N] or [B x N x N]
+            x: Node features matrix H in R^(batch_size x num_nodes x in_dim)
+               - batch_size: typically 32-128
+               - num_nodes: 100 (fixed for this dataset)
+               - in_dim: input feature dimension
+                 * First layer: 22 (4 centrality + 2 SVD + 16 LSVD)
+                 * Later layers: hidden_dim
+            adj: Normalized adjacency matrix D^(-1/2) * A * D^(-1/2)
+                Shape: [num_nodes x num_nodes] or [batch_size x num_nodes x num_nodes]
+
+        Returns:
+            Output features of shape [batch_size x num_nodes x out_dim]
         """
-        # (B x N x d) * (d x d') -> (B x N x d')
-        support = torch.matmul(x, self.weights)
-        
+        # Input validation
+        batch_size, num_nodes, in_features = x.size()
+        assert num_nodes == 100, f"Expected 100 nodes, got {num_nodes}"
+        assert in_features == self.weights.size(0), (
+            f"Input feature dim {in_features} doesn't match "
+            f"weight matrix dim {self.weights.size(0)}"
+        )
+
+        # Ensure input tensors require grad
+        if not x.requires_grad:
+            x = x.detach().requires_grad_(True)
+
+        # Linear transformation
+        support = torch.matmul(x, self.weights)  # [batch_size x num_nodes x out_dim]
+
         # Handle batched or single adjacency matrix
         if adj.dim() == 2:
-            # Expand adjacency matrix for batch processing
-            adj = adj.unsqueeze(0).expand(x.size(0), -1, -1)
-        
-        # (B x N x N) * (B x N x d') -> (B x N x d')
-        output = torch.matmul(adj, support)
+            adj = adj.unsqueeze(0).expand(batch_size, -1, -1)
+
+        # Validate adjacency matrix
+        assert adj.size(1) == adj.size(2) == num_nodes, (
+            f"Adjacency matrix should be square with size {num_nodes}, "
+            f"got shape {adj.size()}"
+        )
+
+        # Graph convolution
+        output = torch.matmul(adj, support)  # [batch_size x num_nodes x out_dim]
         output = output + self.bias
+
         return output if self.activation is None else self.activation(output)
 
 
 class TemporalAttention(nn.Module):
-    """Temporal self-attention mechanism:
-
-    Attention(Q, K, V) = softmax((Q * K^T) / sqrt(d_k)) * V
-
-    This captures temporal dependencies between node features across timesteps.
-    """
+    """Temporal self-attention mechanism for capturing dependencies across timesteps."""
 
     def __init__(self, hidden_dim: int):
         """
         Args:
-            hidden_dim: Dimension of hidden representations d_model
+            hidden_dim: Dimension of hidden representations
         """
         super().__init__()
+        self.hidden_dim = hidden_dim
+
+        # Linear projections for Q, K, V
         self.query = nn.Linear(hidden_dim, hidden_dim)
         self.key = nn.Linear(hidden_dim, hidden_dim)
         self.value = nn.Linear(hidden_dim, hidden_dim)
 
+        # Optional: Multi-head attention parameters
+        self.num_heads = 4
+        assert (
+            hidden_dim % self.num_heads == 0
+        ), "hidden_dim must be divisible by num_heads"
+        self.head_dim = hidden_dim // self.num_heads
+
+        # Layer normalization for better stability
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+
+        # Output projection
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Input tensor in R^(B x T x N x d)
-               B: batch size (32)
-               T: sequence length (window_size=20)
-               N: number of nodes (100)
-               d: feature dimension (hidden_dim)
+            x: Input tensor [batch_size x seq_len x num_nodes x hidden_dim]
+               - batch_size: typically 32-128
+               - seq_len: window_size (20)
+               - num_nodes: 100 (fixed)
+               - hidden_dim: model hidden dimension
 
         Returns:
-            Attended features in R^(B x T x N x d)
+            Attended features [batch_size x seq_len x num_nodes x hidden_dim]
         """
-        # Add shape assertions for validation
-        batch_size, seq_len, num_nodes, hidden_dim = x.size()
-        assert num_nodes == 100, f"Expected 100 nodes, got {num_nodes}"
-        assert seq_len == 20, f"Expected sequence length 20, got {seq_len}"
-        
-        q = self.query(x)  # (B x T x N x d)
-        k = self.key(x)    # (B x T x N x d)
-        v = self.value(x)  # (B x T x N x d)
+        batch_size, seq_len, num_nodes, _ = x.size()
 
-        # Compute attention scores (B x T x N x N)
-        scores = torch.matmul(q, k.transpose(-2, -1)) / (hidden_dim ** 0.5)
-        attention = F.softmax(scores, dim=-1)
-        
-        # Weighted sum of values (B x T x N x d)
-        output = torch.matmul(attention, v)
-        return output
+        # Input validation
+        assert num_nodes == 100, f"Expected 100 nodes, got {num_nodes}"
+        assert seq_len <= 200, f"Sequence length {seq_len} exceeds maximum 200"
+
+        # Apply layer normalization first
+        x = self.layer_norm(x)
+
+        # Linear projections
+        q = self.query(x)  # [batch_size x seq_len x num_nodes x hidden_dim]
+        k = self.key(x)
+        v = self.value(x)
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, seq_len, num_nodes, self.num_heads, self.head_dim)
+        k = k.view(batch_size, seq_len, num_nodes, self.num_heads, self.head_dim)
+        v = v.view(batch_size, seq_len, num_nodes, self.num_heads, self.head_dim)
+
+        # Transpose for attention computation
+        q = q.transpose(
+            2, 3
+        )  # [batch_size x seq_len x num_heads x num_nodes x head_dim]
+        k = k.transpose(2, 3)
+        v = v.transpose(2, 3)
+
+        # Compute attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn = F.softmax(scores, dim=-1)
+
+        # Apply attention to values
+        out = torch.matmul(
+            attn, v
+        )  # [batch_size x seq_len x num_heads x num_nodes x head_dim]
+
+        # Reshape and project output
+        out = out.transpose(
+            2, 3
+        ).contiguous()  # [batch_size x seq_len x num_nodes x num_heads x head_dim]
+        out = out.view(batch_size, seq_len, num_nodes, self.hidden_dim)
+        out = self.out_proj(out)
+
+        return out

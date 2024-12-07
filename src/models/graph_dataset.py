@@ -25,32 +25,36 @@ class GraphDataConfig:
     """Configuration for data loading and preprocessing."""
 
     # Data loading
-    window_size: int = 20  # Increased from 10 to handle longer sequences
-    stride: int = 5  # Increased for more efficient sampling
-    forecast_horizon: int = 10  # Increased to match sequence scales
-    batch_size: int = 32  # Keep as is
+    window_size: int = 20  # Matches model's temporal window
+    stride: int = 5  # Step size for sliding window
+    forecast_horizon: int = 10  # Number of steps to predict
+    batch_size: int = 32  # Default batch size
 
-    # Constants from dataset
+    # Dataset constants
     num_nodes: int = 100  # Fixed number of nodes
     max_seq_length: int = 200  # Maximum sequence length
     min_seq_length: int = 161  # Minimum sequence length from inspection
-    num_change_points: int = 2  # Fixed number of change points
+    num_change_points: int = 2  # Fixed number of change points per sequence
 
     # Feature dimensions
+    centrality_dim: int = 4  # [degree, betweenness, closeness, eigenvector]
     svd_dim: int = 2  # SVD embedding dimension
     lsvd_dim: int = 16  # LSVD embedding dimension
+    total_features: int = centrality_dim + svd_dim + lsvd_dim  # 22 total
 
-    # Feature selection
+    # Feature configuration
+    centrality_features: List[str] = None  # Will be set in post_init
+    spectral_features: List[str] = None  # Will be set in post_init
     use_centrality: bool = True
     use_spectral: bool = True
-    centrality_features: List[str] = None
-    spectral_features: List[str] = None
 
     # Data augmentation
     enable_augmentation: bool = False
     noise_level: float = 0.01
 
     def __post_init__(self):
+        """Initialize feature lists and validate config."""
+        # Set default feature lists if not provided
         if self.centrality_features is None:
             self.centrality_features = [
                 "degree",
@@ -67,12 +71,28 @@ class GraphDataConfig:
     def validate_config(self):
         """Validate configuration parameters."""
         assert self.window_size > 0, "Window size must be positive"
+        assert (
+            self.window_size <= self.min_seq_length
+        ), f"Window size {self.window_size} exceeds minimum sequence length {self.min_seq_length}"
+
         assert self.forecast_horizon > 0, "Forecast horizon must be positive"
         assert (
             self.window_size + self.forecast_horizon <= self.min_seq_length
         ), "Window size + forecast horizon exceeds minimum sequence length"
+
         assert self.stride > 0, "Stride must be positive"
+        assert self.stride <= self.window_size, "Stride should not exceed window size"
+
         assert self.batch_size > 0, "Batch size must be positive"
+
+        # Validate feature dimensions
+        assert (
+            len(self.centrality_features) == self.centrality_dim
+        ), f"Expected {self.centrality_dim} centrality features, got {len(self.centrality_features)}"
+
+        if self.use_spectral:
+            assert "svd" in self.spectral_features, "SVD features not included"
+            assert "lsvd" in self.spectral_features, "LSVD features not included"
 
 
 class GraphSequenceDataset(Dataset):
@@ -185,8 +205,10 @@ class GraphSequenceDataset(Dataset):
 
         for seq_idx, length in enumerate(self.data["sequence_lengths"]):
             # Ensure we have enough room for both input window and forecast horizon
-            max_start = length - (self.config.window_size + self.config.forecast_horizon)
-            
+            max_start = length - (
+                self.config.window_size + self.config.forecast_horizon
+            )
+
             # Create windows with given size and stride
             for start in range(0, max_start + 1, self.config.stride):
                 end = start + self.config.window_size
@@ -207,7 +229,9 @@ class GraphSequenceDataset(Dataset):
         # Get target window
         target_start = end
         target_end = end + self.config.forecast_horizon
-        y = self._get_features(seq_idx, target_start, target_end)  # forecast_horizon length
+        y = self._get_features(
+            seq_idx, target_start, target_end
+        )  # forecast_horizon length
 
         # Get adjacency matrices for the input window
         # Take first adjacency matrix as representative for the window
@@ -252,7 +276,9 @@ class GraphSequenceDataset(Dataset):
             for feat in self.config.spectral_features:
                 if feat in self.data["features"]:
                     feat_data = self.data["features"][feat][seq_idx, start:end]
-                    emb_dim = self.config.svd_dim if feat == "svd" else self.config.lsvd_dim
+                    emb_dim = (
+                        self.config.svd_dim if feat == "svd" else self.config.lsvd_dim
+                    )
                     assert feat_data.shape == (
                         window_length,
                         self.config.num_nodes,

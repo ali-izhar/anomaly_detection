@@ -16,7 +16,7 @@ class TemporalDecoder(nn.Module):
     def __init__(
         self,
         hidden_dim: int,
-        num_features: int = 22,
+        num_features: int = 22,  # 4 centrality + 2 SVD + 16 LSVD
         num_nodes: int = 100,
         num_layers: int = 2,
         dropout: float = 0.2,
@@ -24,18 +24,21 @@ class TemporalDecoder(nn.Module):
         """
         Args:
             hidden_dim: LSTM hidden dimension
-            num_features: Number of features per node
-            num_nodes: Number of nodes in the graph
+            num_features: Total number of features to predict per node:
+                - 4 centrality features
+                - 2 SVD dimensions
+                - 16 LSVD dimensions
+            num_nodes: Number of nodes in graph (100 for this dataset)
             num_layers: Number of LSTM layers
-            dropout: Dropout rate for LSTM and intermediate layers
+            dropout: Dropout rate
         """
         super().__init__()
 
         self.hidden_dim = hidden_dim
         self.num_features = num_features
         self.num_nodes = num_nodes
-        
-        # Process nodes independently to reduce memory
+
+        # LSTM for temporal processing
         self.node_lstm = nn.LSTM(
             input_size=hidden_dim,
             hidden_size=hidden_dim,
@@ -44,16 +47,30 @@ class TemporalDecoder(nn.Module):
             batch_first=True,
         )
 
-        self.dropout = nn.Dropout(dropout)
-        self.layernorm = nn.LayerNorm(hidden_dim)
-        
-        # Smaller prediction head
-        self.fc_out = nn.Sequential(
+        # Separate prediction heads for different feature types
+        self.centrality_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, 4),  # 4 centrality features
+        )
+
+        self.svd_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, 2),  # 2D SVD
+        )
+
+        self.lsvd_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_features)
+            nn.Linear(hidden_dim, 16),  # 16D LSVD
         )
+
+        self.dropout = nn.Dropout(dropout)
+        self.layernorm = nn.LayerNorm(hidden_dim)
 
     def forward(
         self,
@@ -69,41 +86,47 @@ class TemporalDecoder(nn.Module):
 
         Returns:
             Predictions [batch_size, steps, num_nodes, num_features]
+            where num_features = 22 (4 centrality + 2 SVD + 16 LSVD)
         """
         batch_size = x.size(0)
+        device = x.device
         predictions = []
-        
+
         # Process each node independently
         for node_idx in range(self.num_nodes):
-            # Get node features: [B, T, H]
-            node_feats = x[:, :, node_idx, :]
-            
-            # Process sequence
+            node_feats = x[:, :, node_idx, :]  # [batch_size, seq_len, hidden_dim]
+
+            # Initial LSTM processing
             lstm_out, node_hidden = self.node_lstm(node_feats, hidden)
             lstm_out = self.layernorm(lstm_out)
             lstm_out = self.dropout(lstm_out)
-            
+
             # Start prediction from last state
-            h_t = lstm_out[:, -1:]  # [B, 1, H]
-            
-            node_preds = []
+            h_t = lstm_out[:, -1:]  # [batch_size, 1, hidden_dim]
             curr_hidden = node_hidden
-            
-            # Generate predictions for this node
+
+            node_preds = []
             for _ in range(steps):
-                # Project to features
-                out = self.fc_out(h_t)  # [B, 1, F]
-                node_preds.append(out)
-                
+                # Generate predictions for each feature type
+                centrality_pred = self.centrality_head(h_t)
+                svd_pred = self.svd_head(h_t)
+                lsvd_pred = self.lsvd_head(h_t)
+
+                # Combine predictions
+                combined_pred = torch.cat(
+                    [centrality_pred, svd_pred, lsvd_pred], dim=-1
+                )  # [batch_size, 1, 22]
+                node_preds.append(combined_pred)
+
                 # Update hidden state
                 h_t, curr_hidden = self.node_lstm(h_t, curr_hidden)
                 h_t = self.layernorm(h_t)
                 h_t = self.dropout(h_t)
-            
-            # Stack time steps: [B, steps, F]
+
+            # Stack time steps: [batch_size, steps, num_features]
             node_preds = torch.cat(node_preds, dim=1)
             predictions.append(node_preds)
-        
-        # Stack nodes: [B, steps, N, F]
+
+        # Stack nodes: [batch_size, steps, num_nodes, num_features]
         predictions = torch.stack(predictions, dim=2)
         return predictions
