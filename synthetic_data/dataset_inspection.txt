@@ -1,0 +1,149 @@
+=== Dataset Analysis ===
+
+
+TRAIN SET:
+--------------------------------------------------
+
+Sequences: 1050
+
+Sequence Lengths:
+  min: 161
+  max: 200
+  mean: 186.4142857142857
+  std: 10.020397564315438
+
+Feature Shapes:
+  degree: (1050, 200, 100)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  betweenness: (1050, 200, 100)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  closeness: (1050, 200, 100)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  eigenvector: (1050, 200, 100)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  svd: (1050, 200, 100, 2)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 2 dimensional embedding per node
+  lsvd: (1050, 200, 100, 16)
+    Interpretation:
+    - 1050 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 16 dimensional embedding per node
+
+Change Points:
+  Average count: 2.0
+  Range: 2-2
+
+VAL SET:
+--------------------------------------------------
+
+Sequences: 225
+
+Sequence Lengths:
+  min: 162
+  max: 200
+  mean: 186.77777777777777
+  std: 9.633942054329207
+
+Feature Shapes:
+  degree: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  betweenness: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  closeness: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  eigenvector: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  svd: (225, 200, 100, 2)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 2 dimensional embedding per node
+  lsvd: (225, 200, 100, 16)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 16 dimensional embedding per node
+
+Change Points:
+  Average count: 2.0
+  Range: 2-2
+
+TEST SET:
+--------------------------------------------------
+
+Sequences: 225
+
+Sequence Lengths:
+  min: 161
+  max: 200
+  mean: 185.85777777777778
+  std: 10.338159924149169
+
+Feature Shapes:
+  degree: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  betweenness: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  closeness: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  eigenvector: (225, 200, 100)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+  svd: (225, 200, 100, 2)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 2 dimensional embedding per node
+  lsvd: (225, 200, 100, 16)
+    Interpretation:
+    - 225 sequences in the batch
+    - Each sequence has 200 timesteps
+    - 100 nodes per graph
+    - 16 dimensional embedding per node
+
+Change Points:
+  Average count: 2.0
+  Range: 2-2

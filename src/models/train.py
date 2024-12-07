@@ -4,7 +4,11 @@ import sys
 import logging
 from pathlib import Path
 import yaml
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
+from collections import defaultdict
+import os
+import random
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -72,6 +76,15 @@ def train_epoch(
     model.train()
     total_loss = 0.0
     use_amp = scaler is not None
+    num_batches = len(train_loader)
+
+    # Use tqdm for progress bar if available
+    try:
+        from tqdm import tqdm
+
+        pbar = tqdm(total=num_batches, desc="Training")
+    except ImportError:
+        pbar = None
 
     for batch_idx, batch in enumerate(train_loader):
         # Move data to device
@@ -110,27 +123,73 @@ def train_epoch(
         # Logging
         total_loss += loss.item()
         if batch_idx % log_interval == 0:
-            logger.info(
-                f"Batch {batch_idx}/{len(train_loader)}, " f"Loss: {loss.item():.4f}"
-            )
+            logger.info(f"Batch {batch_idx}/{num_batches}, " f"Loss: {loss.item():.4f}")
 
-    return total_loss / len(train_loader)
+        # Update progress bar
+        if pbar is not None:
+            pbar.update(1)
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+    if pbar is not None:
+        pbar.close()
+
+    return total_loss / num_batches
+
+
+def validate(
+    model: nn.Module,
+    val_loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> Tuple[float, Dict[str, float]]:
+    """Run validation loop."""
+    model.eval()
+    total_loss = 0.0
+    feature_losses_dict = defaultdict(float)
+    num_batches = len(val_loader)
+
+    with torch.no_grad():
+        for batch in val_loader:
+            x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
+            y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
+            adj = batch["adj"].to(device, non_blocking=True)
+
+            predictions = model(x, adj)
+            loss, feat_losses = criterion(predictions, y)
+
+            total_loss += loss.item()
+            for feat, feat_loss in feat_losses.items():
+                feature_losses_dict[feat] += feat_loss
+
+    # Average losses
+    avg_loss = total_loss / num_batches
+    avg_feature_losses = {k: v / num_batches for k, v in feature_losses_dict.items()}
+
+    return avg_loss, avg_feature_losses
 
 
 def main():
     # Load configuration
     config = load_config("train_config.yaml")
 
-    # Setup paths
-    data_dir = Path(config["paths"]["data_dir"])
+    # Setup paths and logging
     output_dir = Path(config["paths"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Setup device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Setup logging
+    log_file = output_dir / "training.log"
+    setup_logging(log_file)
+    logger.info(f"Config: {config}")
+
+    # Set random seeds for reproducibility
+    seed = config.get("seed", 42)
+    set_random_seeds(seed)
+
+    # Setup device and data parallel if multiple GPUs
+    device = setup_device()
     logger.info(f"Using device: {device}")
 
-    # Create data config with optimized settings
+    # Create datasets
     data_config = GraphDataConfig(
         window_size=int(config["data"]["window_size"]),
         stride=int(config["data"]["stride"]),
@@ -142,7 +201,57 @@ def main():
         noise_level=float(config["data"]["noise_level"]),
     )
 
-    # Create model config
+    # Create train/val/test datasets
+    train_dataset = GraphSequenceDataset(
+        config["paths"]["data_dir"], "train", data_config
+    )
+    val_dataset = GraphSequenceDataset(config["paths"]["data_dir"], "val", data_config)
+    test_dataset = GraphSequenceDataset(
+        config["paths"]["data_dir"], "test", data_config
+    )
+
+    # Get hardware configuration
+    hw_config = config.get("hardware", {})
+    num_workers = min(
+        hw_config.get("num_workers", 8),
+        os.cpu_count() or 1,  # Fallback to 1 if CPU count can't be determined
+    )
+    pin_memory = hw_config.get("pin_memory", True) and torch.cuda.is_available()
+    prefetch_factor = hw_config.get("prefetch_factor", 2)
+    persistent_workers = hw_config.get("persistent_workers", True)
+
+    # Create dataloaders with hardware optimizations
+    train_loader = create_dataloader(
+        train_dataset,
+        batch_size=data_config.batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+    )
+
+    val_loader = create_dataloader(
+        val_dataset,
+        batch_size=data_config.batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+    )
+
+    test_loader = create_dataloader(
+        test_dataset,
+        batch_size=data_config.batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+    )
+
+    # Create model
     model_config = STModelConfig(
         hidden_dim=int(config["model"]["hidden_dim"]),
         num_layers=int(config["model"]["num_layers"]),
@@ -153,26 +262,13 @@ def main():
         bidirectional=bool(config["model"]["bidirectional"]),
     )
 
-    # Determine optimal number of workers based on CPU cores
-    num_workers = 4 if torch.cuda.is_available() else 0
+    model = SpatioTemporalPredictor(model_config)
 
-    # Create datasets and optimized dataloaders
-    train_dataset = GraphSequenceDataset(data_dir, "train", data_config)
-    train_loader = create_dataloader(
-        train_dataset,
-        batch_size=data_config.batch_size,
-        shuffle=True,
-        num_workers=num_workers,  # Use workers only if CUDA available
-        pin_memory=torch.cuda.is_available(),  # Pin memory only if CUDA available
-        prefetch_factor=2 if num_workers > 0 else None,  # Prefetch only with workers
-    )
-
-    # Create model
-    model = SpatioTemporalPredictor(model_config).to(device)
-    logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # Initialize mixed precision training only for CUDA
-    scaler = GradScaler() if torch.cuda.is_available() else None
+    # Multi-GPU support if available
+    if torch.cuda.device_count() > 1:
+        logger.info(f"Using {torch.cuda.device_count()} GPUs")
+        model = nn.DataParallel(model)
+    model = model.to(device)
 
     # Setup training
     criterion = WeightedMSELoss(config["training"]["loss_weights"])
@@ -182,38 +278,156 @@ def main():
         weight_decay=float(config["model"]["weight_decay"]),
     )
 
-    # Setup tensorboard
-    if config["training"]["tensorboard"]:
-        writer = SummaryWriter(output_dir / "runs")
-
-    # Train for one epoch
-    logger.info("Starting training...")
-    train_loss = train_epoch(
-        model=model,
-        train_loader=train_loader,
-        criterion=criterion,
-        optimizer=optimizer,
-        device=device,
-        scaler=scaler,
-        clip_grad_norm=config["model"]["clip_grad_norm"],
-        log_interval=config["training"]["log_interval"],
+    # Learning rate scheduler
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=config["training"]["lr_schedule"]["factor"],
+        patience=config["training"]["lr_schedule"]["patience"],
+        min_lr=float(config["training"]["lr_schedule"]["min_lr"]),
+        verbose=True,
     )
 
-    logger.info(f"Training completed. Average loss: {train_loss:.4f}")
+    # Initialize mixed precision training
+    scaler = GradScaler() if torch.cuda.is_available() else None
 
-    # Save model
+    # Setup tensorboard
+    writer = (
+        SummaryWriter(output_dir / "runs")
+        if config["training"]["tensorboard"]
+        else None
+    )
+
+    # Training loop with early stopping
+    best_val_loss = float("inf")
+    patience = config["training"]["patience"]
+    patience_counter = 0
+
+    for epoch in range(config["training"]["epochs"]):
+        # Training
+        train_loss = train_epoch(
+            model=model,
+            train_loader=train_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+            scaler=scaler,
+            clip_grad_norm=config["model"]["clip_grad_norm"],
+            log_interval=config["training"]["log_interval"],
+        )
+
+        # Validation
+        val_loss, val_feature_losses = validate(model, val_loader, criterion, device)
+
+        # Learning rate scheduling
+        scheduler.step(val_loss)
+
+        # Logging
+        logger.info(
+            f"Epoch {epoch+1}/{config['training']['epochs']}, "
+            f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+        )
+
+        if writer:
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Loss/val", val_loss, epoch)
+            for feat, loss in val_feature_losses.items():
+                writer.add_scalar(f"Feature_Loss/{feat}", loss, epoch)
+
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=epoch,
+                loss=val_loss,
+                config=config,
+                path=output_dir / "best_model.pt",
+            )
+        else:
+            patience_counter += 1
+
+        # Early stopping
+        if patience_counter >= patience:
+            logger.info(f"Early stopping triggered after {epoch+1} epochs")
+            break
+
+    # Final evaluation on test set
+    model.load_state_dict(torch.load(output_dir / "best_model.pt")["model_state_dict"])
+    test_loss, test_feature_losses = validate(model, test_loader, criterion, device)
+    logger.info(f"Test Loss: {test_loss:.4f}")
+
+    # Cleanup
+    if writer:
+        writer.close()
+
+
+def setup_logging(log_file: Path):
+    """Setup logging configuration."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+    )
+
+
+def set_random_seeds(seed: int):
+    """Set random seeds for reproducibility."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    # Only set deterministic mode if not using benchmark
+    if not torch.backends.cudnn.benchmark:
+        torch.backends.cudnn.deterministic = True
+
+
+def setup_device() -> torch.device:
+    """Setup compute device with optimized settings."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda:0")
+        # Enable memory pinning and optimize CUDA settings
+        torch.cuda.init()
+        # Set optimal CUDA settings
+        torch.backends.cuda.matmul.allow_tf32 = (
+            True  # Enable TF32 for better performance
+        )
+        torch.backends.cudnn.allow_tf32 = True
+        # Note: benchmark should be False when input sizes vary significantly
+        torch.backends.cudnn.benchmark = True
+    else:
+        device = torch.device("cpu")
+        # Set optimal CPU settings
+        torch.set_num_threads(os.cpu_count())  # Use all CPU cores
+        torch.set_num_interop_threads(os.cpu_count())  # Optimize inter-op parallelism
+    return device
+
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    epoch: int,
+    loss: float,
+    config: dict,
+    path: Path,
+):
+    """Save model checkpoint."""
     torch.save(
         {
+            "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "loss": loss,
             "config": config,
-            "train_loss": train_loss,
         },
-        output_dir / "model_checkpoint.pt",
+        path,
     )
-
-    if config["training"]["tensorboard"]:
-        writer.close()
 
 
 if __name__ == "__main__":

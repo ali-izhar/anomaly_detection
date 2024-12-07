@@ -3,12 +3,15 @@ paths:
   data_dir: "dataset"
   output_dir: "outputs"
 
+# Random seed for reproducibility
+seed: 42
+
 data:
   # Sequence parameters
   window_size: 20
   stride: 5
   forecast_horizon: 10
-  batch_size: 16
+  batch_size: 32  # Increased from 16 for better GPU utilization
   
   # Feature selection
   use_centrality: true
@@ -28,9 +31,9 @@ data:
 
 model:
   # Model architecture
-  hidden_dim: 32
-  num_layers: 2
-  dropout: 0.2
+  hidden_dim: 64        # Increased to match LSTM requirements
+  num_layers: 2         # GNN layers
+  dropout: 0.2         # Regularization
   
   # Feature processing
   use_node_features: true
@@ -47,14 +50,14 @@ model:
   
   # Training parameters
   learning_rate: 0.001
-  weight_decay: 0.0001
-  clip_grad_norm: 0.5
+  weight_decay: 0.0001  # L2 regularization
+  clip_grad_norm: 1.0   # Increased for stability
 
 training:
-  epochs: 1
-  patience: 10
-  val_interval: 1
-  save_interval: 5
+  epochs: 50           # Maximum epochs
+  patience: 15         # Early stopping patience
+  val_interval: 1      # Validate every epoch
+  save_interval: 5     # Save checkpoints every N epochs
   
   # Loss function weights
   loss_weights:
@@ -62,15 +65,22 @@ training:
     betweenness: 1.0
     closeness: 1.0
     eigenvector: 1.0
-    svd: 0.5
+    svd: 0.5           # Lower weight for embeddings
     lsvd: 0.5
     
   # Learning rate schedule
   lr_schedule:
-    factor: 0.5
-    patience: 5
-    min_lr: 0.000001
+    factor: 0.5        # Multiply LR by this when plateauing
+    patience: 5        # Epochs to wait before reducing LR
+    min_lr: 0.000001   # Minimum learning rate
+    
+  # Logging and monitoring
+  log_interval: 50     # Log every N batches
+  tensorboard: true    # Enable tensorboard logging
 
-  # Logging
-  log_interval: 10
-  tensorboard: true
+# Hardware optimization
+hardware:
+  num_workers: 8       # DataLoader workers
+  pin_memory: true     # Pin memory for faster GPU transfer
+  prefetch_factor: 2   # Number of batches to prefetch
+  persistent_workers: true  # Keep workers alive between epochs
