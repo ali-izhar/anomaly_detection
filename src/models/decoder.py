@@ -38,7 +38,7 @@ class TemporalDecoder(nn.Module):
         self.num_features = num_features
         self.num_nodes = num_nodes
 
-        # Make sure input and hidden dimensions match
+        # Make sure LSTM dimensions match encoder output
         self.node_lstm = nn.LSTM(
             input_size=hidden_dim,
             hidden_size=hidden_dim,
@@ -47,7 +47,7 @@ class TemporalDecoder(nn.Module):
             batch_first=True,
         )
 
-        # Adjust prediction head dimensions
+        # Adjust intermediate dimension accordingly
         intermediate_dim = hidden_dim // 2
 
         self.centrality_head = nn.Sequential(

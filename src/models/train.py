@@ -47,13 +47,18 @@ class WeightedMSELoss(nn.Module):
 
     def forward(
         self, pred: Dict[str, torch.Tensor], target: Dict[str, torch.Tensor]
-    ) -> torch.Tensor:
-        loss = 0.0
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        total_loss = 0.0
+        feature_losses = {}
+        
         for feat_name in pred:
             if feat_name in self.weights:
                 feat_loss = F.mse_loss(pred[feat_name], target[feat_name])
-                loss += self.weights[feat_name] * feat_loss
-        return loss
+                weighted_loss = self.weights[feat_name] * feat_loss
+                feature_losses[feat_name] = feat_loss.item()
+                total_loss += weighted_loss
+                
+        return total_loss, feature_losses
 
 
 def load_config(config_path: str) -> dict:
@@ -79,30 +84,26 @@ def train_epoch(
     use_amp = scaler is not None
     num_batches = len(train_loader)
     
-    # Pre-fetch data to GPU
     for batch_idx, batch in enumerate(train_loader):
-        # Prefetch next batch
-        torch.cuda.current_stream().wait_stream(torch.cuda.Stream())
-        with torch.cuda.stream(torch.cuda.Stream()):
-            x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
-            y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
-            adj = batch["adj"].to(device, non_blocking=True)
+        # Move data to device
+        x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
+        y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
+        adj = batch["adj"].to(device, non_blocking=True)
 
-        # Zero gradients using faster method
-        for param in model.parameters():
-            param.grad = None
+        # Zero gradients
+        optimizer.zero_grad()
 
         # Forward pass with mixed precision
         amp_context = autocast(device_type=str(device)) if use_amp else nullcontext()
         with amp_context:
             predictions = model(x, adj)
-            loss = criterion(predictions, y)
+            loss, _ = criterion(predictions, y)
 
         # Backward pass with scaling
         if use_amp:
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
             if clip_grad_norm > 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             scaler.step(optimizer)
             scaler.update()
@@ -112,9 +113,8 @@ def train_epoch(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
 
-        # Logging with GPU synchronization
+        # Logging
         if batch_idx % log_interval == 0:
-            torch.cuda.synchronize()  # Ensure accurate timing
             logger.info(
                 f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}, "
                 f"GPU Memory: {torch.cuda.memory_allocated(device)/1e9:.2f}GB"
@@ -144,10 +144,10 @@ def validate(
             adj = batch["adj"].to(device, non_blocking=True)
 
             predictions = model(x, adj)
-            loss, feat_losses = criterion(predictions, y)
+            batch_loss, batch_feat_losses = criterion(predictions, y)
 
-            total_loss += loss.item()
-            for feat, feat_loss in feat_losses.items():
+            total_loss += batch_loss.item()
+            for feat, feat_loss in batch_feat_losses.items():
                 feature_losses_dict[feat] += feat_loss
 
     # Average losses
@@ -393,10 +393,6 @@ def setup_device() -> torch.device:
         
         # Set memory allocation to optimal for RTX 4090
         torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
-        
-        # Optional: Set larger chunk sizes for better memory allocation
-        torch.cuda.set_per_process_memory_fraction(0.95, device)
-        torch.cuda.set_chunk_size_limit(512 * 1024 * 1024)  # 512MB chunks
         
         logger.info(f"GPU Device: {torch.cuda.get_device_name(device)}")
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1e9:.2f} GB")
