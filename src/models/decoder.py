@@ -16,7 +16,7 @@ class TemporalDecoder(nn.Module):
     def __init__(
         self,
         hidden_dim: int,
-        num_features: int = 22,  # 4 centrality + 2 SVD + 16 LSVD
+        num_features: int = 22,
         num_nodes: int = 100,
         num_layers: int = 2,
         dropout: float = 0.2,
@@ -38,7 +38,7 @@ class TemporalDecoder(nn.Module):
         self.num_features = num_features
         self.num_nodes = num_nodes
 
-        # LSTM for temporal processing
+        # Make sure input and hidden dimensions match
         self.node_lstm = nn.LSTM(
             input_size=hidden_dim,
             hidden_size=hidden_dim,
@@ -47,26 +47,28 @@ class TemporalDecoder(nn.Module):
             batch_first=True,
         )
 
-        # Separate prediction heads for different feature types
+        # Adjust prediction head dimensions
+        intermediate_dim = hidden_dim // 2
+
         self.centrality_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(hidden_dim, intermediate_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 4),  # 4 centrality features
+            nn.Linear(intermediate_dim, 4),
         )
 
         self.svd_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.Linear(hidden_dim, intermediate_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, 2),  # 2D SVD
+            nn.Linear(intermediate_dim, 2),
         )
 
         self.lsvd_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 16),  # 16D LSVD
+            nn.Linear(hidden_dim, 16),
         )
 
         self.dropout = nn.Dropout(dropout)
@@ -102,7 +104,7 @@ class TemporalDecoder(nn.Module):
             lstm_out = self.dropout(lstm_out)
 
             # Start prediction from last state
-            h_t = lstm_out[:, -1:]  # [batch_size, 1, hidden_dim]
+            h_t = lstm_out[:, -1:, :]  # [batch_size, 1, hidden_dim]
             curr_hidden = node_hidden
 
             node_preds = []
@@ -114,8 +116,14 @@ class TemporalDecoder(nn.Module):
 
                 # Combine predictions
                 combined_pred = torch.cat(
-                    [centrality_pred, svd_pred, lsvd_pred], dim=-1
+                    [
+                        centrality_pred,  # [batch_size, 1, 4]
+                        svd_pred,  # [batch_size, 1, 2]
+                        lsvd_pred,  # [batch_size, 1, 16]
+                    ],
+                    dim=-1,
                 )  # [batch_size, 1, 22]
+
                 node_preds.append(combined_pred)
 
                 # Update hidden state

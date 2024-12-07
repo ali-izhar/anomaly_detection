@@ -316,9 +316,21 @@ def create_dataloader(
     batch_size: Optional[int] = None,
     shuffle: bool = None,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    prefetch_factor: int = 2,
+    persistent_workers: bool = True,
 ) -> DataLoader:
-    """Create a DataLoader with appropriate settings for the split."""
+    """Create a DataLoader with appropriate settings for the split.
 
+    Args:
+        dataset: The dataset to create a loader for
+        batch_size: Batch size (defaults to dataset config)
+        shuffle: Whether to shuffle data (defaults to True for train)
+        num_workers: Number of worker processes for data loading
+        pin_memory: Pin memory for faster GPU transfer
+        prefetch_factor: Number of batches to prefetch per worker
+        persistent_workers: Keep worker processes alive between epochs
+    """
     if batch_size is None:
         batch_size = dataset.config.batch_size
 
@@ -331,6 +343,9 @@ def create_dataloader(
         shuffle=shuffle,
         num_workers=num_workers,
         collate_fn=collate_sequences,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
     )
 
 
