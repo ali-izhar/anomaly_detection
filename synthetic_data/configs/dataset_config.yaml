@@ -1,21 +1,19 @@
-# Dataset generation configuration
+# DATASET CONFIGURATION
 dataset:
   # Number of sequences to generate per graph type
-  num_sequences: 6
+  num_sequences: 20
 
-  # Types of graphs to generate (ba: Barabasi-Albert, er: Erdos-Renyi, nw: Newman-Watts)
+  # Types of graphs to generate
   graph_types: ["BA", "ER", "NW"]
-
-  # Martingale detection parameters
-  threshold: 30.0  # Threshold for anomaly detection
-  epsilon: 0.8    # Epsilon for martingale calculation
-  window_size: 5  # Window size for labeling anomalies
+  # BA: Barabasi-Albert (scale-free networks)
+  # ER: Erdos-Renyi (random networks)
+  # NW: Newman-Watts (small-world networks)
 
   # Dataset split ratios
   split_ratio:
-    train: 0.7  # 70% for training
-    val: 0.15   # 15% for validation
-    test: 0.15  # 15% for testing
+    train: 0.7
+    val: 0.15
+    test: 0.15
 
   # Output directory for the dataset
   output_dir: "dataset"

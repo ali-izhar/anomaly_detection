@@ -32,6 +32,10 @@ from src.changepoint import ChangePointDetector
 logger = logging.getLogger(__name__)
 
 
+# Constants
+EMBEDDING_DIM = 16
+
+
 @dataclass
 class DatasetConfig(GraphConfig):
     """Configuration for dataset generation, extends GraphConfig."""
@@ -100,41 +104,53 @@ class DatasetGenerator:
         raw_features = detector.extract_features()
 
         processed_features = {}
-
-        # Centrality features
         for name in ["degree", "betweenness", "closeness", "eigenvector"]:
             if name in raw_features:
                 processed_features[name] = np.array(
                     raw_features[name], dtype=np.float32
                 )
 
-        # Embedding features
-        embedding_dim = 16  # fixed embedding dimension
         for name in ["svd", "lsvd"]:
             if name in raw_features:
                 feat = np.array(raw_features[name], dtype=np.float32)
                 if len(feat.shape) == 2:
                     seq_len, n_nodes = feat.shape
                     feat = feat.reshape(seq_len, n_nodes, 1)
-                    feat = np.tile(feat, (1, 1, embedding_dim))
+                    feat = np.tile(feat, (1, 1, EMBEDDING_DIM))
                 processed_features[name] = feat
 
         validate_feature_shapes(processed_features, len(graphs), graphs[0].shape[0])
         return processed_features
 
-    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        # Convert to GPU
-        feat_cp = cp.asarray(features)
-        mean = cp.mean(feat_cp, axis=(0, 1), keepdims=True)
-        std = cp.std(feat_cp, axis=(0, 1), keepdims=True) + 1e-8
-        normalized = (feat_cp - mean) / std
-        return cp.asnumpy(normalized)
+    def _normalize_features(
+        self, features: Dict[str, np.ndarray]
+    ) -> Dict[str, np.ndarray]:
+        """Normalize features independently."""
+        normalized_features = {}
+
+        for feat_name, feat_data in features.items():
+            if feat_name in ["degree", "betweenness", "closeness", "eigenvector"]:
+                feat_cp = cp.asarray(feat_data)
+                mean = cp.mean(feat_cp, axis=(0, 1), keepdims=True)
+                std = cp.std(feat_cp, axis=(0, 1), keepdims=True) + 1e-8
+                normalized = (feat_cp - mean) / std
+                normalized_features[feat_name] = cp.asnumpy(normalized)
+
+            elif feat_name in ["svd", "lsvd"]:
+                feat_cp = cp.asarray(feat_data)
+                mean = cp.mean(feat_cp, axis=(0, 1), keepdims=True)
+                std = cp.std(feat_cp, axis=(0, 1), keepdims=True) + 1e-8
+                normalized = (feat_cp - mean) / std
+                normalized_features[feat_name] = cp.asnumpy(normalized)
+
+        return normalized_features
 
     def _split_dataset(
         self,
         sequences: Dict[str, np.ndarray],
         graphs: np.ndarray,
         sequence_lengths: np.ndarray,
+        change_points: List,
     ) -> Dict:
         num_sequences = len(sequence_lengths)
         indices = np.arange(num_sequences)
@@ -155,16 +171,19 @@ class DatasetGenerator:
                 "features": subset_features(sequences, train_idx),
                 "graphs": graphs[train_idx],
                 "sequence_lengths": sequence_lengths[train_idx],
+                "change_points": [change_points[i] for i in train_idx],
             },
             "val": {
                 "features": subset_features(sequences, val_idx),
                 "graphs": graphs[val_idx],
                 "sequence_lengths": sequence_lengths[val_idx],
+                "change_points": [change_points[i] for i in val_idx],
             },
             "test": {
                 "features": subset_features(sequences, test_idx),
                 "graphs": graphs[test_idx],
                 "sequence_lengths": sequence_lengths[test_idx],
+                "change_points": [change_points[i] for i in test_idx],
             },
         }
 
@@ -177,6 +196,7 @@ class DatasetGenerator:
             "features": features,
             "length": len(result["graphs"]),
             "graph_type": graph_config.graph_type.value,
+            "change_points": result["change_points"],
         }
 
     def generate_sequences(self) -> Dict:
@@ -192,9 +212,9 @@ class DatasetGenerator:
             "graphs": [],
             "sequence_lengths": [],
             "graph_types": [],
+            "change_points": [],
         }
 
-        # Prepare tasks for parallel generation
         tasks = []
         for graph_type_str in self.config.graph_types:
             graph_type = GraphType[graph_type_str.upper()]
@@ -224,24 +244,24 @@ class DatasetGenerator:
                 )
             )
 
-        # Aggregate results
         for res in results:
             for feat_name in res["features"]:
                 data["features"][feat_name].append(res["features"][feat_name])
             data["graphs"].append(res["graphs"])
             data["sequence_lengths"].append(res["length"])
             data["graph_types"].append(res["graph_type"])
+            data["change_points"].append(res["change_points"])
 
         # Pad and validate
         return self._pad_data(data)
 
     def _pad_data(self, data: Dict) -> Dict:
+        """Pad and normalize the data."""
         max_seq_len = max(data["sequence_lengths"])
         num_sequences = len(data["graphs"])
         n_nodes = data["graphs"][0][0].shape[0]
 
-        # Move data to GPU for large array ops
-        # Padded features
+        # Pad features
         padded_features = {}
         for feat_name in ["degree", "betweenness", "closeness", "eigenvector"]:
             arr_cp = cp.zeros((num_sequences, max_seq_len, n_nodes), dtype=cp.float32)
@@ -257,18 +277,11 @@ class DatasetGenerator:
             )
             for i, seq in enumerate(data["features"][feat_name]):
                 seq_cp = cp.asarray(seq)
-                # If mismatch in embedding dim, fix it:
-                if seq_cp.shape[-1] != embedding_dim:
-                    # resize
-                    resized_cp = cp.zeros(
-                        (seq_cp.shape[0], seq_cp.shape[1], embedding_dim),
-                        dtype=cp.float32,
-                    )
-                    min_dim = min(seq_cp.shape[-1], embedding_dim)
-                    resized_cp[..., :min_dim] = seq_cp[..., :min_dim]
-                    seq_cp = resized_cp
                 arr_cp[i, : seq_cp.shape[0], :, :] = seq_cp
             padded_features[feat_name] = cp.asnumpy(arr_cp)
+
+        # Normalize features
+        normalized_features = self._normalize_features(padded_features)
 
         # Pad graphs
         graphs_cp = cp.zeros(
@@ -283,17 +296,18 @@ class DatasetGenerator:
         graph_types = data["graph_types"]
 
         validate_padded_shapes(
-            data={"features": padded_features, "graphs": padded_graphs},
+            data={"features": normalized_features, "graphs": padded_graphs},
             num_sequences=num_sequences,
             max_seq_len=max_seq_len,
             n_nodes=n_nodes,
         )
 
         return {
-            "features": padded_features,
+            "features": normalized_features,
             "graphs": padded_graphs,
             "sequence_lengths": sequence_lengths,
             "graph_types": graph_types,
+            "change_points": data["change_points"],
         }
 
     def _save_to_hdf5(self, data_split: Dict):
@@ -345,6 +359,13 @@ class DatasetGenerator:
                             compression="gzip",
                         )
 
+                if "change_points" in data:
+                    cp_group = hf.create_group("change_points")
+                    for seq_idx, cp in enumerate(data["change_points"]):
+                        cp_group.create_dataset(
+                            f"sequence_{seq_idx}", data=cp, compression="gzip"
+                        )
+
 
 def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
     if config is None:
@@ -352,12 +373,11 @@ def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
 
     generator = DatasetGenerator(config)
     data = generator.generate_sequences()
-
-    # Split and save the dataset
     split_data = generator._split_dataset(
         sequences=data["features"],
         graphs=data["graphs"],
         sequence_lengths=data["sequence_lengths"],
+        change_points=data["change_points"],
     )
 
     generator._save_to_hdf5(split_data)

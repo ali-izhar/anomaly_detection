@@ -52,10 +52,7 @@ class GraphConfig:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        # Get common parameters (used for all graph types)
         common = config["common"]
-
-        # Get graph-specific parameters
         graph_params = config[graph_type.name.lower()]
 
         return cls(
@@ -77,7 +74,7 @@ def _generate_random_change_points(
     """Generate random change points and corresponding parameters."""
     # Generate random sequence length and number of nodes
     seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
-    n = np.random.randint(config.min_n, config.max_n + 1)
+    n = config.max_n
     min_seg = config.min_segment
 
     # Generate change points
@@ -109,42 +106,66 @@ def _generate_random_change_points(
     # Generate parameters based on graph type
     params = []
     if config.graph_type == GraphType.BA:
-        params.append(
-            {"m1": config.params["initial_edges"], "m2": config.params["initial_edges"]}
+        # Start with initial edges
+        m_initial = np.random.randint(
+            config.params["min_edges"], config.params["max_edges"] + 1
         )
+        params.append({"m1": m_initial, "m2": m_initial})
 
+        # For each change point, ensure significant parameter change
+        prev_m = m_initial
         for _ in range(len(points)):
-            # Simply generate random edges without threshold
-            m = np.random.randint(
-                config.params["min_edges"], config.params["max_edges"] + 1
-            )
+            while True:
+                m = np.random.randint(
+                    config.params["min_edges"], config.params["max_edges"] + 1
+                )
+                # Ensure significant change (at least 30% difference)
+                if abs(m - prev_m) / prev_m >= 0.3:
+                    break
             params.append({"m1": m, "m2": m})
+            prev_m = m
 
     elif config.graph_type == GraphType.ER:
-        params.append(
-            {"p1": config.params["initial_p"], "p2": config.params["initial_p"]}
-        )
+        # Start with initial probability
+        p_initial = np.random.uniform(config.params["min_p"], config.params["max_p"])
+        params.append({"p1": p_initial, "p2": p_initial})
 
+        # For each change point, ensure significant parameter change
+        prev_p = p_initial
         for _ in range(len(points)):
-            # Simply generate random probability without threshold
-            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+            while True:
+                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+                # Ensure significant change (at least 30% difference)
+                if abs(p - prev_p) / prev_p >= 0.3:
+                    break
             params.append({"p1": p, "p2": p})
+            prev_p = p
 
     elif config.graph_type == GraphType.NW:
+        # Start with initial k and p
+        k_initial = np.random.randint(
+            config.params["min_k"], config.params["max_k"] + 1
+        )
+        p_initial = np.random.uniform(config.params["min_p"], config.params["max_p"])
         params.append(
-            {
-                "k1": config.params["initial_k"],
-                "k2": config.params["initial_k"],
-                "p1": config.params["initial_p"],
-                "p2": config.params["initial_p"],
-            }
+            {"k1": k_initial, "k2": k_initial, "p1": p_initial, "p2": p_initial}
         )
 
+        # For each change point, ensure significant parameter change
+        prev_k, prev_p = k_initial, p_initial
         for _ in range(len(points)):
-            # Simply generate random k and p without threshold
-            k = np.random.randint(config.params["min_k"], config.params["max_k"] + 1)
-            p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+            while True:
+                k = np.random.randint(
+                    config.params["min_k"], config.params["max_k"] + 1
+                )
+                p = np.random.uniform(config.params["min_p"], config.params["max_p"])
+                # Ensure significant change in either k or p
+                if (abs(k - prev_k) / prev_k >= 0.3) or (
+                    abs(p - prev_p) / prev_p >= 0.3
+                ):
+                    break
             params.append({"k1": k, "k2": k, "p1": p, "p2": p})
+            prev_k, prev_p = k, p
 
     return points, params, seq_len, n
 

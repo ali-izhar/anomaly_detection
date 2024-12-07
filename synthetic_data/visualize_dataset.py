@@ -3,17 +3,19 @@
 """
 Dataset Visualization Script
 
-This script reads the training data from the dataset directory and creates visualizations showing:
-1. Timeline view of sequences with anomaly labels
-2. Feature distributions and correlations
-3. Training data statistics and balance
+This script reads the training data from the dataset and creates visualizations showing:
+1. Sequence-level feature time-series for multiple feature types, with change points
+2. Feature distributions and correlations across the training set
+3. Training data statistics (e.g., sequence lengths, node counts, etc.)
+
+Also can plot multiple sequences side-by-side on a single figure (dashboard) with dotted lines at actual change points.
 """
 
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Tuple, List, Dict, Any
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import h5py
 import yaml
@@ -25,285 +27,282 @@ if str(project_root) not in sys.path:
 
 
 class DatasetVisualizer:
-    """Visualizer for graph anomaly detection dataset."""
+    """Visualizer for the created graph sequences dataset with change points."""
 
     def __init__(self, data_dir: str = "dataset", config_path: str = None):
         self.data_dir = Path(data_dir)
 
-        # Load martingale config
+        # Load a config file for visualization settings if available
         if config_path is None:
-            config_path = Path(__file__).parent / "martingale_config.yaml"
+            self.config = {
+                "visualization": {
+                    "colors": "husl",
+                }
+            }
+        else:
+            with open(config_path, "r") as f:
+                self.config = yaml.safe_load(f)
 
-        with open(config_path, "r") as f:
-            self.config = yaml.safe_load(f)
-
-        # Get visualization parameters from config
-        self.feature_names = self.config["visualization"]["feature_names"]
-        self.colors = sns.color_palette(
-            self.config["visualization"]["colors"], n_colors=len(self.feature_names)
-        )
         plt.style.use("seaborn-v0_8-darkgrid")
 
-    def load_training_data(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, List[List[int]], List[Dict], np.ndarray]:
-        """Load training sequences, labels, change points, martingales and sequence lengths from H5 files."""
-        train_dir = self.data_dir / "train"
+        # Default feature names from dataset creation
+        self.centrality_features = ["degree", "betweenness", "closeness", "eigenvector"]
+        self.embedding_features = ["svd", "lsvd"]
+        self.feature_names = self.centrality_features + self.embedding_features
 
-        with h5py.File(train_dir / "data.h5", "r") as hf:
-            # Load sequences, labels and lengths from sequences group
-            sequences = hf["sequences/features"][:]
-            labels = hf["sequences/labels"][:]
-            sequence_lengths = hf["sequences/lengths"][:]
+        # Set colors
+        self.colors = sns.color_palette(
+            self.config["visualization"].get("colors", "husl"),
+            n_colors=len(self.feature_names),
+        )
 
-            # Load change points
-            padded_change_points = hf["change_points/points"][:]
-            lengths = hf["change_points/lengths"][:]
-            change_points = [
-                cp[:length].tolist()
-                for cp, length in zip(padded_change_points, lengths)
-            ]
+    def load_data_split(self, split: str = "train") -> Dict[str, Any]:
+        """Load a specific data split (train/val/test) from HDF5, including change points."""
+        split_dir = self.data_dir / split
+        data_path = split_dir / "data.h5"
+        if not data_path.exists():
+            raise FileNotFoundError(f"No data found for split '{split}' at {data_path}")
 
-            # Load martingales
-            martingales = []
-            mart_group = hf["martingales"]
-
-            # Get feature names from first sequence's martingales
-            first_seq = mart_group["sequence_0"]
-            feature_names = list(first_seq["reset"].keys())
-            self.feature_names = feature_names  # Update feature names from data
-
-            # Update colors to match number of features
-            self.colors = sns.color_palette(
-                self.config["visualization"]["colors"], n_colors=len(self.feature_names)
+        with h5py.File(data_path, "r") as hf:
+            # Load sequence lengths
+            sequence_lengths = hf["lengths"][:]
+            # Load graph types if available
+            graph_types = (
+                hf["graph_types"][:].astype(str) if "graph_types" in hf else None
             )
 
-            # Iterate through sequences
-            for seq_idx in range(len(sequences)):
-                seq_group = mart_group[f"sequence_{seq_idx}"]
+            # Load adjacency
+            graphs_group = hf["adjacency"]
+            num_sequences = len(sequence_lengths)
+            first_graph = graphs_group["sequence_0"][:]
+            max_seq_len, n_nodes, _ = first_graph.shape
+            all_graphs = np.zeros(
+                (num_sequences, max_seq_len, n_nodes, n_nodes), dtype=np.float32
+            )
+            all_graphs[0] = first_graph
+            for i in range(1, num_sequences):
+                all_graphs[i] = graphs_group[f"sequence_{i}"][:]
 
-                # Load reset and cumulative martingales
-                seq_mart = {"reset": {}, "cumulative": {}}
+            # Load features
+            feat_group = hf["features"]
+            features = {}
+            for feat_name in self.feature_names:
+                if feat_name in feat_group:
+                    features[feat_name] = feat_group[feat_name][:]
 
-                for mart_type in ["reset", "cumulative"]:
-                    type_group = seq_group[mart_type]
-                    for feat_name in feature_names:
-                        seq_mart[mart_type][feat_name] = {
-                            "martingales": type_group[feat_name][:]
-                        }
+            # Load change points if available
+            change_points = []
+            if "change_points" in hf:
+                cp_group = hf["change_points"]
+                for i in range(num_sequences):
+                    seq_cp = cp_group[f"sequence_{i}"][:]
+                    change_points.append(seq_cp)
 
-                martingales.append(seq_mart)
+        return {
+            "features": features,
+            "graphs": all_graphs,
+            "sequence_lengths": sequence_lengths,
+            "graph_types": graph_types,
+            "change_points": change_points,
+        }
 
-        return sequences, labels, change_points, martingales, sequence_lengths
-
-    def plot_sequence_timeline(
+    def plot_sequence_features(
         self,
-        features: np.ndarray,
-        labels: np.ndarray,
-        change_points: List[List[int]],
-        martingales: List[Dict],
+        features: Dict[str, np.ndarray],
+        sequence_lengths: np.ndarray,
         sequence_idx: int,
+        change_points: Optional[List[int]] = None,
+        save_path: str = None,
+    ) -> None:
+        """
+        Plot the time-series of features for a single sequence.
+        For centralities, plot the average value over nodes at each time step.
+        For embeddings, average over nodes and embedding dimensions.
+        If change_points are provided, add vertical dashed lines at those points.
+        """
+
+        seq_length = int(sequence_lengths[sequence_idx])
+
+        plt.figure(figsize=(12, 8))
+        for i, (feat_name, color) in enumerate(zip(self.feature_names, self.colors)):
+            feat_data = features[feat_name][sequence_idx]
+
+            # For centralities: shape (max_seq_len, n_nodes)
+            # For embeddings: shape (max_seq_len, n_nodes, embedding_dim)
+            if feat_name in self.centrality_features:
+                feat_ts = np.mean(feat_data[:seq_length], axis=1)
+            else:
+                feat_ts = np.mean(feat_data[:seq_length], axis=(1, 2))
+
+            plt.plot(
+                feat_ts,
+                label=feat_name.capitalize(),
+                color=color,
+                linewidth=1.5,
+                alpha=0.8,
+            )
+
+        # Plot change points if present
+        if change_points is not None and len(change_points) > 0:
+            cp_array = np.array(change_points)
+            valid_cps = cp_array[cp_array < seq_length]
+            for cp in valid_cps:
+                plt.axvline(x=cp, color="black", linestyle="--", alpha=0.7)
+
+        plt.title(f"Sequence {sequence_idx} Feature Time-Series")
+        plt.xlabel("Time Step")
+        plt.ylabel("Average Feature Value")
+        plt.legend()
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.show()
+
+    def plot_dashboard_of_sequences(
+        self,
+        features: Dict[str, np.ndarray],
+        sequence_lengths: np.ndarray,
+        sequence_indices: List[int],
+        change_points: Optional[List[List[int]]] = None,
+        rows: int = 2,
+        cols: int = 3,
+        save_path: str = None,
+    ) -> None:
+        """
+        Plot multiple sequences in a single figure (dashboard).
+        Each subplot shows one sequence with all features and dotted lines at change points.
+
+        Args:
+            features: dictionary of feature arrays
+            sequence_lengths: array of sequence lengths
+            sequence_indices: list of sequence indices to plot
+            change_points: list of lists, where each element corresponds to a sequence and contains change point indices
+            rows: number of subplot rows
+            cols: number of subplot columns
+            save_path: path to save the resulting figure
+        """
+
+        fig, axes = plt.subplots(rows, cols, figsize=(15, 8))
+        axes = axes.flatten()
+
+        for i, seq_idx in enumerate(sequence_indices):
+            ax = axes[i]
+            seq_length = int(sequence_lengths[seq_idx])
+            cp_list = (
+                change_points[i]
+                if (change_points is not None and i < len(change_points))
+                else None
+            )
+
+            # Plot features
+            for feat_name, color in zip(self.feature_names, self.colors):
+                feat_data = features[feat_name][seq_idx]
+                if feat_name in self.centrality_features:
+                    feat_ts = np.mean(feat_data[:seq_length], axis=1)
+                else:
+                    feat_ts = np.mean(feat_data[:seq_length], axis=(1, 2))
+                ax.plot(
+                    feat_ts,
+                    label=feat_name.capitalize(),
+                    color=color,
+                    linewidth=1.5,
+                    alpha=0.8,
+                )
+
+            # Add dotted lines for change points if available
+            if cp_list is not None:
+                for c in cp_list:
+                    if 0 <= c < seq_length:
+                        ax.axvline(x=c, color="black", linestyle="--", alpha=0.7)
+
+            ax.set_title(f"Sequence {seq_idx}", fontsize=10)
+            ax.set_xlabel("Time Step", fontsize=9)
+            ax.set_ylabel("Feature Value", fontsize=9)
+            ax.tick_params(axis="both", which="major", labelsize=8)
+            ax.grid(True, alpha=0.3)
+
+        # Turn off any unused subplots
+        for j in range(i + 1, rows * cols):
+            axes[j].axis("off")
+
+        # Add a single legend for all features below the plots
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=len(self.feature_names))
+        fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.show()
+
+    def plot_feature_distributions(
+        self,
+        features: Dict[str, np.ndarray],
         sequence_lengths: np.ndarray,
         save_path: str = None,
     ) -> None:
-        """Plot timeline view of a single sequence with martingales and labels."""
-        # Get actual sequence length
-        seq_length = int(sequence_lengths[sequence_idx])
+        """
+        Plot distribution of each feature (flattened across all valid timesteps and sequences).
+        """
+        valid_values = {}
+        for feat_name in self.feature_names:
+            f_data = features[feat_name]
+            vals = []
+            for i, length in enumerate(sequence_lengths):
+                seq_data = f_data[i, :length]
+                if feat_name in self.centrality_features:
+                    vals.append(seq_data.flatten())
+                else:
+                    vals.append(seq_data.reshape(-1))
+            vals = np.concatenate(vals)
+            valid_values[feat_name] = vals
 
-        plt.figure(figsize=(15, 12))
-        gs = plt.GridSpec(3, 1, height_ratios=[2, 2, 1], hspace=0.3)
-
-        # Get change points and martingales for this sequence
-        seq_change_points = change_points[sequence_idx]
-        seq_martingales = martingales[sequence_idx]
-
-        # Top subplot: Reset Martingales
-        ax1 = plt.subplot(gs[0])
-        self._plot_martingale_sequence(
-            ax1,
-            seq_martingales["reset"],
-            "Reset Martingale Measures",
-            seq_change_points,
-            cumulative=False,
-            sequence_length=seq_length,
-        )
-
-        # Middle subplot: Cumulative Martingales
-        ax2 = plt.subplot(gs[1])
-        self._plot_martingale_sequence(
-            ax2,
-            seq_martingales["cumulative"],
-            "Cumulative Martingale Measures",
-            seq_change_points,
-            cumulative=True,
-            sequence_length=seq_length,
-        )
-
-        # Bottom subplot: Labels
-        ax3 = plt.subplot(gs[2])
-        sequence_labels = labels[sequence_idx, :seq_length]
-        ax3.fill_between(
-            range(seq_length),
-            0,
-            sequence_labels,
-            color="red",
-            alpha=0.3,
-            label="Anomaly",
-        )
-
-        # Add change points
-        for cp in seq_change_points:
-            if cp < seq_length:
-                ax3.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
-
-        ax3.set_ylim(-0.1, 1.1)
-        ax3.set_xlim(0, seq_length)
-        ax3.set_title("Anomaly Labels")
-        ax3.set_xlabel("Time Step")
-        ax3.set_ylabel("Label")
-
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path, bbox_inches="tight", dpi=300)
-        plt.show()
-
-    def _plot_martingale_sequence(
-        self,
-        ax: plt.Axes,
-        martingales: Dict[str, Dict[str, Any]],
-        title: str,
-        change_points: List[int],
-        cumulative: bool = False,
-        sequence_length: int = None,
-    ) -> None:
-        """Plot martingale sequences with change points."""
-        # Add change point indicators
-        for cp in change_points:
-            if cp < sequence_length:
-                ax.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
-
-        # Plot individual feature martingales
-        for name, color in zip(self.feature_names, self.colors):
-            martingale_values = np.array(martingales[name]["martingales"])
-            if sequence_length:
-                martingale_values = martingale_values[:sequence_length]
-
-            if cumulative:
-                ax.semilogy(
-                    martingale_values,
-                    color=color,
-                    label=name.capitalize(),
-                    linewidth=1.5,
-                    alpha=0.6,
-                )
-            else:
-                ax.plot(
-                    martingale_values,
-                    color=color,
-                    label=name.capitalize(),
-                    linewidth=1.5,
-                    alpha=0.6,
-                )
-
-        # Compute and plot combined martingales
-        martingale_arrays = []
-        for name in self.feature_names:
-            values = np.array(martingales[name]["martingales"])
-            if sequence_length:
-                values = values[:sequence_length]
-            martingale_arrays.append(values)
-
-        martingale_arrays = np.array(martingale_arrays)
-        M_sum = np.sum(martingale_arrays, axis=0)
-        M_avg = M_sum / len(self.feature_names)
-
-        if cumulative:
-            ax.semilogy(
-                M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
-            )
-            ax.semilogy(
-                M_sum,
-                color="#2F2F2F",
-                label="Sum",
-                linewidth=2.5,
-                linestyle="-.",
-                alpha=0.8,
-            )
-        else:
-            ax.plot(M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9)
-            ax.plot(
-                M_sum,
-                color="#2F2F2F",
-                label="Sum",
-                linewidth=2.5,
-                linestyle="-.",
-                alpha=0.8,
-            )
-
-        # Add threshold line
-        ax.axhline(
-            y=self.config["martingale"]["threshold"],
-            color="r",
-            linestyle="--",
-            label="Threshold",
-        )
-
-        # Set x-axis limit to sequence length
-        if sequence_length:
-            ax.set_xlim(0, sequence_length)
-
-        # Customize plot
-        ax.grid(True, linestyle="--", alpha=0.3)
-        ax.set_title(title, fontsize=12, pad=15)
-        ax.set_xlabel("Time Steps", fontsize=10)
-        ax.set_ylabel(
-            "Martingale Values" + (" (log scale)" if cumulative else ""),
-            fontsize=10,
-        )
-
-        # Add legend
-        legend = ax.legend(
-            fontsize=10,
-            ncol=3,
-            loc="upper right" if not cumulative else "upper left",
-            bbox_to_anchor=(1, 1.02) if not cumulative else (0, 1.02),
-            frameon=True,
-            facecolor="none",
-            edgecolor="none",
-        )
-        legend.get_frame().set_facecolor("none")
-        legend.get_frame().set_alpha(0)
-
-    def plot_feature_distributions(
-        self, features: np.ndarray, save_path: str = None
-    ) -> None:
-        """Plot distribution of each feature across all sequences."""
         plt.figure(figsize=(15, 10))
-
-        for i, (name, color) in enumerate(zip(self.feature_names, self.colors)):
+        for i, (feat_name, color) in enumerate(zip(self.feature_names, self.colors)):
             plt.subplot(2, 3, i + 1)
-            feature_values = features[:, :, i].flatten()
-            sns.histplot(feature_values, color=color, kde=True)
-            plt.title(f"{name} Distribution")
+            sns.histplot(valid_values[feat_name], color=color, kde=True)
+            plt.title(f"{feat_name.capitalize()} Distribution")
             plt.xlabel("Value")
 
         plt.tight_layout()
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.show()
 
     def plot_feature_correlations(
-        self, features: np.ndarray, save_path: str = None
+        self,
+        features: Dict[str, np.ndarray],
+        sequence_lengths: np.ndarray,
+        save_path: str = None,
     ) -> None:
-        """Plot correlation matrix between features."""
-        flat_features = features.reshape(-1, features.shape[-1])
+        """
+        Plot correlation matrix between features by first aggregating them into a single array.
+
+        We'll compute a single scalar per time step per feature (like the average over nodes/emb dims),
+        then stack these scalars from all sequences and timesteps to compute correlations.
+        """
+        feat_table = []
+        for i, length in enumerate(sequence_lengths):
+            row = []
+            for feat_name in self.feature_names:
+                f_data = features[feat_name][i, :length]
+                if feat_name in self.centrality_features:
+                    vals = f_data.mean(axis=1)
+                else:
+                    vals = f_data.mean(axis=(1, 2))
+                row.append(vals)
+            row = np.column_stack(row)
+            feat_table.append(row)
+
+        feat_table = np.vstack(feat_table)  # [total_timesteps, n_features]
+
+        correlation_matrix = np.corrcoef(feat_table.T)
 
         plt.figure(figsize=(10, 8))
-        correlation_matrix = np.corrcoef(flat_features.T)
         sns.heatmap(
             correlation_matrix,
-            xticklabels=self.feature_names,
-            yticklabels=self.feature_names,
+            xticklabels=[f.capitalize() for f in self.feature_names],
+            yticklabels=[f.capitalize() for f in self.feature_names],
             annot=True,
             cmap="coolwarm",
             center=0,
@@ -313,105 +312,81 @@ class DatasetVisualizer:
         plt.title("Feature Correlations")
         plt.tight_layout()
         if save_path:
-            plt.savefig(save_path)
-        plt.show()
-
-    def plot_label_statistics(self, labels: np.ndarray, save_path: str = None) -> None:
-        """Plot statistics about anomaly labels."""
-        plt.figure(figsize=(15, 5))
-
-        # Plot 1: Overall label distribution
-        plt.subplot(1, 2, 1)
-        total_samples = labels.size
-        anomaly_samples = np.sum(labels)
-        normal_samples = total_samples - anomaly_samples
-
-        plt.pie(
-            [normal_samples, anomaly_samples],
-            labels=["Normal", "Anomaly"],
-            autopct="%1.1f%%",
-            colors=["lightblue", "lightcoral"],
-        )
-        plt.title("Label Distribution")
-
-        # Plot 2: Anomaly distribution across sequences
-        plt.subplot(1, 2, 2)
-        anomaly_per_seq = np.mean(labels, axis=1) * 100
-        plt.hist(anomaly_per_seq, bins=20, color="lightcoral")
-        plt.title("Anomaly Percentage per Sequence")
-        plt.xlabel("Percentage of Anomalies")
-        plt.ylabel("Number of Sequences")
-
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.show()
 
     def visualize_training_data(self, output_dir: str = "visualizations") -> None:
         """Create comprehensive visualizations of the training data."""
         print("Loading training data...")
-        sequences, labels, change_points, martingales, sequence_lengths = (
-            self.load_training_data()
-        )
+        data = self.load_data_split("train")
+        features = data["features"]
+        graphs = data["graphs"]
+        sequence_lengths = data["sequence_lengths"]
+        graph_types = data["graph_types"]
+        change_points = data["change_points"]  # Actual changepoints
 
         # Create output directory
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get shapes and statistics
-        n_sequences = len(sequences)
-        max_seq_length = sequences.shape[1]
-        n_features = sequences.shape[2]
-        avg_seq_length = np.mean(sequence_lengths)
-        std_seq_length = np.std(sequence_lengths)
+        # Print dataset stats
+        n_sequences = len(sequence_lengths)
+        max_seq_length = graphs.shape[1]
+        n_nodes = graphs.shape[2]
 
-        print(f"\nTraining Data Shape:")
+        print(f"\nTraining Data Stats:")
         print(f"Number of sequences: {n_sequences}")
-        print(f"Maximum sequence length: {max_seq_length}")
-        print(f"Average sequence length: {avg_seq_length:.1f} ± {std_seq_length:.1f}")
-        print(f"Number of features: {n_features}")
+        print(f"Max sequence length: {max_seq_length}")
+        print(f"Number of nodes: {n_nodes}")
+        if graph_types is not None:
+            unique_types, counts = np.unique(graph_types, return_counts=True)
+            print("Graph types distribution:")
+            for t, c in zip(unique_types, counts):
+                print(f"  {t}: {c} sequences")
 
-        # Plot example sequences with change points and martingales
+        # Plot a few example sequences' feature time-series with actual changepoints
         print("\nPlotting example sequences...")
         for i in range(min(5, n_sequences)):
-            self.plot_sequence_timeline(
-                sequences,
-                labels,
-                change_points,
-                martingales,
-                i,
+            cp = change_points[i] if change_points else None
+            self.plot_sequence_features(
+                features,
                 sequence_lengths,
-                save_path=output_dir / f"sequence_{i}.png",
+                i,
+                change_points=cp,
+                save_path=output_dir / f"sequence_{i}_features.png",
             )
 
-        # For feature distributions and correlations, use only valid timesteps
-        valid_features = []
-        valid_labels = []
-        for i, length in enumerate(sequence_lengths):
-            valid_features.append(sequences[i, : int(length)])
-            valid_labels.append(labels[i, : int(length)])
+        # Plot a dashboard of multiple sequences (if enough sequences)
+        if n_sequences >= 5:
+            print("\nPlotting a dashboard of multiple sequences...")
+            seq_indices = [0, 1, 2, 3, 4]
+            cp_subset = (
+                [change_points[i] for i in seq_indices] if change_points else None
+            )
+            self.plot_dashboard_of_sequences(
+                features,
+                sequence_lengths,
+                sequence_indices=seq_indices,
+                change_points=cp_subset,
+                rows=2,
+                cols=3,
+                save_path=output_dir / "dashboard_of_sequences.png",
+            )
 
-        valid_features = np.concatenate(valid_features)
-        valid_labels = np.concatenate(valid_labels)
-
-        # Plot feature distributions using only valid timesteps
+        # Plot feature distributions
         print("\nPlotting feature distributions...")
         self.plot_feature_distributions(
-            valid_features.reshape(1, -1, sequences.shape[-1]),
+            features,
+            sequence_lengths,
             save_path=output_dir / "feature_distributions.png",
         )
 
-        # Plot feature correlations using only valid timesteps
+        # Plot feature correlations
         print("\nPlotting feature correlations...")
         self.plot_feature_correlations(
-            valid_features.reshape(1, -1, sequences.shape[-1]),
+            features,
+            sequence_lengths,
             save_path=output_dir / "feature_correlations.png",
-        )
-
-        # Plot label statistics using only valid timesteps
-        print("\nPlotting label statistics...")
-        self.plot_label_statistics(
-            valid_labels.reshape(1, -1), save_path=output_dir / "label_statistics.png"
         )
 
         print(f"\nVisualizations saved to: {output_dir}/")
@@ -424,8 +399,8 @@ def main():
         "--config",
         "-c",
         type=str,
-        help="Path to martingale config YAML file",
-        default="configs/martingale_config.yaml",
+        help="Path to optional config YAML file",
+        default=None,
     )
     parser.add_argument(
         "--data-dir",

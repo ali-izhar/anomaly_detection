@@ -1,3 +1,5 @@
+# synthetic_data/visualize_graphs.py
+
 """
 Graph Visualization Module
 
