@@ -7,7 +7,6 @@ This script provides detailed analysis and visualization of the generated graph 
 helping understand the data structure, feature distributions, and sequence characteristics.
 """
 
-import os
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt

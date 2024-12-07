@@ -1,7 +1,7 @@
 # DATASET CONFIGURATION
 dataset:
   # Number of sequences to generate per graph type
-  num_sequences: 20
+  num_sequences: 500
 
   # Types of graphs to generate
   graph_types: ["BA", "ER", "NW"]
