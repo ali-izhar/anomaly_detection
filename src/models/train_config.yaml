@@ -11,7 +11,7 @@ data:
   window_size: 20
   stride: 5
   forecast_horizon: 10
-  batch_size: 32  # Increased from 16 for better GPU utilization
+  batch_size: 128  # Increased for better GPU utilization
   
   # Feature selection
   use_centrality: true
@@ -31,8 +31,8 @@ data:
 
 model:
   # Model architecture
-  hidden_dim: 64        # Increased to match LSTM requirements
-  num_layers: 2         # GNN layers
+  hidden_dim: 256        # Increased for better GPU utilization
+  num_layers: 3         # More layers
   dropout: 0.2         # Regularization
   
   # Feature processing
@@ -42,11 +42,11 @@ model:
   
   # GNN parameters
   gnn_type: "gcn"
-  attention_heads: 4
+  attention_heads: 8    # Increased attention heads
   
   # LSTM parameters
-  lstm_layers: 2
-  bidirectional: false
+  lstm_layers: 3        # Increased LSTM layers
+  bidirectional: true   # Enable bidirectional
   
   # Training parameters
   learning_rate: 0.001
@@ -54,7 +54,7 @@ model:
   clip_grad_norm: 1.0   # Increased for stability
 
 training:
-  epochs: 50           # Maximum epochs
+  epochs: 100           # Maximum epochs
   patience: 15         # Early stopping patience
   val_interval: 1      # Validate every epoch
   save_interval: 5     # Save checkpoints every N epochs
@@ -78,9 +78,14 @@ training:
   log_interval: 50     # Log every N batches
   tensorboard: true    # Enable tensorboard logging
 
-# Hardware optimization
+# Hardware optimization for RTX 4090
 hardware:
   num_workers: 8       # DataLoader workers
   pin_memory: true     # Pin memory for faster GPU transfer
-  prefetch_factor: 2   # Number of batches to prefetch
+  prefetch_factor: 4   # Number of batches to prefetch
   persistent_workers: true  # Keep workers alive between epochs
+  cuda_settings:
+    allow_tf32: true
+    benchmark: true
+    memory_allocation: "optimal"
+    max_split_size_mb: 512

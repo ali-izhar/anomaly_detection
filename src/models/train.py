@@ -17,6 +17,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn import functional as F
 import torch.utils.checkpoint as checkpoint
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from contextlib import nullcontext
 
 project_root = Path(__file__).resolve().parent.parent
@@ -72,66 +73,54 @@ def train_epoch(
     clip_grad_norm: float,
     log_interval: int,
 ) -> float:
-    """Train for one epoch with optimizations."""
+    """Optimized training loop for better GPU utilization."""
     model.train()
     total_loss = 0.0
     use_amp = scaler is not None
     num_batches = len(train_loader)
-
-    # Use tqdm for progress bar if available
-    try:
-        from tqdm import tqdm
-
-        pbar = tqdm(total=num_batches, desc="Training")
-    except ImportError:
-        pbar = None
-
+    
+    # Pre-fetch data to GPU
     for batch_idx, batch in enumerate(train_loader):
-        # Move data to device
-        x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
-        y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
-        adj = batch["adj"].to(device, non_blocking=True)
+        # Prefetch next batch
+        torch.cuda.current_stream().wait_stream(torch.cuda.Stream())
+        with torch.cuda.stream(torch.cuda.Stream()):
+            x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
+            y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
+            adj = batch["adj"].to(device, non_blocking=True)
 
         # Zero gradients using faster method
         for param in model.parameters():
             param.grad = None
 
-        # Forward pass with optional mixed precision
+        # Forward pass with mixed precision
         amp_context = autocast(device_type=str(device)) if use_amp else nullcontext()
         with amp_context:
             predictions = model(x, adj)
             loss = criterion(predictions, y)
 
-        # Backward pass with optional scaling
+        # Backward pass with scaling
         if use_amp:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-        else:
-            loss.backward()
-
-        # Clip gradients
-        if clip_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
-
-        # Optimizer step
-        if use_amp:
+            if clip_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             scaler.step(optimizer)
             scaler.update()
         else:
+            loss.backward()
+            if clip_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
 
-        # Logging
-        total_loss += loss.item()
+        # Logging with GPU synchronization
         if batch_idx % log_interval == 0:
-            logger.info(f"Batch {batch_idx}/{num_batches}, " f"Loss: {loss.item():.4f}")
+            torch.cuda.synchronize()  # Ensure accurate timing
+            logger.info(
+                f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}, "
+                f"GPU Memory: {torch.cuda.memory_allocated(device)/1e9:.2f}GB"
+            )
 
-        # Update progress bar
-        if pbar is not None:
-            pbar.update(1)
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
-
-    if pbar is not None:
-        pbar.close()
+        total_loss += loss.item()
 
     return total_loss / num_batches
 
@@ -387,23 +376,35 @@ def set_random_seeds(seed: int):
 
 
 def setup_device() -> torch.device:
-    """Setup compute device with optimized settings."""
+    """Setup compute device with optimized settings for RTX 4090."""
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
+        
         # Enable memory pinning and optimize CUDA settings
         torch.cuda.init()
-        # Set optimal CUDA settings
-        torch.backends.cuda.matmul.allow_tf32 = (
-            True  # Enable TF32 for better performance
-        )
+        
+        # Enable TF32 for better performance on Ampere GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        # Note: benchmark should be False when input sizes vary significantly
+        
+        # Enable cuDNN benchmarking and deterministic algorithms
         torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        
+        # Set memory allocation to optimal for RTX 4090
+        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
+        
+        # Optional: Set larger chunk sizes for better memory allocation
+        torch.cuda.set_per_process_memory_fraction(0.95, device)
+        torch.cuda.set_chunk_size_limit(512 * 1024 * 1024)  # 512MB chunks
+        
+        logger.info(f"GPU Device: {torch.cuda.get_device_name(device)}")
+        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1e9:.2f} GB")
     else:
         device = torch.device("cpu")
-        # Set optimal CPU settings
-        torch.set_num_threads(os.cpu_count())  # Use all CPU cores
-        torch.set_num_interop_threads(os.cpu_count())  # Optimize inter-op parallelism
+        torch.set_num_threads(os.cpu_count())
+        torch.set_num_interop_threads(os.cpu_count())
+    
     return device
 
 
