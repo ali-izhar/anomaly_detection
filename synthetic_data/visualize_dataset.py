@@ -3,10 +3,10 @@
 """
 Dataset Visualization Script
 
-This script reads the training data from the dataset and creates visualizations showing:
-1. Sequence-level feature time-series for multiple feature types, with change points.
+This script reads the train/val/test data from the dataset and creates visualizations showing:
+1. Sequence-level feature time-series for multiple feature types, with change points (up to 5 sequences per split).
 2. Feature distributions and correlations across the training set.
-3. Training data statistics (e.g., sequence lengths, node counts, etc.).
+3. Basic statistics for each split (e.g., sequence lengths, node counts, etc.).
 
 Can also plot multiple sequences side-by-side on a single figure (dashboard) with dotted lines at actual change points.
 """
@@ -62,7 +62,7 @@ class DatasetVisualizer:
             n_colors=len(self.feature_names),
         )
 
-    def load_data_split(self, split: str = "train") -> Dict[str, Any]:
+    def load_data_split(self, split: str) -> Dict[str, Any]:
         """Load a specific data split (train/val/test) from HDF5, including change points."""
         split_dir = self.data_dir / split
         data_path = split_dir / "data.h5"
@@ -120,7 +120,7 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot the time-series of features (already aggregated) for a single sequence.
+        Plot the time-series of features for a single sequence.
         If change_points are provided, add vertical dashed lines at those points.
         """
         seq_length = int(sequence_lengths[sequence_idx])
@@ -225,7 +225,7 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot distribution of each feature.
+        Plot distribution of each feature from the training set.
         features["all"] is (num_sequences, max_seq_len, 6).
         We'll flatten across all sequences and valid timesteps.
         """
@@ -260,7 +260,7 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot correlation matrix between features.
+        Plot correlation matrix between features for the training set.
         We have (N, T, 6). We'll flatten all sequences and timesteps into one large array of shape (total_samples, 6).
         """
         feat_data = features["all"]
@@ -288,26 +288,27 @@ class DatasetVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.show()
 
-    def visualize_training_data(self, output_dir: str = "visualizations") -> None:
-        """Create comprehensive visualizations of the training data."""
-        print("Loading training data...")
-        data = self.load_data_split("train")
+    def visualize_data_split(
+        self,
+        split_name: str,
+        output_dir: Path,
+        visualize_distributions: bool = False,
+        visualize_correlations: bool = False,
+    ) -> None:
+        """Visualize data for a given split. Only first 5 sequences are shown."""
+        print(f"\nLoading {split_name} data...")
+        data = self.load_data_split(split_name)
         features = data["features"]
         graphs = data["graphs"]
         sequence_lengths = data["sequence_lengths"]
         graph_types = data["graph_types"]
         change_points = data["change_points"]  # Actual changepoints
 
-        # Create output directory
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Print dataset stats
         n_sequences = len(sequence_lengths)
         max_seq_length = graphs.shape[1]
         n_nodes = graphs.shape[2]
 
-        print(f"\nTraining Data Stats:")
+        print(f"\n{split_name.capitalize()} Data Stats:")
         print(f"Number of sequences: {n_sequences}")
         print(f"Max sequence length: {max_seq_length}")
         print(f"Number of nodes: {n_nodes}")
@@ -317,22 +318,27 @@ class DatasetVisualizer:
             for t, c in zip(unique_types, counts):
                 print(f"  {t}: {c} sequences")
 
-        # Plot a few example sequences' feature time-series with actual changepoints
-        print("\nPlotting example sequences...")
-        for i in range(min(5, n_sequences)):
+        # Visualize up to 5 sequences from this split
+        max_to_plot = min(5, n_sequences)
+        print(
+            f"\nPlotting up to {max_to_plot} example sequences from {split_name} set..."
+        )
+        for i in range(max_to_plot):
             cp = change_points[i] if change_points else None
             self.plot_sequence_features(
                 features,
                 sequence_lengths,
                 i,
                 change_points=cp,
-                save_path=output_dir / f"sequence_{i}_features.png",
+                save_path=output_dir / f"{split_name}_sequence_{i}_features.png",
             )
 
-        # Plot a dashboard of multiple sequences (if enough sequences)
+        # Dashboard of multiple sequences if we have at least 5 sequences
         if n_sequences >= 5:
-            print("\nPlotting a dashboard of multiple sequences...")
-            seq_indices = [0, 1, 2, 3, 4]
+            print(
+                f"\nPlotting a dashboard of multiple sequences from {split_name} set..."
+            )
+            seq_indices = list(range(5))
             cp_subset = (
                 [change_points[i] for i in seq_indices] if change_points else None
             )
@@ -343,24 +349,47 @@ class DatasetVisualizer:
                 change_points=cp_subset,
                 rows=2,
                 cols=3,
-                save_path=output_dir / "dashboard_of_sequences.png",
+                save_path=output_dir / f"{split_name}_dashboard_of_sequences.png",
             )
 
-        # Plot feature distributions
-        print("\nPlotting feature distributions...")
-        self.plot_feature_distributions(
-            features,
-            sequence_lengths,
-            save_path=output_dir / "feature_distributions.png",
+        # For train split, we can also visualize distributions and correlations
+        if split_name == "train":
+            if visualize_distributions:
+                print("\nPlotting feature distributions for training set...")
+                self.plot_feature_distributions(
+                    features,
+                    sequence_lengths,
+                    save_path=output_dir / "train_feature_distributions.png",
+                )
+
+            if visualize_correlations:
+                print("\nPlotting feature correlations for training set...")
+                self.plot_feature_correlations(
+                    features,
+                    sequence_lengths,
+                    save_path=output_dir / "train_feature_correlations.png",
+                )
+
+    def visualize_all_splits(self, output_dir: str = "visualizations") -> None:
+        """Visualize data for train/val/test splits."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Visualize training data (with distributions and correlations)
+        self.visualize_data_split(
+            "train",
+            output_dir,
+            visualize_distributions=True,
+            visualize_correlations=True,
         )
 
-        # Plot feature correlations
-        print("\nPlotting feature correlations...")
-        self.plot_feature_correlations(
-            features,
-            sequence_lengths,
-            save_path=output_dir / "feature_correlations.png",
-        )
+        # Visualize validation data (just the first 5 sequences and dashboard)
+        if (self.data_dir / "val").exists():
+            self.visualize_data_split("val", output_dir)
+
+        # Visualize test data (just the first 5 sequences and dashboard)
+        if (self.data_dir / "test").exists():
+            self.visualize_data_split("test", output_dir)
 
         print(f"\nVisualizations saved to: {output_dir}/")
 
@@ -385,9 +414,9 @@ def main():
 
     args = parser.parse_args()
 
-    print("Visualizing training data...")
+    print("Visualizing dataset (train/val/test)...")
     visualizer = DatasetVisualizer(data_dir=args.data_dir, config_path=args.config)
-    visualizer.visualize_training_data()
+    visualizer.visualize_all_splits()
 
 
 if __name__ == "__main__":

@@ -35,8 +35,7 @@ class GraphConfig:
 
     graph_type: GraphType
     nodes: int
-    min_seq_length: int
-    max_seq_length: int
+    seq_len: int
     min_segment: int
     min_changes: int
     max_changes: int
@@ -57,8 +56,7 @@ class GraphConfig:
         return cls(
             graph_type=graph_type,
             nodes=common["nodes"],
-            min_seq_length=common["min_seq_length"],
-            max_seq_length=common["max_seq_length"],
+            seq_len=common["seq_len"],
             min_segment=common["min_segment"],
             min_changes=common["min_changes"],
             max_changes=common["max_changes"],
@@ -71,7 +69,7 @@ def _generate_random_change_points(
 ) -> Tuple[List[int], List[Dict], int, int]:
     """Generate random change points and corresponding parameters."""
     # Generate random sequence length and number of nodes
-    seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
+    seq_len = config.seq_len
     n = config.nodes
     min_seg = config.min_segment
 
@@ -98,8 +96,6 @@ def _generate_random_change_points(
         # Only accept if we have at least minimum required changes
         if len(points) >= config.min_changes:
             break
-        # If we failed, try with a new sequence length
-        seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
 
     # Generate parameters based on graph type
     params = []
@@ -219,9 +215,7 @@ def main(visualize: bool = False):
         print(f"Configuration:")
         print(f"  - Graph type: {config.graph_type.value}")
         print(f"  - Nodes per graph: {config.nodes}")
-        print(
-            f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
-        )
+        print(f"  - Sequence length: {config.seq_len}")
         print(f"  - Minimum segment length: {config.min_segment}")
         print(f"  - Change points range: [{config.min_changes}, {config.max_changes}]")
         print(f"  - Parameters: {config.params}")

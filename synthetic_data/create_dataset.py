@@ -1,10 +1,24 @@
 # synthetic_data/create_dataset.py
 
 """
-Dataset Generator for Graph Anomaly Detection
+Dataset Generator for Graph Forecasting
 
-This module creates synthetic graph datasets with labeled anomalies based on 
-martingale computations and different graph types (BA, ER, NW).
+This module creates synthetic graph datasets with labeled anomalies and global features.
+The dataset is designed for a downstream task of forecasting the next m steps of the 6 global features.
+
+Key Steps:
+1. Generate synthetic graph sequences (BA, ER, NW) with fixed length (e.g., seq_len=200), so no padding is needed.
+2. Compute node-level features (degree, betweenness, closeness, eigenvector, svd, lsvd).
+3. Aggregate them to global features by averaging over nodes to get shape (seq_len, 6).
+4. Since all sequences are of the same length, we simply stack all sequences.
+5. Split into train/val/test sets.
+6. Compute normalization parameters (mean, std) from the training set only, to prevent data leakage.
+7. Apply the same normalization to train, val, and test splits.
+8. Save final normalized data to HDF5 files for easy loading during model training.
+
+Following best practices:
+- Normalization is computed only from the training set.
+- All sequences have the same length, thus no padding is required.
 """
 
 import logging
@@ -13,7 +27,7 @@ import sys
 import h5py
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import yaml
 from tqdm import tqdm
@@ -70,8 +84,7 @@ class DatasetConfig(GraphConfig):
         return cls(
             graph_type=graph_config.graph_type,
             nodes=graph_config_data["common"]["nodes"],
-            min_seq_length=graph_config_data["common"]["min_seq_length"],
-            max_seq_length=graph_config_data["common"]["max_seq_length"],
+            seq_len=graph_config_data["common"]["seq_len"],  # fixed sequence length
             min_segment=graph_config_data["common"]["min_segment"],
             min_changes=graph_config_data["common"]["min_changes"],
             max_changes=graph_config_data["common"]["max_changes"],
@@ -85,18 +98,15 @@ class DatasetConfig(GraphConfig):
 
 
 class DatasetGenerator:
-    """Generator for graph sequences dataset."""
+    """Generator for graph sequences dataset with fixed-length sequences (no padding needed)."""
 
     def __init__(self, config: Optional[DatasetConfig] = None):
         self.config = config or DatasetConfig()
 
     def _compute_features(self, graphs: List[np.ndarray]) -> np.ndarray:
         """Extract and aggregate global features for each graph.
-        Returns a (seq_len, 6) array where columns are:
+        Returns a (seq_len, 6) array with the order:
         [mean_degree, mean_betweenness, mean_eigenvector, mean_closeness, mean_svd, mean_lsvd]
-
-        Each of these features is initially (seq_len, n_nodes), and we take the mean over
-        the node dimension to get a (seq_len,) vector for each feature.
         """
         validate_graph_shapes(graphs)
 
@@ -133,98 +143,86 @@ class DatasetGenerator:
 
         return global_features  # (seq_len, 6)
 
-    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
-        """Normalize the (num_sequences, max_seq_len, 6) feature array independently."""
-        # features shape: (N, T, 6)
-        feat_cp = cp.asarray(features)
-        mean = cp.mean(feat_cp, axis=(0, 1), keepdims=True)
-        std = cp.std(feat_cp, axis=(0, 1), keepdims=True) + 1e-8
-        normalized = (feat_cp - mean) / std
-        return cp.asnumpy(normalized)
-
-    def _pad_data(self, data: Dict) -> Dict:
-        """Pad and normalize the data.
-
-        - data["features"] is a list of arrays (seq_len, 6)
-        - data["graphs"] is a list of arrays (seq_len, n_nodes, n_nodes)
-        We pad them to (num_sequences, max_seq_len, ...) and normalize features.
+    def generate_sequences(self) -> Dict:
+        """Generate all sequences of graphs and their features without normalization.
+        Since all sequences are the same length (seq_len), we can directly stack them.
         """
-        max_seq_len = max(data["sequence_lengths"])
-        num_sequences = len(data["graphs"])
-        n_nodes = data["graphs"][0][0].shape[0]
+        data = {
+            "features": [],
+            "graphs": [],
+            "sequence_lengths": [],
+            "graph_types": [],
+            "change_points": [],
+        }
 
-        # Pad features
-        feat_cp = cp.zeros((num_sequences, max_seq_len, 6), dtype=cp.float32)
-        for i, feat_seq in enumerate(data["features"]):
-            seq_cp = cp.asarray(feat_seq)  # (seq_len, 6)
-            feat_cp[i, : seq_cp.shape[0], :] = seq_cp
-        padded_features = cp.asnumpy(feat_cp)
+        tasks = []
+        for graph_type_str in self.config.graph_types:
+            graph_type = GraphType[graph_type_str.upper()]
+            for _ in range(self.config.num_sequences):
+                graph_config = GraphConfig(
+                    graph_type=graph_type,
+                    nodes=self.config.nodes,
+                    seq_len=self.config.seq_len,
+                    min_segment=self.config.min_segment,
+                    min_changes=self.config.min_changes,
+                    max_changes=self.config.max_changes,
+                    params=self.config.graph_params[graph_type_str.lower()],
+                )
+                tasks.append(graph_config)
 
-        # Pad graphs
-        graphs_cp = cp.zeros(
-            (num_sequences, max_seq_len, n_nodes, n_nodes), dtype=cp.float32
+        # Use multiprocessing to generate sequences
+        with Pool(processes=min(cpu_count(), len(tasks))) as p:
+            results = list(
+                tqdm(
+                    p.imap(self._generate_single_sequence, tasks),
+                    total=len(tasks),
+                    desc="Generating Sequences",
+                    position=0,
+                )
+            )
+
+        for res in results:
+            data["features"].append(res["features"])  # (seq_len, 6)
+            data["graphs"].append(res["graphs"])  # list of (n_nodes, n_nodes)
+            data["sequence_lengths"].append(res["length"])
+            data["graph_types"].append(res["graph_type"])
+            data["change_points"].append(res["change_points"])
+
+        # Since all sequences have the same length, just stack them
+        # features: (num_sequences, seq_len, 6)
+        feat_cp = cp.stack([cp.asarray(f) for f in data["features"]], axis=0)
+        stacked_features = cp.asnumpy(feat_cp)
+
+        # graphs: (num_sequences, seq_len, n_nodes, n_nodes)
+        graphs_cp = cp.stack(
+            [cp.asarray(np.stack(g, axis=0)) for g in data["graphs"]], axis=0
         )
-        for i, graphs in enumerate(data["graphs"]):
-            g_cp = cp.asarray(np.stack(graphs, axis=0), dtype=cp.float32)
-            graphs_cp[i, : g_cp.shape[0]] = g_cp
-        padded_graphs = cp.asnumpy(graphs_cp)
-
-        # Normalize features
-        normalized_features = self._normalize_features(padded_features)
+        stacked_graphs = cp.asnumpy(graphs_cp)
 
         sequence_lengths = np.array(data["sequence_lengths"])
-        graph_types = data["graph_types"]
-
-        # Validate shapes
-        if padded_graphs.shape != (num_sequences, max_seq_len, n_nodes, n_nodes):
-            raise ValueError("Invalid padded graphs shape")
-
-        if normalized_features.shape != (num_sequences, max_seq_len, 6):
-            raise ValueError("Invalid padded features shape")
+        # All lengths must be equal to seq_len
+        if not all(l == self.config.seq_len for l in sequence_lengths):
+            raise ValueError("Not all sequences have the expected fixed length")
 
         return {
-            "features": {"all": normalized_features},
-            "graphs": padded_graphs,
+            "features": {"all": stacked_features},
+            "graphs": stacked_graphs,
             "sequence_lengths": sequence_lengths,
-            "graph_types": graph_types,
+            "graph_types": data["graph_types"],
             "change_points": data["change_points"],
         }
 
-    def _save_to_hdf5(self, data_split: Dict):
-        os.makedirs(self.config.output_dir, exist_ok=True)
-
-        for split_name, data in data_split.items():
-            split_dir = os.path.join(self.config.output_dir, split_name)
-            os.makedirs(split_dir, exist_ok=True)
-
-            with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
-                num_sequences = len(data["graphs"])
-                max_seq_len = data["graphs"].shape[1]
-                n_nodes = data["graphs"].shape[2]
-
-                hf.create_dataset(
-                    "lengths", data=data["sequence_lengths"], compression="gzip"
-                )
-
-                dt = h5py.special_dtype(vlen=str)
-                hf.create_dataset("graph_types", data=data["graph_types"], dtype=dt)
-
-                adj_group = hf.create_group("adjacency")
-                for seq_idx, graphs in enumerate(data["graphs"]):
-                    adj_group.create_dataset(
-                        f"sequence_{seq_idx}", data=graphs, compression="gzip"
-                    )
-
-                feat_group = hf.create_group("features")
-                feat_group.create_dataset(
-                    "all", data=data["features"]["all"], compression="gzip"
-                )
-
-                cp_group = hf.create_group("change_points")
-                for seq_idx, cp in enumerate(data["change_points"]):
-                    cp_group.create_dataset(
-                        f"sequence_{seq_idx}", data=cp, compression="gzip"
-                    )
+    def _generate_single_sequence(self, graph_config: GraphConfig) -> Dict:
+        """Generate a single graph sequence and its features."""
+        result = generate_graph_sequence(graph_config)
+        features = self._compute_features(result["graphs"])
+        return {
+            "graphs": result["graphs"],
+            "features": features,  # (seq_len, 6)
+            "length": len(result["graphs"]),
+            "graph_type": result["graph_type"],
+            "change_points": result["change_points"],
+        }
 
     def _split_dataset(
         self,
@@ -234,6 +232,7 @@ class DatasetGenerator:
         change_points: List,
         graph_types: List[str],
     ) -> Dict:
+        """Split dataset into train/val/test according to split_ratio."""
         num_sequences = len(sequence_lengths)
         indices = np.arange(num_sequences)
         np.random.shuffle(indices)
@@ -272,86 +271,99 @@ class DatasetGenerator:
             },
         }
 
-    def _generate_single_sequence(self, graph_config: GraphConfig) -> Dict:
-        """Generate a single graph sequence and its features."""
-        result = generate_graph_sequence(graph_config)
-        features = self._compute_features(result["graphs"])
-        return {
-            "graphs": result["graphs"],
-            "features": features,  # (seq_len, 6)
-            "length": len(result["graphs"]),
-            "graph_type": result["graph_type"],
-            "change_points": result["change_points"],
-        }
+    def _save_to_hdf5(self, data_split: Dict):
+        os.makedirs(self.config.output_dir, exist_ok=True)
 
-    def generate_sequences(self) -> Dict:
-        data = {
-            "features": [],
-            "graphs": [],
-            "sequence_lengths": [],
-            "graph_types": [],
-            "change_points": [],
-        }
+        for split_name, data in data_split.items():
+            split_dir = os.path.join(self.config.output_dir, split_name)
+            os.makedirs(split_dir, exist_ok=True)
 
-        tasks = []
-        for graph_type_str in self.config.graph_types:
-            graph_type = GraphType[graph_type_str.upper()]
-            for _ in range(self.config.num_sequences):
-                graph_config = GraphConfig(
-                    graph_type=graph_type,
-                    nodes=self.config.nodes,
-                    min_seq_length=self.config.min_seq_length,
-                    max_seq_length=self.config.max_seq_length,
-                    min_segment=self.config.min_segment,
-                    min_changes=self.config.min_changes,
-                    max_changes=self.config.max_changes,
-                    params=self.config.graph_params[graph_type_str.lower()],
+            with h5py.File(os.path.join(split_dir, "data.h5"), "w") as hf:
+                num_sequences = len(data["graphs"])
+                max_seq_len = data["graphs"].shape[1]
+                n_nodes = data["graphs"].shape[2]
+
+                hf.create_dataset(
+                    "lengths", data=data["sequence_lengths"], compression="gzip"
                 )
-                tasks.append(graph_config)
 
-        # Use multiprocessing to generate sequences
-        with Pool(processes=min(cpu_count(), len(tasks))) as p:
-            results = list(
-                tqdm(
-                    p.imap(self._generate_single_sequence, tasks),
-                    total=len(tasks),
-                    desc="Generating Sequences",
-                    position=0,
+                dt = h5py.special_dtype(vlen=str)
+                hf.create_dataset("graph_types", data=data["graph_types"], dtype=dt)
+
+                adj_group = hf.create_group("adjacency")
+                for seq_idx, graphs in enumerate(data["graphs"]):
+                    adj_group.create_dataset(
+                        f"sequence_{seq_idx}", data=graphs, compression="gzip"
+                    )
+
+                feat_group = hf.create_group("features")
+                feat_group.create_dataset(
+                    "all", data=data["features"]["all"], compression="gzip"
                 )
-            )
 
-        for res in results:
-            data["features"].append(res["features"])  # (seq_len, 6)
-            data["graphs"].append(res["graphs"])  # list of (n_nodes, n_nodes)
-            data["sequence_lengths"].append(res["length"])
-            data["graph_types"].append(res["graph_type"])
-            data["change_points"].append(res["change_points"])
+                cp_group = hf.create_group("change_points")
+                for seq_idx, cp in enumerate(data["change_points"]):
+                    cp_group.create_dataset(
+                        f"sequence_{seq_idx}", data=cp, compression="gzip"
+                    )
 
-        # Pad and validate
-        return self._pad_data(data)
+
+def compute_normalization_params(features: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute normalization parameters (mean, std) from training set only.
+    features shape: (N, T, 6)
+    We compute mean and std across all sequences and timesteps in the training set.
+    """
+    feat_cp = cp.asarray(features)
+    mean = cp.mean(feat_cp, axis=(0, 1), keepdims=True)  # shape (1,1,6)
+    std = cp.std(feat_cp, axis=(0, 1), keepdims=True)  # shape (1,1,6)
+    return cp.asnumpy(mean), cp.asnumpy(std)
 
 
 def create_dataset(config: Optional[DatasetConfig] = None) -> Dict:
+    """
+    Create the dataset:
+    - Generate sequences of length seq_len (no padding needed).
+    - Split into train/val/test.
+    - Compute normalization params (mean, std) from TRAIN only.
+    - Normalize train/val/test using these parameters.
+    - Save the normalized dataset.
+    """
     if config is None:
         config = DatasetConfig.from_yaml()
 
     generator = DatasetGenerator(config)
-    data = generator.generate_sequences()
+    # Generate sequences, returns all sequences of equal length, unnormalized
+    unnormalized_data = generator.generate_sequences()
+
+    # Split dataset into train/val/test before normalization
     split_data = generator._split_dataset(
-        sequences=data["features"],
-        graphs=data["graphs"],
-        sequence_lengths=data["sequence_lengths"],
-        change_points=data["change_points"],
-        graph_types=data["graph_types"],
+        sequences=unnormalized_data["features"],
+        graphs=unnormalized_data["graphs"],
+        sequence_lengths=unnormalized_data["sequence_lengths"],
+        change_points=unnormalized_data["change_points"],
+        graph_types=unnormalized_data["graph_types"],
     )
 
+    # Compute normalization params from the training set only
+    train_features = split_data["train"]["features"]["all"]  # shape (N_train, T, 6)
+    mean, std = compute_normalization_params(train_features)
+
+    # Apply normalization to train, val, and test sets
+    # This ensures no data leakage and consistent scaling.
+    for split_name in ["train", "val", "test"]:
+        feats = split_data[split_name]["features"]["all"]
+        normalized = (feats - mean) / (std + 1e-8)
+        split_data[split_name]["features"]["all"] = normalized
+
+    # Save normalized data
     generator._save_to_hdf5(split_data)
     return split_data
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate synthetic graph sequences dataset"
+        description="Generate synthetic graph sequences dataset for forecasting tasks"
     )
     parser.add_argument(
         "--dataset-config",
@@ -391,9 +403,7 @@ def main():
     print(f"Configuration:")
     print(f"  - Graph types: {config.graph_types}")
     print(f"  - Sequences per type: {config.num_sequences}")
-    print(
-        f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
-    )
+    print(f"  - Sequence length: {config.seq_len}")
     print(f"  - Nodes per graph: {config.nodes}")
     print(f"  - Output directory: {config.output_dir}")
     print(f"\nGraph Parameters:")

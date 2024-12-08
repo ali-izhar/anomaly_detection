@@ -64,21 +64,23 @@ def extract_centralities(graphs: List[np.ndarray]) -> Dict[str, List[List[float]
 def compute_embeddings(
     graphs: List[np.ndarray], method: str = "svd", n_components: int = 2
 ) -> List[np.ndarray]:
-    """Compute low-dimensional graph embeddings preserving structural information.
-    - SVD: X = U Sigma V^T, embedding = first k columns of U
-    - LSVD: Applies SVD to Laplacian L = D - A
-      where A is the adjacency matrix and D is the degree matrix
+    """
+    Compute low-dimensional graph embeddings preserving structural information.
+    - SVD: Uses sknetwork's SVD embedding, returns (n_nodes, n_components).
+    - LSVD: Computes unnormalized Laplacian and performs np.linalg.svd.
+      We'll take the top n_components singular values and ensure output is (n_nodes, n_components),
+      where each column is a singular vector or value-based embedding.
 
     Args:
-        graphs: List of adjacency matrices
+        graphs: List of adjacency matrices [n x n]
         method: Embedding type ('svd' or 'lsvd')
         n_components: Embedding dimension k
 
     Returns:
-        List of embeddings as flattened vectors
+        List of embeddings, each is (n_nodes, n_components) array.
 
     Raises:
-        ValueError: For invalid method or input
+        ValueError: If method is unknown or input is empty.
     """
     if not graphs:
         logger.error("Attempted to compute embeddings for empty graph sequence")
@@ -88,16 +90,35 @@ def compute_embeddings(
         raise ValueError(f"Unknown embedding method: {method}")
 
     logger.info(f"Computing {method.upper()} embeddings with {n_components} components")
+
+    def compute_laplacian(adjacency: np.ndarray) -> np.ndarray:
+        degrees = np.sum(adjacency, axis=1)
+        degree_matrix = np.diag(degrees)
+        return degree_matrix - adjacency
+
     try:
         if method == "svd":
             embedder = SVD(n_components=n_components)
             logger.debug("Using SVD embedder")
-            embeddings = [embedder.fit_transform(matrix) for matrix in graphs]
+            embeddings = []
+            for matrix in graphs:
+                emb = embedder.fit_transform(matrix)  # (n_nodes, n_components)
+                # Ensure emb is 2D (it should be by default)
+                if emb.ndim == 1:
+                    emb = emb[:, np.newaxis]
+                embeddings.append(emb)
         else:
-            logger.debug("Computing Laplacian SVD embeddings")
-            embeddings = [
-                np.linalg.svd(compute_laplacian(matrix))[1] for matrix in graphs
-            ]
+            # LSVD: Compute top singular values/vectors from the Laplacian
+            embeddings = []
+            for matrix in graphs:
+                lap = compute_laplacian(matrix)
+                U, S, Vt = np.linalg.svd(lap, full_matrices=False)
+                # S is (n_nodes,) singular values
+                # If we only take singular values, we lose vector info. Typically, for embedding,
+                # we might use singular vectors. Let's assume we use left singular vectors U:
+                # U: (n_nodes, n_nodes), take top n_components columns
+                emb = U[:, :n_components]  # shape (n_nodes, n_components)
+                embeddings.append(emb)
 
         logger.info(f"Successfully computed embeddings for {len(graphs)} graphs")
         return embeddings

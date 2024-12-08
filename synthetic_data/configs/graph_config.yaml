@@ -1,11 +1,10 @@
 # GRAPH GENERATION PARAMETERS
 common:
-  nodes: 100           # Number of nodes in each graph
-  min_seq_length: 150  # Minimum sequence length
-  max_seq_length: 200  # Maximum sequence length
-  min_segment: 40      # Minimum length between changes (increased for stability)
+  nodes: 50            # Number of nodes in each graph
+  seq_len: 200         # Sequence length
+  min_segment: 30      # Minimum length between changes (increased for stability)
   min_changes: 1       # Minimum number of change points
-  max_changes: 3       # Maximum number of change points
+  max_changes: 4       # Maximum number of change points
 
 # BARABASI-ALBERT PARAMETERS
 ba:
