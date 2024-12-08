@@ -14,9 +14,9 @@ model:
   gnn:
     hidden_dim: 64
     num_layers: 2
-    activation: relu
+    activation: "relu"
   temporal:
-    type: LSTM
+    type: "LSTM"
     hidden_dim: 128
     num_layers: 2
     dropout: 0.2
@@ -25,8 +25,10 @@ model:
 
 training:
   epochs: 100
-  learning_rate: 1e-3
-  weight_decay: 1e-5
+  learning_rate: 0.001
+  weight_decay: 0.00001
   early_stopping_patience: 10
+  grad_clip: 1.0
+  gpu_memory_fraction: 0.8
 
-device: cuda
+device: "cuda"

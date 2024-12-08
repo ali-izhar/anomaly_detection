@@ -57,9 +57,9 @@ class GraphTimeSeriesDataset(data.Dataset):
         """
         super().__init__()
         self.split = split
-        self.sequence_length = config["data"]["sequence_length"]
+        self.sequence_length = config["data"]["seq_len"]
         self.m_horizon = config["data"]["m_horizon"]
-        self.num_features = config["data"]["num_features"]
+        self.num_features = config["data"]["n_features"]
 
         # Load data from HDF5 file
         h5_path = os.path.join(data_dir, split, "data.h5")
@@ -260,9 +260,9 @@ def main() -> None:
     # Configuration
     config = {
         "data": {
-            "sequence_length": 188,
+            "seq_len": 188,
             "m_horizon": 12,
-            "num_features": 6,
+            "n_features": 6,
             "batch_size": 32,
         }
     }

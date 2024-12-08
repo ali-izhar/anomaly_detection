@@ -185,3 +185,7 @@ visualizations*/
 
 # synthetic data copy
 *old*/
+
+# model checkpoints
+checkpoints*/
+*.pth
