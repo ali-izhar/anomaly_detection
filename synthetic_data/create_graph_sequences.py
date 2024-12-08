@@ -20,7 +20,7 @@ if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
 from src.graph import GraphGenerator, SyntheticDataGenerator
-from visualize_graphs import GraphVisualizer
+from synthetic_data.visualize_graphs import GraphVisualizer
 
 
 class GraphType(Enum):

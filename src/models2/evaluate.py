@@ -137,7 +137,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="src/models2/train_config.yaml",  # Updated config path
+        default="train_config.yaml",  # Updated config path
         help="Path to the config file",
     )
     parser.add_argument(
