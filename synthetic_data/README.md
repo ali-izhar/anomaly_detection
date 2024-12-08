@@ -1,86 +1,59 @@
 # Synthetic Graph Sequence Generator
 
-A framework for generating evolving graph sequences with controlled structural changes for training and evaluating graph-based machine learning models.
+This framework generates time-evolving graph sequences with controlled structural changes, suitable for training and evaluating graph-based forecasting models.
 
 ## Graph Types
-- **Barabási-Albert (BA):** Scale-free networks characterized by hub formation and power-law degree distribution
-- **Erdős-Rényi (ER):** Random graphs with binomial degree distribution
-- **Newman-Watts (NW):** Small-world networks balancing clustering and path length
+- **Barabási-Albert (BA):** Scale-free networks with hubs and a power-law degree distribution.
+- **Erdős-Rényi (ER):** Random graphs with edges formed independently with a fixed probability.
+- **Newman-Watts (NW):** Small-world networks that balance high clustering with short path lengths.
 
 ## Dataset Structure
 
 ### Sequence Properties
-- Fixed node count $(n=100)$ to ensure consistent feature dimensionality
-- Variable sequence lengths `[150, 200]` timesteps
-- 2-3 structural change points per sequence
-- Minimum 40 timesteps between changes to establish stable patterns
+- **Fixed Node Count:** Each graph has a constant number of nodes (e.g., 50), ensuring consistent dimensionality.
+- **Fixed Sequence Length:** Each sequence is exactly 200 timesteps long.
+- **Controlled Change Points:** Each sequence includes 1-4 structural change points at known timesteps, with a minimum segment length between changes for stable pattern observation.
 
-### Features
-1. Node-level Features `(shape: [batch_size, seq_len, num_nodes])`
-   - Degree centrality: Direct connections per node
-   - Betweenness centrality: Node importance in shortest paths
-   - Closeness centrality: Inverse average distance to other nodes
-   - Eigenvector centrality: Node influence based on neighbor importance
+### Data at Each Timestep
+For each timestep in a sequence, the dataset provides:
+1. **Adjacency Matrix $(n \times n):$** The full graph connectivity.
+2. **Global Feature Vector (6-D):** A single 6-dimensional vector summarizing the entire graph’s properties. These features are:
+   - Degree centrality (aggregated)
+   - Betweenness centrality (aggregated)
+   - Eigenvector centrality (aggregated)
+   - Closeness centrality (aggregated)
+   - SVD-based embedding (aggregated)
+   - LSVD-based embedding (aggregated)
 
-2. Graph Embeddings
-   - Spectral embeddings (SVD): `[batch_size, seq_len, num_nodes, 2]`
-   - Laplacian spectral embeddings (LSVD): `[batch_size, seq_len, num_nodes, 16]`
+   Each of these node-level metrics is computed for every node, then averaged over nodes, yielding a single scalar per feature per timestep. The result is a 6-feature vector representing the global state of the graph at that instant.
 
-### Data Organization
-- Training set (70%): Model parameter learning
-- Validation set (15%): Hyperparameter optimization
-- Test set (15%): Final model evaluation
+### Normalization and Splits
+- **Normalization:**  
+  Normalization parameters (mean, std) are computed from the training set only, ensuring no data leakage. This results in the training set features having approximately zero mean and unit variance. Validation and test sets, when normalized with the training statistics, may not perfectly center at zero or have exactly unit variance, reflecting realistic distribution shifts.
 
-## LSTM-GNN Architecture Guidelines
+- **Data Splits:**  
+  The dataset is split into training, validation, and test sets. For example:
+  - Training: 70%
+  - Validation: 15%
+  - Test: 15%
 
-### Feature Processing
-1. Input Handling
-   - Centrality features: Direct GNN input for spatial patterns
-   - Embeddings: Optional dimensionality reduction via attention
-   - Per-feature normalization for numerical stability
+  This allocation ensures proper model training, tuning, and unbiased evaluation.
 
-2. Spatiotemporal Learning
-   - GNN component: Node interaction patterns
-   - LSTM component: Temporal feature evolution
-   - Combined: Joint spatial-temporal prediction
+### Example Shapes
+- **Features:** `(num_sequences, 200, 6)`  
+  For each sequence (200 timesteps), a 6-dimensional feature vector is available.
+  
+- **Graphs:** `(num_sequences, 200, n_nodes, n_nodes)`  
+  Each sequence has 200 adjacency matrices, each representing the graph’s structure at a given timestep.
 
-### Training Recommendations
+### Configuration Files
+- `graph_config.yaml`: Parameters for graph generation (e.g., number of nodes, parameters for BA/ER/NW models, range of segment lengths).
+- `dataset_config.yaml`: Parameters for sequence generation, including how many sequences to generate, how to introduce change points, and how to split the data.
 
-1. Dataset Generation
-   - Scale: 1500 sequences (500 per graph type)
-   - Distribution: Balanced across graph types
-   - Variety: Diverse structural changes via parameter ranges
+## Use Cases
+The generated dataset can be used to:
+- Train forecasting models to predict future global graph features.
+- Investigate how structural changes affect the predictive task.
+- Develop and benchmark graph-based models that leverage both the graph structure (adjacency) and global features over time.
 
-2. Feature Utilization
-   - Core features: Centrality metrics
-   - Supplementary: Graph embeddings
-   - Normalized independently to preserve relative changes
-
-3. Change Point Handling
-   - Detection: Feature pattern shifts
-   - Adaptation: Prediction adjustment at changes
-   - Forecasting: Post-change evolution
-
-### Dimensions Reference
-```python
-# Dataset Scale (1500 total sequences)
-train_size = 1050  # 70% split
-val_size = 225     # 15% split
-test_size = 225    # 15% split
-
-# Per-Sequence Dimensions
-centrality_shape = (seq_len, num_nodes)        # (199, 100)
-svd_shape = (seq_len, num_nodes, 2)            # (199, 100, 2)
-lsvd_shape = (seq_len, num_nodes, 16)          # (199, 100, 16)
-
-# Batch Processing Shapes
-batch_centrality = (batch_size, seq_len, num_nodes)
-batch_svd = (batch_size, seq_len, num_nodes, 2)
-batch_lsvd = (batch_size, seq_len, num_nodes, 16)
-```
-
-## Configuration
-
-The generator is controlled by three configuration files in `configs/`:
-- `graph_config.yaml`: Graph generation parameters and ranges
-- `dataset_config.yaml`: Sequence generation and splitting parameters
+By providing both the underlying adjacency matrix and the global feature vector per timestep, this dataset supports a wide range of experiments in graph forecasting and anomaly detection tasks.
