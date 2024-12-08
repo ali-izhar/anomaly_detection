@@ -4,7 +4,7 @@
 Graph Sequence Generator
 
 This module generates sequences of graphs (BA, ER, or NW) with a random number of parameter changes.
-Each sequence has between 3-7 change points at random locations, with random parameters.
+Each sequence has between 1-3 change points at random locations, with random parameters.
 """
 
 import sys
@@ -34,8 +34,7 @@ class GraphConfig:
     """Configuration for graph generation"""
 
     graph_type: GraphType
-    min_n: int
-    max_n: int
+    nodes: int
     min_seq_length: int
     max_seq_length: int
     min_segment: int
@@ -57,8 +56,7 @@ class GraphConfig:
 
         return cls(
             graph_type=graph_type,
-            min_n=common["min_n"],
-            max_n=common["max_n"],
+            nodes=common["nodes"],
             min_seq_length=common["min_seq_length"],
             max_seq_length=common["max_seq_length"],
             min_segment=common["min_segment"],
@@ -74,7 +72,7 @@ def _generate_random_change_points(
     """Generate random change points and corresponding parameters."""
     # Generate random sequence length and number of nodes
     seq_len = np.random.randint(config.min_seq_length, config.max_seq_length + 1)
-    n = config.max_n
+    n = config.nodes
     min_seg = config.min_segment
 
     # Generate change points
@@ -106,10 +104,8 @@ def _generate_random_change_points(
     # Generate parameters based on graph type
     params = []
     if config.graph_type == GraphType.BA:
-        # Start with initial edges
-        m_initial = np.random.randint(
-            config.params["min_edges"], config.params["max_edges"] + 1
-        )
+        # Use the specified initial edges from config
+        m_initial = config.params["edges"]
         params.append({"m1": m_initial, "m2": m_initial})
 
         # For each change point, ensure significant parameter change
@@ -126,8 +122,8 @@ def _generate_random_change_points(
             prev_m = m
 
     elif config.graph_type == GraphType.ER:
-        # Start with initial probability
-        p_initial = np.random.uniform(config.params["min_p"], config.params["max_p"])
+        # Use the specified initial probability from config
+        p_initial = config.params["p"]
         params.append({"p1": p_initial, "p2": p_initial})
 
         # For each change point, ensure significant parameter change
@@ -142,11 +138,9 @@ def _generate_random_change_points(
             prev_p = p
 
     elif config.graph_type == GraphType.NW:
-        # Start with initial k and p
-        k_initial = np.random.randint(
-            config.params["min_k"], config.params["max_k"] + 1
-        )
-        p_initial = np.random.uniform(config.params["min_p"], config.params["max_p"])
+        # Use the specified initial k and p from config
+        k_initial = config.params["k"]
+        p_initial = config.params["p"]
         params.append(
             {"k1": k_initial, "k2": k_initial, "p1": p_initial, "p2": p_initial}
         )
@@ -224,7 +218,7 @@ def main(visualize: bool = False):
         print("-" * 50)
         print(f"Configuration:")
         print(f"  - Graph type: {config.graph_type.value}")
-        print(f"  - Nodes per graph range: [{config.min_n}, {config.max_n}]")
+        print(f"  - Nodes per graph: {config.nodes}")
         print(
             f"  - Sequence length range: [{config.min_seq_length}, {config.max_seq_length}]"
         )
