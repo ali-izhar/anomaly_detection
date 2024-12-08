@@ -9,40 +9,53 @@ import psutil
 import logging
 import numpy as np
 from pathlib import Path
+import torch.utils.data as data
+from typing import Dict, Tuple
+from torch import Tensor
 
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
-from torch.utils.data import Dataset, DataLoader
 from src.utils.normalization import Normalizer
 
 
-def print_hdf5_structure(file_path):
-    """Helper function to print the structure of an HDF5 file."""
-    def print_attrs(name, obj):
-        print(f"Found object: {name} | Type: {type(obj).__name__}")
-        if hasattr(obj, 'shape'):
-            print(f"  Shape: {obj.shape}")
-        if hasattr(obj, 'dtype'):
-            print(f"  Dtype: {obj.dtype}")
-    
+def print_hdf5_structure(file_path: str) -> None:
+    """Print the structure and metadata of an HDF5 file.
+
+    Args:
+        file_path: Path to the HDF5 file
+    """
+
+    def print_attrs(name: str, obj: h5py.Dataset) -> None:
+        logging.info(f"Found object: {name} | Type: {type(obj).__name__}")
+        if hasattr(obj, "shape"):
+            logging.info(f"  Shape: {obj.shape}")
+        if hasattr(obj, "dtype"):
+            logging.info(f"  Dtype: {obj.dtype}")
+
     try:
-        with h5py.File(file_path, 'r') as f:
-            print(f"\nStructure of {file_path}:")
+        with h5py.File(file_path, "r") as f:
+            logging.info(f"\nStructure of {file_path}:")
             f.visititems(print_attrs)
     except Exception as e:
-        print(f"Error reading {file_path}: {str(e)}")
+        logging.error(f"Error reading {file_path}: {str(e)}")
 
 
-class GraphTimeSeriesDataset(Dataset):
-    def __init__(self, data_dir, split, config):
+class GraphTimeSeriesDataset(data.Dataset):
+    """Dataset class for graph time series data.
+
+    Handles loading and preprocessing of temporal graph data from HDF5 files.
+    """
+
+    def __init__(self, data_dir: str, split: str, config: Dict) -> None:
         """
         Args:
-            data_dir (str): Path to the processed data.
-            split (str): One of 'train', 'val', 'test'.
-            config (dict): Configuration dictionary.
+            data_dir: Path to the processed data directory
+            split: One of 'train', 'val', 'test'
+            config: Configuration dictionary containing data parameters
         """
+        super().__init__()
         self.split = split
         self.sequence_length = config["data"]["sequence_length"]
         self.m_horizon = config["data"]["m_horizon"]
@@ -50,214 +63,272 @@ class GraphTimeSeriesDataset(Dataset):
 
         # Load data from HDF5 file
         h5_path = os.path.join(data_dir, split, "data.h5")
-        
+        self._load_data(h5_path)
+
+        # Handle normalization
+        self._setup_normalizer(data_dir, split)
+
+        # Log dataset info
+        logging.info(f"\nLoaded data shapes for {split}:")
+        logging.info(f"Features shape: {self.features.shape}")
+        logging.info(f"Adjacency matrices shape: {self.adj_matrices.shape}")
+        logging.info(f"Lengths shape: {self.lengths.shape}")
+
+    def _load_data(self, h5_path: str) -> None:
+        """Load data from HDF5 file."""
         if not os.path.exists(h5_path):
             raise FileNotFoundError(f"Data file not found: {h5_path}")
-        
+
         try:
             with h5py.File(h5_path, "r") as f:
-                # Load features
-                self.features = f["features/all"][:]      # Shape: (num_samples, T, num_features)
-                self.lengths = f["lengths"][:]            # Load sequence lengths
-                
-                # Load and reshape adjacency matrix if needed
+                self.features = torch.from_numpy(f["features/all"][:])
+                self.lengths = torch.from_numpy(f["lengths"][:])
+
+                # Handle adjacency matrices
                 if isinstance(f["adjacency"], h5py.Group):
-                    adj_data = []
-                    for i in range(len(self.features)):
-                        seq_adj = f[f"adjacency/sequence_{i}"][:]
-                        adj_data.append(seq_adj)
-                    self.adj_matrices = np.array(adj_data)
+                    adj_data = [
+                        f[f"adjacency/sequence_{i}"][:]
+                        for i in range(len(self.features))
+                    ]
+                    self.adj_matrices = torch.from_numpy(np.array(adj_data))
                 else:
-                    self.adj_matrices = f["adjacency"][:]
-                
-                # Store graph types if needed
-                self.graph_types = [gt.decode('utf-8') for gt in f["graph_types"][:]]
-                
-                # Store change points dictionary
-                self.change_points = {}
-                for i in range(len(self.features)):
-                    cp_key = f"change_points/sequence_{i}"
-                    if cp_key in f:
-                        self.change_points[i] = f[cp_key][:]
+                    self.adj_matrices = torch.from_numpy(f["adjacency"][:])
 
+                # Store metadata
+                self.graph_types = [gt.decode("utf-8") for gt in f["graph_types"][:]]
+                self.change_points = {
+                    i: f[f"change_points/sequence_{i}"][:]
+                    for i in range(len(self.features))
+                    if f"change_points/sequence_{i}" in f
+                }
         except Exception as e:
-            raise Exception(f"Error loading data from {h5_path}: {str(e)}")
+            raise RuntimeError(f"Error loading data from {h5_path}: {str(e)}")
 
-        # Print shapes for debugging
-        print(f"\nLoaded data shapes for {split}:")
-        print(f"Features shape: {self.features.shape}")
-        print(f"Adjacency matrices shape: {self.adj_matrices.shape}")
-        print(f"Lengths shape: {self.lengths.shape}")
-
-        # Initialize normalizer using training data
+    def _setup_normalizer(self, data_dir: str, split: str) -> None:
+        """Setup data normalization."""
         if split == "train":
             self.normalizer = Normalizer()
             # Reshape features to 2D for normalization
             all_features = self.features.reshape(-1, self.features.shape[-1])
-            self.normalizer.fit(all_features)
-            # Save normalizer in the parent data directory
+            self.normalizer.fit(all_features.numpy())
             self.normalizer.save(os.path.join(data_dir, "normalizer.pkl"))
         else:
-            # Load pre-fitted normalizer from parent data directory
             self.normalizer = Normalizer.load(os.path.join(data_dir, "normalizer.pkl"))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.features)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[Dict[str, Tensor], Tensor]:
         if idx >= len(self):
-            raise IndexError(f"Index {idx} out of bounds for dataset of size {len(self)}")
-            
+            raise IndexError(
+                f"Index {idx} out of bounds for dataset of size {len(self)}"
+            )
+
         # Get single sample
-        adj_matrices = self.adj_matrices[idx]  # Shape should be (T, N, N)
-        features = self.features[idx]          # Shape: (T, num_features)
-        length = self.lengths[idx]             # Actual sequence length
-        
-        # Trim sequences to actual length if needed
-        adj_matrices = adj_matrices[:length]
-        features = features[:length]
+        length = self.lengths[idx].item()
+        adj_matrices = self.adj_matrices[idx, :length]  # (T, N, N)
+        features = self.features[idx, :length]  # (T, num_features)
 
         # Normalize features
-        features = self.normalizer.transform(features)
+        features = torch.from_numpy(self.normalizer.transform(features.numpy())).float()
 
-        # Convert to tensors
-        adj_matrices = torch.tensor(adj_matrices, dtype=torch.float32)
-        features = torch.tensor(features, dtype=torch.float32)
-
-        # Input sequence and target
+        # Prepare input sequence and target
         input_seq = {
-            "adj_matrices": adj_matrices[:-self.m_horizon],  # (T - m, N, N)
-            "features": features[:-self.m_horizon],          # (T - m, num_features)
+            "adj_matrices": adj_matrices[: -self.m_horizon],  # (T - m, N, N)
+            "features": features[: -self.m_horizon],  # (T - m, num_features)
         }
-        target_seq = features[-self.m_horizon:]             # (m, num_features) - just the horizon steps
+        target_seq = features[-self.m_horizon :]  # (m, num_features)
 
         return input_seq, target_seq
 
 
-def get_dataloaders(data_dir, config):
-    train_dataset = GraphTimeSeriesDataset(data_dir, "train", config)
-    val_dataset = GraphTimeSeriesDataset(data_dir, "val", config)
-    test_dataset = GraphTimeSeriesDataset(data_dir, "test", config)
+def get_dataloaders(
+    data_dir: str, config: Dict, num_workers: int = 4, pin_memory: bool = True
+) -> Tuple[data.DataLoader, data.DataLoader, data.DataLoader]:
+    """Create DataLoader instances for train, validation and test sets.
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=config["data"]["batch_size"], shuffle=True
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=config["data"]["batch_size"], shuffle=False
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=config["data"]["batch_size"], shuffle=False
-    )
+    Args:
+        data_dir: Path to data directory
+        config: Configuration dictionary
+        num_workers: Number of worker processes for data loading
+        pin_memory: Whether to pin memory for faster GPU transfer
 
-    return train_loader, val_loader, test_loader
+    Returns:
+        Tuple of (train_loader, val_loader, test_loader)
+    """
+    datasets = {
+        split: GraphTimeSeriesDataset(data_dir, split, config)
+        for split in ["train", "val", "test"]
+    }
+
+    loaders = {
+        "train": data.DataLoader(
+            datasets["train"],
+            batch_size=config["data"]["batch_size"],
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        ),
+        "val": data.DataLoader(
+            datasets["val"],
+            batch_size=config["data"]["batch_size"],
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        ),
+        "test": data.DataLoader(
+            datasets["test"],
+            batch_size=config["data"]["batch_size"],
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        ),
+    }
+
+    return loaders["train"], loaders["val"], loaders["test"]
 
 
-def inspect_dataset(dataset, split_name):
-    """Helper function to inspect a dataset's properties."""
-    print(f"\n=== Inspecting {split_name} dataset ===")
+def inspect_dataset(
+    dataset: GraphTimeSeriesDataset, split_name: str
+) -> Dict[str, float]:
+    """Inspect and validate a dataset's properties.
+
+    Args:
+        dataset: Dataset instance to inspect
+        split_name: Name of the data split (train/val/test)
+
+    Returns:
+        Dictionary containing dataset statistics
+    """
+    logging.info(f"\n=== Inspecting {split_name} dataset ===")
 
     # Basic info
-    print(f"Dataset size: {len(dataset)} samples")
+    logging.info(f"Dataset size: {len(dataset)} samples")
 
     # Get a sample
     input_seq, target_seq = dataset[0]
 
     # Inspect shapes
-    print("\nShapes:")
-    print(f"Adjacency matrices: {input_seq['adj_matrices'].shape}")
-    print(f"Features: {input_seq['features'].shape}")
-    print(f"Target sequence: {target_seq.shape}")
+    logging.info("\nShapes:")
+    logging.info(f"Adjacency matrices: {input_seq['adj_matrices'].shape}")
+    logging.info(f"Features: {input_seq['features'].shape}")
+    logging.info(f"Target sequence: {target_seq.shape}")
 
-    # Check data statistics
-    print("\nFeature statistics:")
+    # Calculate statistics
     features = input_seq["features"]
-    print(f"Mean: {features.mean().item():.4f}")
-    print(f"Std: {features.std().item():.4f}")
-    print(f"Min: {features.min().item():.4f}")
-    print(f"Max: {features.max().item():.4f}")
+    stats = {
+        "mean": features.mean().item(),
+        "std": features.std().item(),
+        "min": features.min().item(),
+        "max": features.max().item(),
+        "has_nan": torch.isnan(features).any().item(),
+        "has_inf": torch.isinf(features).any().item(),
+    }
 
-    # Check for NaN/Inf
-    print("\nData validation:")
-    print(f"Contains NaN: {torch.isnan(features).any().item()}")
-    print(f"Contains Inf: {torch.isinf(features).any().item()}")
+    # Log statistics
+    logging.info("\nFeature statistics:")
+    logging.info(f"Mean: {stats['mean']:.4f}")
+    logging.info(f"Std: {stats['std']:.4f}")
+    logging.info(f"Min: {stats['min']:.4f}")
+    logging.info(f"Max: {stats['max']:.4f}")
+
+    # Data validation
+    logging.info("\nData validation:")
+    logging.info(f"Contains NaN: {stats['has_nan']}")
+    logging.info(f"Contains Inf: {stats['has_inf']}")
+
+    return stats
 
 
-def get_memory_usage():
-    """Get current memory usage in MB."""
+def get_memory_usage() -> float:
+    """Get current memory usage of the process.
+
+    Returns:
+        Memory usage in megabytes
+    """
     process = psutil.Process()
     return process.memory_info().rss / 1024 / 1024
 
 
-def main():
+def main() -> None:
+    """Main function to test and validate the dataset implementation."""
     # Setup logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
-    # Updated configuration to match actual data dimensions
+    # Configuration
     config = {
         "data": {
-            "sequence_length": 188,  # Match the actual sequence length we see
+            "sequence_length": 188,
             "m_horizon": 12,
             "num_features": 6,
             "batch_size": 32,
         }
     }
 
-    # Path to your data directory
+    # Data directory
     data_dir = "dataset"
-    
+
     # Verify directory structure
-    logger.info(f"Checking data directory structure...")
-    for split in ['train', 'val', 'test']:
+    for split in ["train", "val", "test"]:
         split_dir = os.path.join(data_dir, split)
-        if not os.path.exists(split_dir):
-            logger.error(f"Directory not found: {split_dir}")
-            continue
-        
         h5_path = os.path.join(split_dir, "data.h5")
-        if not os.path.exists(h5_path):
-            logger.error(f"HDF5 file not found: {h5_path}")
+
+        if not os.path.exists(split_dir):
+            logging.error(f"Directory not found: {split_dir}")
             continue
-        
-        logger.info(f"Found data file: {h5_path}")
+
+        if not os.path.exists(h5_path):
+            logging.error(f"HDF5 file not found: {h5_path}")
+            continue
+
+        logging.info(f"Found data file: {h5_path}")
+        print_hdf5_structure(h5_path)
 
     try:
-        # Record starting memory
+        # Track memory and time
         start_memory = get_memory_usage()
         start_time = time.time()
 
-        logger.info("Loading dataloaders...")
-        train_loader, val_loader, test_loader = get_dataloaders(data_dir, config)
+        # Create dataloaders
+        logging.info("Loading dataloaders...")
+        train_loader, val_loader, test_loader = get_dataloaders(
+            data_dir, config, num_workers=4, pin_memory=torch.cuda.is_available()
+        )
 
-        # Memory usage after loading
-        memory_after_loading = get_memory_usage()
-        loading_time = time.time() - start_time
+        # Log memory usage
+        memory_used = get_memory_usage() - start_memory
+        time_taken = time.time() - start_time
+        logging.info(f"Data loading completed in {time_taken:.2f} seconds")
+        logging.info(f"Memory usage: {memory_used:.2f} MB")
 
-        logger.info(f"Data loading completed in {loading_time:.2f} seconds")
-        logger.info(f"Memory usage: {memory_after_loading - start_memory:.2f} MB")
-
-        # Inspect each dataset
-        inspect_dataset(train_loader.dataset, "Training")
-        inspect_dataset(val_loader.dataset, "Validation")
-        inspect_dataset(test_loader.dataset, "Test")
+        # Inspect datasets
+        dataset_stats = {}
+        for name, loader in [
+            ("Training", train_loader),
+            ("Validation", val_loader),
+            ("Test", test_loader),
+        ]:
+            dataset_stats[name] = inspect_dataset(loader.dataset, name)
 
         # Test batch iteration
-        logger.info("\nTesting batch iteration...")
-        for batch_idx, (input_seq, target_seq) in enumerate(train_loader):
-            if batch_idx == 0:
-                print("\nFirst batch shapes:")
-                print(f"Input adjacency matrices: {input_seq['adj_matrices'].shape}")
-                print(f"Input features: {input_seq['features'].shape}")
-                print(f"Target sequence: {target_seq.shape}")
-                break
+        logging.info("\nTesting batch iteration...")
+        batch = next(iter(train_loader))
+        input_seq, target_seq = batch
 
-        # Memory usage after everything
-        final_memory = get_memory_usage()
-        logger.info(f"\nFinal memory usage: {final_memory - start_memory:.2f} MB")
+        logging.info("\nFirst batch shapes:")
+        logging.info(f"Input adjacency matrices: {input_seq['adj_matrices'].shape}")
+        logging.info(f"Input features: {input_seq['features'].shape}")
+        logging.info(f"Target sequence: {target_seq.shape}")
+
+        # Final memory usage
+        final_memory = get_memory_usage() - start_memory
+        logging.info(f"\nFinal memory usage: {final_memory:.2f} MB")
 
     except Exception as e:
-        logger.error(f"Error occurred: {str(e)}")
-        raise e
+        logging.error(f"Error occurred: {str(e)}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":
