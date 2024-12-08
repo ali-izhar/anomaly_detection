@@ -1,0 +1,32 @@
+# src/models2/train_config.yaml
+
+data:
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  seq_len: 200
+  n_nodes: 50
+  n_features: 6
+  batch_size: 32
+  m_horizon: 10
+
+model:
+  gnn:
+    hidden_dim: 64
+    num_layers: 2
+    activation: relu
+  temporal:
+    type: LSTM
+    hidden_dim: 128
+    num_layers: 2
+    dropout: 0.2
+  forecast:
+    m_horizon: 10
+
+training:
+  epochs: 100
+  learning_rate: 1e-3
+  weight_decay: 1e-5
+  early_stopping_patience: 10
+
+device: cuda
