@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn as nn
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 from torch import Tensor
 from torch_geometric.nn import GCNConv
 
@@ -20,9 +20,10 @@ class TemporalGNN(nn.Module):
         hidden_channels: int,
         out_channels: int,
         num_nodes: int,
-        num_layers: int = 2,
-        dropout: float = 0.1,
+        num_layers: int = 3,
+        dropout: float = 0.3,
         activation: str = "relu",
+        config: Optional[Dict] = None,
     ) -> None:
         """Initialize the Temporal GNN.
 
@@ -34,10 +35,56 @@ class TemporalGNN(nn.Module):
             num_layers: Number of GNN layers
             dropout: Dropout probability
             activation: Activation function ('relu' or 'gelu')
+            config: Configuration dictionary
         """
         super().__init__()
         self.num_nodes = num_nodes
         self.in_channels = in_channels
+        
+        # Get model config
+        if config is None:
+            config = {}
+        gnn_config = config.get("model", {}).get("gnn", {})
+        hw_config = config.get("hardware", {})
+        
+        # Use config values with defaults
+        self.hidden_dim = gnn_config.get("hidden_dim", hidden_channels)
+        self.num_layers = gnn_config.get("num_layers", num_layers)
+        self.dropout_rate = gnn_config.get("dropout", dropout)
+        self.activation_type = gnn_config.get("activation", activation)
+        
+        # Memory optimization settings
+        self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
+        self.memory_efficient = hw_config.get("memory_efficient_attention", True)
+
+        # Get attention config
+        attention_config = hw_config.get("attention", {})
+
+        # Add memory-efficient attention mechanism
+        attention_heads = attention_config.get("num_heads", 4)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_channels,
+            num_heads=attention_heads,
+            dropout=dropout,
+            batch_first=True,
+            # Enable memory efficient attention
+            **({"attention_probs_dropout_prob": dropout} if hasattr(nn.MultiheadAttention, "attention_probs_dropout_prob") else {})
+        )
+        
+        # Add chunking for attention computation
+        self.chunk_size = attention_config.get("chunk_size", 128)
+
+        # Define chunk attention function
+        def chunk_attention(h):
+            chunks = []
+            for i in range(0, h.size(0), self.chunk_size):
+                chunk = h[i:i + self.chunk_size]
+                chunk = chunk.unsqueeze(0)  # Add sequence dimension
+                chunk_out, _ = self.attention(chunk, chunk, chunk)
+                chunks.append(chunk_out.squeeze(0))
+            return torch.cat(chunks, dim=0)
+        
+        self.chunk_attention = chunk_attention
 
         # Input projection
         self.input_proj = nn.Linear(in_channels, hidden_channels)
@@ -56,6 +103,26 @@ class TemporalGNN(nn.Module):
         # Other components
         self.dropout = nn.Dropout(dropout)
         self.activation = nn.ReLU() if activation == "relu" else nn.GELU()
+
+        # Add layer normalization
+        self.layer_norm = nn.LayerNorm(hidden_channels)
+        
+        # Add skip connections
+        self.use_skip = True if num_layers > 1 else False
+        
+        # Add memory-efficient attention mechanism
+        attention_heads = config.get("hardware", {}).get("attention", {}).get("num_heads", 4)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_channels,
+            num_heads=attention_heads,
+            dropout=dropout,
+            batch_first=True,
+            # Enable memory efficient attention
+            **({"attention_probs_dropout_prob": dropout} if hasattr(nn.MultiheadAttention, "attention_probs_dropout_prob") else {})
+        )
+        
+        # Add chunking for attention computation
+        self.chunk_size = config.get("hardware", {}).get("attention", {}).get("chunk_size", 128)
 
     def _process_single_timestep(self, x: Tensor, adj: Tensor) -> Tensor:
         """Process a single timestep of the temporal graph.
@@ -83,21 +150,34 @@ class TemporalGNN(nn.Module):
             if edge_index.size(0) != 2:
                 edge_index = edge_index.t()  # Transpose if needed
             
-            # Initial projection
-            h = self.input_proj(x_b)  # [N, hidden_channels]
+            # Initial projection with layer norm
+            h = self.input_proj(x_b)
+            h = self.layer_norm(h)
             
-            # Apply GNN layers
+            # Store initial representation for skip connection
+            h_initial = h
+            
+            # Apply GNN layers with skip connections
             for conv, batch_norm in zip(self.convs, self.batch_norms):
-                # Apply convolution
                 h_conv = conv(h, edge_index)
-                # Apply batch norm
                 h_conv = batch_norm(h_conv)
-                # Apply activation and dropout
+                
+                # Apply chunked attention using the class method
+                h_conv = self.chunk_attention(h_conv)
+                
                 h_conv = self.activation(h_conv)
                 h_conv = self.dropout(h_conv)
-                # Residual connection
-                h = h + h_conv
+                
+                # Skip connection
+                if self.use_skip:
+                    h = h + h_conv
+                else:
+                    h = h_conv
             
+            # Final skip connection to initial representation
+            if self.use_skip:
+                h = h + h_initial
+                
             batch_embeddings.append(h)
         
         # Stack all batch embeddings

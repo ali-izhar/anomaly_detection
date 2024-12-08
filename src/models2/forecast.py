@@ -40,20 +40,27 @@ class GraphTemporalForecaster(nn.Module):
         self.forecast_horizon = config["data"]["m_horizon"]
         self.device = device
 
-        # GNN for spatial modeling
+        # Get configs
         gnn_config = config["model"]["gnn"]
+        temporal_config = config["model"]["temporal"]
+        hw_config = config.get("hardware", {})
+        
+        # Memory optimization settings
+        self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
+        self.memory_efficient = hw_config.get("memory_efficient_attention", True)
+        
+        # Initialize components with full config
         self.gnn = TemporalGNN(
             in_channels=node_feat_dim,
             hidden_channels=gnn_config["hidden_dim"],
             out_channels=gnn_config["hidden_dim"],
             num_nodes=num_nodes,
             num_layers=gnn_config["num_layers"],
-            dropout=gnn_config.get("dropout", 0.1),
+            dropout=gnn_config.get("dropout", 0.3),
+            config=config
         )
 
         # Temporal predictor for sequence modeling
-        temporal_config = config["model"]["temporal"]
-        # Input dim: GNN output + global features
         temporal_input_dim = gnn_config["hidden_dim"]
         self.temporal = TemporalPredictor(
             input_dim=temporal_input_dim,
@@ -63,6 +70,7 @@ class GraphTemporalForecaster(nn.Module):
             num_layers=temporal_config["num_layers"],
             dropout=temporal_config["dropout"],
             model_type=temporal_config["type"],
+            config=config
         )
 
     def forward(
@@ -118,51 +126,49 @@ class GraphTemporalForecaster(nn.Module):
         learning_rate: float,
         weight_decay: float,
     ) -> Dict:
-        """Configure optimizers and learning rate schedulers.
-
-        Args:
-            learning_rate: Learning rate for optimizers
-            weight_decay: Weight decay for regularization
-
-        Returns:
-            Dictionary containing optimizers and schedulers
-        """
-        # Convert to float in case they come as strings
-        lr = float(learning_rate)
-        wd = float(weight_decay)
+        """Configure optimizers and learning rate schedulers."""
+        # Get optimizer settings from config and convert to proper types
+        opt_config = self.config["training"]["optimizer"]
+        betas = tuple(float(b) for b in opt_config["betas"])  # Convert to float tuple
+        eps = float(opt_config["eps"])  # Convert eps to float
         
-        # Separate optimizers for GNN and temporal components
+        # Create optimizers with configured parameters
         gnn_optimizer = torch.optim.AdamW(
             self.gnn.parameters(),
-            lr=lr,
-            weight_decay=wd,
+            lr=float(learning_rate),
+            weight_decay=float(weight_decay),
+            betas=betas,
+            eps=eps
         )
+        
         temporal_optimizer = torch.optim.AdamW(
             self.temporal.parameters(),
-            lr=lr,
-            weight_decay=wd,
+            lr=float(learning_rate),
+            weight_decay=float(weight_decay),
+            betas=betas,
+            eps=eps
         )
 
-        # Calculate total steps for schedulers based on dataset size
-        batch_size = self.config["data"]["batch_size"]
-        train_size = int(900 * self.config["data"]["train_split"])  # Approximate dataset size
-        steps_per_epoch = train_size // batch_size
-        total_steps = steps_per_epoch * self.config["training"]["epochs"]
-
-        # Learning rate schedulers
-        gnn_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        # Get scheduler settings from config and convert to proper types
+        sched_config = self.config["training"]["scheduler"]
+        
+        # Create schedulers
+        gnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             gnn_optimizer,
-            max_lr=lr,
-            total_steps=total_steps,
-            pct_start=0.3,
-            anneal_strategy="cos",
+            mode=sched_config["mode"],
+            factor=float(sched_config["factor"]),
+            patience=int(sched_config["patience"]),
+            min_lr=float(sched_config["min_lr"]),
+            cooldown=int(sched_config["cooldown"])
         )
-        temporal_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        
+        temporal_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             temporal_optimizer,
-            max_lr=lr,
-            total_steps=total_steps,
-            pct_start=0.3,
-            anneal_strategy="cos",
+            mode=sched_config["mode"],
+            factor=float(sched_config["factor"]),
+            patience=int(sched_config["patience"]),
+            min_lr=float(sched_config["min_lr"]),
+            cooldown=int(sched_config["cooldown"])
         )
 
         return {

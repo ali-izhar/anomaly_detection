@@ -19,22 +19,29 @@ from src.utils.metrics import mse_loss, evaluate
 from src.utils.helpers import save_model, count_parameters
 
 
-def setup_gpu():
-    """Setup GPU device."""
+def setup_gpu(config):
+    """Setup GPU device with optimized settings."""
     if not torch.cuda.is_available():
         return torch.device("cpu")
     
-    # Get GPU device
-    device = torch.device("cuda:0")  # Use first GPU
+    device = torch.device("cuda:0")
     
-    # Print GPU info
-    gpu_name = torch.cuda.get_device_name(device)
-    gpu_memory = torch.cuda.get_device_properties(device).total_memory / 1e9  # Convert to GB
-    logging.info(f"Using GPU: {gpu_name} ({gpu_memory:.1f} GB)")
+    # Initialize CUDA
+    torch.cuda.init()
     
-    # Set GPU memory usage
-    torch.cuda.set_per_process_memory_fraction(0.8)  # Use up to 80% of GPU memory
-    torch.backends.cudnn.benchmark = True  # Enable cudnn autotuner
+    # Get hardware config settings
+    hw_config = config.get("hardware", {})
+    
+    # Enable TF32 for better performance on Ampere GPUs
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
+    # Enable cuDNN benchmarking based on config
+    torch.backends.cudnn.benchmark = hw_config.get("cudnn_benchmark", True)
+    
+    # Set memory allocation from config
+    memory_fraction = config["training"].get("gpu_memory_fraction", 0.95)
+    torch.cuda.set_per_process_memory_fraction(memory_fraction)
     
     return device
 
@@ -47,43 +54,60 @@ def train_epoch(
     device: torch.device,
     grad_clip: float = 1.0,
 ) -> float:
-    """Train model for one epoch."""
+    """Train model for one epoch with mixed precision."""
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
+    
+    # Initialize gradient scaler for mixed precision training
+    scaler = torch.amp.GradScaler()
+    
+    # Enable gradient checkpointing if available
+    if hasattr(model, 'use_checkpoint'):
+        model.use_checkpoint = True
 
     for batch_idx, (input_seq, target_seq) in enumerate(train_loader):
-        # Move data to GPU
+        # Clear cache before each batch
+        if batch_idx % 5 == 0:  # Every 5 batches
+            torch.cuda.empty_cache()
+        
+        # Move data to GPU with non_blocking=True
         input_data = {
             "adj_matrices": input_seq["adj_matrices"].to(device, non_blocking=True),
             "features": input_seq["features"].to(device, non_blocking=True)
         }
         targets = target_seq.to(device, non_blocking=True)
 
-        # Forward pass
-        optimizer.zero_grad(set_to_none=True)  # Slightly more efficient than zero_grad()
-        outputs = model(input_data)
-        predictions = outputs["predictions"]
+        # Forward pass with mixed precision
+        optimizer.zero_grad(set_to_none=True)  # More memory efficient than zero_grad()
         
-        # Compute loss and backward pass
-        loss = loss_fn(predictions, targets)
-        loss.backward()
+        with torch.amp.autocast(device_type='cuda'):
+            outputs = model(input_data)
+            predictions = outputs["predictions"]
+            loss = loss_fn(predictions, targets)
+
+        # Backward pass with gradient scaling
+        scaler.scale(loss).backward()
         
         # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if grad_clip > 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
-        optimizer.step()
+        # Optimizer step with scaler
+        scaler.step(optimizer)
+        scaler.update()
 
-        # Update total loss
+        # Update total loss and log
         total_loss += loss.item()
         
         if batch_idx % 10 == 0:
+            gpu_memory = torch.cuda.memory_allocated(device) / 1e9
+            gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
             logging.info(
-                f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}"
+                f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}, "
+                f"GPU Memory Used/Reserved: {gpu_memory:.2f}GB/{gpu_memory_reserved:.2f}GB"
             )
-            # Clear GPU cache periodically
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
     return total_loss / len(train_loader.dataset)
 
@@ -105,15 +129,20 @@ def main(config_path: str) -> None:
     checkpoints_dir.mkdir(exist_ok=True)
 
     # Set device and GPU settings
-    device = setup_gpu()
+    device = setup_gpu(config=config)
+
+    # Get hardware config
+    hw_config = config.get("hardware", {})
 
     # Prepare data loaders with GPU optimizations
     data_dir = Path("dataset")
     train_loader, val_loader, test_loader = get_dataloaders(
-        data_dir, 
-        config,
-        num_workers=4,  # Adjust based on CPU cores
-        pin_memory=True,  # Enable faster data transfer to GPU
+        data_dir=data_dir, 
+        config=config,
+        num_workers=hw_config.get("num_workers", 4),
+        pin_memory=hw_config.get("pin_memory", True),
+        prefetch_factor=hw_config.get("prefetch_factor", 2),
+        persistent_workers=hw_config.get("persistent_workers", True)
     )
 
     # Initialize model
@@ -125,7 +154,7 @@ def main(config_path: str) -> None:
     ).to(device)
     
     # Enable automatic mixed precision for faster training
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler()
     
     logging.info(f"Model has {count_parameters(model):,} trainable parameters")
 
@@ -155,18 +184,18 @@ def main(config_path: str) -> None:
                 grad_clip=config["training"].get("grad_clip", 1.0)
             )
             
-            # Evaluate
-            val_loss = evaluate(model, val_loader, device, mse_loss)
+            # Evaluate - get only the loss value from the tuple
+            val_loss, _ = evaluate(model, val_loader, device, mse_loss)
             
-            # Step schedulers
-            for scheduler in optim_config["schedulers"].values():
-                scheduler.step()
-                
             # Log progress
             logging.info(
                 f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
             )
 
+            # Step schedulers with validation loss
+            for scheduler in optim_config["schedulers"].values():
+                scheduler.step(val_loss)  # Pass validation loss to scheduler
+            
             # Check for improvement
             if val_loss < best_val_loss:
                 best_val_loss = val_loss

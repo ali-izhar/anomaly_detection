@@ -10,7 +10,7 @@ import logging
 import numpy as np
 from pathlib import Path
 import torch.utils.data as data
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union, Optional
 from torch import Tensor
 
 project_root = Path(__file__).resolve().parents[2]
@@ -143,49 +143,62 @@ class GraphTimeSeriesDataset(data.Dataset):
 
 
 def get_dataloaders(
-    data_dir: str, config: Dict, num_workers: int = 4, pin_memory: bool = True
+    data_dir: Union[str, Path],
+    config: Dict,
+    num_workers: int = 4,
+    pin_memory: bool = True,
+    prefetch_factor: Optional[int] = None,
+    persistent_workers: bool = False,
 ) -> Tuple[data.DataLoader, data.DataLoader, data.DataLoader]:
-    """Create DataLoader instances for train, validation and test sets.
+    """Get train, validation and test dataloaders.
 
     Args:
         data_dir: Path to data directory
         config: Configuration dictionary
-        num_workers: Number of worker processes for data loading
-        pin_memory: Whether to pin memory for faster GPU transfer
+        num_workers: Number of workers for data loading
+        pin_memory: Whether to pin memory for faster data transfer to GPU
+        prefetch_factor: Number of batches to prefetch (only used if num_workers > 0)
+        persistent_workers: Whether to maintain worker processes between iterations
 
     Returns:
-        Tuple of (train_loader, val_loader, test_loader)
+        Train, validation and test dataloaders
     """
-    datasets = {
-        split: GraphTimeSeriesDataset(data_dir, split, config)
-        for split in ["train", "val", "test"]
-    }
+    # Create datasets
+    train_dataset = GraphTimeSeriesDataset(data_dir, "train", config)
+    val_dataset = GraphTimeSeriesDataset(data_dir, "val", config)
+    test_dataset = GraphTimeSeriesDataset(data_dir, "test", config)
 
-    loaders = {
-        "train": data.DataLoader(
-            datasets["train"],
-            batch_size=config["data"]["batch_size"],
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        ),
-        "val": data.DataLoader(
-            datasets["val"],
-            batch_size=config["data"]["batch_size"],
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        ),
-        "test": data.DataLoader(
-            datasets["test"],
-            batch_size=config["data"]["batch_size"],
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        ),
+    # Create dataloaders with hardware optimizations
+    dataloader_kwargs = {
+        'batch_size': config['data']['batch_size'],
+        'num_workers': num_workers,
+        'pin_memory': pin_memory,
+        'persistent_workers': persistent_workers if num_workers > 0 else False,
     }
+    
+    # Add prefetch_factor only if using workers
+    if num_workers > 0 and prefetch_factor is not None:
+        dataloader_kwargs['prefetch_factor'] = prefetch_factor
 
-    return loaders["train"], loaders["val"], loaders["test"]
+    train_loader = data.DataLoader(
+        train_dataset,
+        shuffle=True,
+        **dataloader_kwargs
+    )
+
+    val_loader = data.DataLoader(
+        val_dataset,
+        shuffle=False,
+        **dataloader_kwargs
+    )
+
+    test_loader = data.DataLoader(
+        test_dataset,
+        shuffle=False,
+        **dataloader_kwargs
+    )
+
+    return train_loader, val_loader, test_loader
 
 
 def inspect_dataset(
