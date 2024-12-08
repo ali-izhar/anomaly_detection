@@ -1,11 +1,16 @@
 # src/models2/evaluate.py
 
+import sys
 import torch
 import yaml
 import argparse
 import logging
 from pathlib import Path
 from typing import Dict
+
+project_root = Path(__file__).resolve().parents[2]
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
 
 from src.models2.datasets import get_dataloaders
 from src.models2.forecast import GraphTemporalForecaster
