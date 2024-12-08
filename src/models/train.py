@@ -291,8 +291,9 @@ def main():
     best_val_loss = float("inf")
     patience = config["training"]["patience"]
     patience_counter = 0
+    start_epoch = 0
 
-    for epoch in range(config["training"]["epochs"]):
+    for epoch in range(start_epoch, config["training"]["epochs"]):
         # Training
         train_loss = train_epoch(
             model=model,
@@ -334,7 +335,7 @@ def main():
                 epoch=epoch,
                 loss=val_loss,
                 config=config,
-                path=output_dir / "best_model.pt",
+                path=output_dir / "best_model",
             )
         else:
             patience_counter += 1
@@ -345,7 +346,13 @@ def main():
             break
 
     # Final evaluation on test set
-    model.load_state_dict(torch.load(output_dir / "best_model.pt")["model_state_dict"])
+    logger.info("Loading best model for testing...")
+    load_checkpoint(
+        model=model,
+        optimizer=None,
+        scheduler=None,
+        path=output_dir / "best_model",
+    )
     test_loss, test_feature_losses = validate(model, test_loader, criterion, device)
     logger.info(f"Test Loss: {test_loss:.4f}")
 
@@ -414,17 +421,38 @@ def save_checkpoint(
     path: Path,
 ):
     """Save model checkpoint."""
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-            "loss": loss,
-            "config": config,
-        },
-        path,
-    )
+    # Save model state dict separately with weights_only=True
+    torch.save(model.state_dict(), path.with_suffix('.model'), weights_only=True)
+    
+    # Save other training state
+    metadata = {
+        'epoch': epoch,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss': loss,
+        'config': config,
+    }
+    torch.save(metadata, path.with_suffix('.meta'))
+
+
+def load_checkpoint(
+    model: nn.Module,
+    optimizer: Optional[torch.optim.Optimizer],
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    path: Path,
+) -> Tuple[int, float]:
+    """Load model checkpoint and training state."""
+    # Load model weights safely
+    model.load_state_dict(torch.load(path.with_suffix('.model'), weights_only=True))
+    
+    # Load training state if optimizer and scheduler are provided
+    if optimizer is not None and scheduler is not None:
+        metadata = torch.load(path.with_suffix('.meta'))
+        optimizer.load_state_dict(metadata['optimizer_state_dict'])
+        scheduler.load_state_dict(metadata['scheduler_state_dict'])
+        return metadata['epoch'], metadata['loss']
+    
+    return 0, float('inf')
 
 
 if __name__ == "__main__":
