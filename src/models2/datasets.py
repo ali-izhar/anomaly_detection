@@ -105,15 +105,30 @@ class GraphTimeSeriesDataset(data.Dataset):
             raise RuntimeError(f"Error loading data from {h5_path}: {str(e)}")
 
     def _setup_normalizer(self, data_dir: str, split: str) -> None:
-        """Setup data normalization."""
+        """Setup data normalization using robust scaling."""
         if split == "train":
-            self.normalizer = Normalizer()
-            # Reshape features to 2D for normalization
-            all_features = self.features.reshape(-1, self.features.shape[-1])
-            self.normalizer.fit(all_features.numpy())
-            self.normalizer.save(os.path.join(data_dir, "normalizer.pkl"))
+            features = self.features.reshape(-1, self.features.shape[-1])
+            
+            # Calculate robust statistics
+            q1 = torch.quantile(features, 0.25, dim=0)
+            q3 = torch.quantile(features, 0.75, dim=0)
+            median = torch.median(features, dim=0).values
+            iqr = q3 - q1 + 1e-6  # Add epsilon to avoid division by zero
+            
+            self.feature_center = median
+            self.feature_scale = iqr
+            
+            # Save statistics
+            torch.save({
+                'center': self.feature_center,
+                'scale': self.feature_scale,
+                'q1': q1,
+                'q3': q3
+            }, os.path.join(data_dir, "normalization_stats.pt"))
         else:
-            self.normalizer = Normalizer.load(os.path.join(data_dir, "normalizer.pkl"))
+            stats = torch.load(os.path.join(data_dir, "normalization_stats.pt"))
+            self.feature_center = stats['center']
+            self.feature_scale = stats['scale']
 
     def __len__(self) -> int:
         return len(self.features)
@@ -129,8 +144,9 @@ class GraphTimeSeriesDataset(data.Dataset):
         adj_matrices = self.adj_matrices[idx, :length]  # (T, N, N)
         features = self.features[idx, :length]  # (T, num_features)
 
-        # Normalize features
-        features = torch.from_numpy(self.normalizer.transform(features.numpy())).float()
+        # Apply robust scaling with clipping
+        features = (features - self.feature_center) / self.feature_scale
+        features = torch.clamp(features, -3, 3)  # Clip outliers
 
         # Prepare input sequence and target
         input_seq = {

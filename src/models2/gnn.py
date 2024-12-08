@@ -124,6 +124,9 @@ class TemporalGNN(nn.Module):
         # Add chunking for attention computation
         self.chunk_size = config.get("hardware", {}).get("attention", {}).get("chunk_size", 128)
 
+        # Add feature importance tracking
+        self.feature_importance = nn.Parameter(torch.ones(in_channels))
+
     def _process_single_timestep(self, x: Tensor, adj: Tensor) -> Tensor:
         """Process a single timestep of the temporal graph.
 
@@ -209,6 +212,9 @@ class TemporalGNN(nn.Module):
             # Get features and adj matrix for current timestep
             xt = x[:, t]  # [batch_size, num_features]
             adjt = adj[:, t]  # [batch_size, N, N]
+            
+            # Apply feature importance
+            xt = xt * self.feature_importance
             
             # Process current timestep
             ht = self._process_single_timestep(xt, adjt)  # [batch_size, N, hidden_channels]

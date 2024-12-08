@@ -49,29 +49,52 @@ class GraphTemporalForecaster(nn.Module):
         self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
         self.memory_efficient = hw_config.get("memory_efficient_attention", True)
         
-        # Initialize components with full config
+        # Define dimensions
+        self.gnn_hidden_dim = gnn_config["hidden_dim"]
+        self.temporal_hidden_dim = temporal_config["hidden_dim"]
+        
+        # Initialize GNN
         self.gnn = TemporalGNN(
             in_channels=node_feat_dim,
-            hidden_channels=gnn_config["hidden_dim"],
-            out_channels=gnn_config["hidden_dim"],
+            hidden_channels=self.gnn_hidden_dim,
+            out_channels=self.gnn_hidden_dim,  # GNN output dimension
             num_nodes=num_nodes,
             num_layers=gnn_config["num_layers"],
             dropout=gnn_config.get("dropout", 0.3),
             config=config
         )
 
-        # Temporal predictor for sequence modeling
-        temporal_input_dim = gnn_config["hidden_dim"]
+        # Add projections for dimension matching
+        self.gnn_to_temporal_proj = nn.Linear(self.gnn_hidden_dim, self.temporal_hidden_dim)
+        self.feature_to_temporal_proj = nn.Linear(node_feat_dim, self.temporal_hidden_dim)
+        self.temporal_to_output_proj = nn.Linear(self.temporal_hidden_dim, node_feat_dim)
+
+        # Initialize temporal model with correct dimensions
         self.temporal = TemporalPredictor(
-            input_dim=temporal_input_dim,
-            hidden_dim=temporal_config["hidden_dim"],
-            output_dim=node_feat_dim,
+            input_dim=self.temporal_hidden_dim,  # Input dimension matches projection
+            hidden_dim=self.temporal_hidden_dim,
+            output_dim=self.temporal_hidden_dim,  # Output will be projected to final dim
             forecast_horizon=self.forecast_horizon,
             num_layers=temporal_config["num_layers"],
             dropout=temporal_config["dropout"],
             model_type=temporal_config["type"],
             config=config
         )
+
+        # Add batch normalization
+        self.input_norm = nn.BatchNorm1d(node_feat_dim)
+        self.gnn_norm = nn.LayerNorm(self.temporal_hidden_dim)
+        self.feature_norm = nn.LayerNorm(self.temporal_hidden_dim)
+        self.output_norm = nn.LayerNorm(node_feat_dim)
+        
+        # Initialize weights with smaller values
+        def _init_weights(m):
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.01)  # Reduced gain
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        
+        self.apply(_init_weights)
 
     def forward(
         self,
@@ -92,29 +115,32 @@ class GraphTemporalForecaster(nn.Module):
                 - node_embeddings: Node-level embeddings if needed for visualization/analysis
                 - graph_embeddings: Graph-level embeddings if needed for visualization/analysis
         """
-        # Unpack input data
+        # Unpack and normalize input
         adj_matrices = batch_data["adj_matrices"]
         features = batch_data["features"]
-
-        batch_size, seq_len = adj_matrices.shape[:2]
-
-        # Process spatial dependencies with GNN
-        node_embeddings, graph_embeddings = self.gnn(
-            x=features, adj=adj_matrices, mask=mask
-        )
-
-        # Combine GNN embeddings with global features
-        if "global_features" in batch_data:
-            # If we have additional global features, concatenate them
-            combined_features = torch.cat(
-                [graph_embeddings, batch_data["global_features"]], dim=-1
-            )
-        else:
-            combined_features = graph_embeddings
-
-        # Generate predictions with temporal model
-        predictions = self.temporal(combined_features, mask)
-
+        
+        batch_size, seq_len, num_features = features.shape
+        features_flat = features.view(-1, num_features)
+        features_norm = self.input_norm(features_flat).view(batch_size, seq_len, num_features)
+        
+        # Process with GNN
+        node_embeddings, graph_embeddings = self.gnn(x=features_norm, adj=adj_matrices, mask=mask)
+        
+        # Project GNN output to temporal dimension
+        graph_features = self.gnn_norm(self.gnn_to_temporal_proj(graph_embeddings))
+        features_proj = self.feature_norm(self.feature_to_temporal_proj(features_norm))
+        
+        # Scaled combination
+        combined_features = graph_features + 0.1 * features_proj
+        
+        # Generate predictions with normalization
+        temporal_output = self.temporal(combined_features, mask)
+        predictions = self.output_norm(self.temporal_to_output_proj(temporal_output))
+        
+        # Smaller residual connection
+        last_input = features_norm[:, -1:].expand(-1, predictions.shape[1], -1)
+        predictions = predictions + 0.01 * last_input
+        
         return {
             "predictions": predictions,
             "node_embeddings": node_embeddings,

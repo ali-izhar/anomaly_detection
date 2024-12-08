@@ -6,17 +6,23 @@ from typing import Dict, Tuple, Optional
 from torch import Tensor
 
 
-def mse_loss(pred: Tensor, target: Tensor) -> Tensor:
-    """Mean squared error loss.
+def mse_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Calculate scaled MSE loss."""
+    # Ensure same device and type
+    predictions = predictions.to(targets.device, targets.dtype)
     
-    Args:
-        pred: Predictions [batch_size, forecast_horizon, num_features]
-        target: Ground truth [batch_size, forecast_horizon, num_features]
-        
-    Returns:
-        MSE loss value
-    """
-    return nn.MSELoss()(pred, target)
+    # Calculate mean and std of targets for scaling
+    target_mean = targets.mean()
+    target_std = targets.std() + 1e-6  # Add epsilon to avoid division by zero
+    
+    # Scale predictions and targets
+    predictions_scaled = (predictions - target_mean) / target_std
+    targets_scaled = (targets - target_mean) / target_std
+    
+    # Calculate MSE on scaled values
+    loss = torch.nn.functional.mse_loss(predictions_scaled, targets_scaled, reduction='mean')
+    
+    return loss
 
 
 def mae_loss(pred: Tensor, target: Tensor) -> Tensor:

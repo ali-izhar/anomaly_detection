@@ -12,23 +12,26 @@ data:
 
 model:
   gnn:
-    hidden_dim: 256
-    num_layers: 3
-    activation: "relu"
+    hidden_dim: 128
+    num_layers: 2
+    activation: "gelu"
   temporal:
     type: "LSTM"
-    hidden_dim: 512
+    hidden_dim: 256
     num_layers: 2
-    dropout: 0.3
+    dropout: 0.2
   forecast:
     m_horizon: 10
 
 training:
-  epochs: 2
-  learning_rate: 0.001
+  epochs: 10
+  learning_rate: 0.0001
   weight_decay: 0.0001
-  early_stopping_patience: 15
-  grad_clip: 0.5
+  grad_accum_steps: 4
+  warmup_steps: 100
+  ema_decay: 0.999
+  early_stopping_patience: 5
+  grad_clip: 0.1
   gpu_memory_fraction: 0.99
   optimizer:
     type: "AdamW"
@@ -37,10 +40,10 @@ training:
   scheduler:
     type: "ReduceLROnPlateau"
     mode: "min"
-    factor: 0.5
-    patience: 5
-    min_lr: 1e-6
-    cooldown: 2
+    factor: 0.2
+    patience: 2
+    min_lr: 1e-5
+    cooldown: 0
 
 hardware:
   num_workers: 4
@@ -53,7 +56,7 @@ hardware:
   gradient_checkpointing: true
   optimize_memory_usage: true
   attention:
-    num_heads: 4
+    num_heads: 2
     chunk_size: 128
 
 device: "cuda"

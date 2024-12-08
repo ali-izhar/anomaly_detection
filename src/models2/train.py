@@ -53,8 +53,9 @@ def train_epoch(
     loss_fn: callable,
     device: torch.device,
     grad_clip: float = 1.0,
+    grad_accum_steps: int = 4,  # Number of steps to accumulate gradients
 ) -> float:
-    """Train model for one epoch with mixed precision."""
+    """Train model for one epoch."""
     model.train()
     total_loss = 0.0
     num_batches = len(train_loader)
@@ -62,54 +63,85 @@ def train_epoch(
     # Initialize gradient scaler for mixed precision training
     scaler = torch.amp.GradScaler()
     
-    # Enable gradient checkpointing if available
-    if hasattr(model, 'use_checkpoint'):
-        model.use_checkpoint = True
-
     for batch_idx, (input_seq, target_seq) in enumerate(train_loader):
-        # Clear cache before each batch
-        if batch_idx % 5 == 0:  # Every 5 batches
-            torch.cuda.empty_cache()
-        
-        # Move data to GPU with non_blocking=True
+        # Move data to GPU
         input_data = {
-            "adj_matrices": input_seq["adj_matrices"].to(device, non_blocking=True),
-            "features": input_seq["features"].to(device, non_blocking=True)
+            "adj_matrices": input_seq["adj_matrices"].to(device),
+            "features": input_seq["features"].to(device)
         }
-        targets = target_seq.to(device, non_blocking=True)
+        targets = target_seq.to(device)
 
-        # Forward pass with mixed precision
-        optimizer.zero_grad(set_to_none=True)  # More memory efficient than zero_grad()
-        
+        # Forward and backward passes
         with torch.amp.autocast(device_type='cuda'):
             outputs = model(input_data)
             predictions = outputs["predictions"]
-            loss = loss_fn(predictions, targets)
+            loss = loss_fn(predictions, targets) / grad_accum_steps  # Scale loss
 
-        # Backward pass with gradient scaling
+        # Backward pass
         scaler.scale(loss).backward()
         
-        # Gradient clipping
-        if grad_clip > 0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        
-        # Optimizer step with scaler
-        scaler.step(optimizer)
-        scaler.update()
+        # Update weights after accumulating gradients
+        if (batch_idx + 1) % grad_accum_steps == 0:
+            if grad_clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
 
-        # Update total loss and log
+        # Update total loss
         total_loss += loss.item()
         
         if batch_idx % 10 == 0:
             gpu_memory = torch.cuda.memory_allocated(device) / 1e9
-            gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
             logging.info(
                 f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}, "
-                f"GPU Memory Used/Reserved: {gpu_memory:.2f}GB/{gpu_memory_reserved:.2f}GB"
+                f"GPU Memory: {gpu_memory:.2f}GB"
             )
 
-    return total_loss / len(train_loader.dataset)
+    return total_loss / len(train_loader)
+
+
+def get_warmup_scheduler(optimizer, warmup_steps: int):
+    """Create a learning rate warmup scheduler."""
+    def lr_lambda(current_step: int):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        return 1.0
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+class EMA:
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.model = model
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+        
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+    
+    def update(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name].data = (
+                    self.decay * self.shadow[name].data +
+                    (1 - self.decay) * param.data
+                )
+    
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data
+                param.data = self.shadow[name].data
+    
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name]
 
 
 def main(config_path: str) -> None:
@@ -163,6 +195,11 @@ def main(config_path: str) -> None:
         learning_rate=config["training"]["learning_rate"],
         weight_decay=config["training"]["weight_decay"]
     )
+    
+    # Add warmup scheduler
+    warmup_steps = 100  # Adjust as needed
+    warmup_scheduler_gnn = get_warmup_scheduler(optim_config["optimizers"]["gnn"], warmup_steps)
+    warmup_scheduler_temporal = get_warmup_scheduler(optim_config["optimizers"]["temporal"], warmup_steps)
     
     # Training setup
     best_val_loss = float("inf")
