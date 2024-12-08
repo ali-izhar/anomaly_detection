@@ -50,14 +50,14 @@ class WeightedMSELoss(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         total_loss = 0.0
         feature_losses = {}
-        
+
         for feat_name in pred:
             if feat_name in self.weights:
                 feat_loss = F.mse_loss(pred[feat_name], target[feat_name])
                 weighted_loss = self.weights[feat_name] * feat_loss
                 feature_losses[feat_name] = feat_loss.item()
                 total_loss += weighted_loss
-                
+
         return total_loss, feature_losses
 
 
@@ -83,7 +83,7 @@ def train_epoch(
     total_loss = 0.0
     use_amp = scaler is not None
     num_batches = len(train_loader)
-    
+
     for batch_idx, batch in enumerate(train_loader):
         # Move data to device
         x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
@@ -386,28 +386,30 @@ def setup_device() -> torch.device:
     """Setup compute device with optimized settings for RTX 4090."""
     if torch.cuda.is_available():
         device = torch.device("cuda:0")
-        
+
         # Enable memory pinning and optimize CUDA settings
         torch.cuda.init()
-        
+
         # Enable TF32 for better performance on Ampere GPUs
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        
+
         # Enable cuDNN benchmarking and deterministic algorithms
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
-        
+
         # Set memory allocation to optimal for RTX 4090
         torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
-        
+
         logger.info(f"GPU Device: {torch.cuda.get_device_name(device)}")
-        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1e9:.2f} GB")
+        logger.info(
+            f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1e9:.2f} GB"
+        )
     else:
         device = torch.device("cpu")
         torch.set_num_threads(os.cpu_count())
         torch.set_num_interop_threads(os.cpu_count())
-    
+
     return device
 
 
@@ -422,17 +424,17 @@ def save_checkpoint(
 ):
     """Save model checkpoint."""
     # Save model state dict separately with weights_only=True
-    torch.save(model.state_dict(), path.with_suffix('.model'), weights_only=True)
-    
+    torch.save(model.state_dict(), path.with_suffix(".model"), weights_only=True)
+
     # Save other training state
     metadata = {
-        'epoch': epoch,
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'loss': loss,
-        'config': config,
+        "epoch": epoch,
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "loss": loss,
+        "config": config,
     }
-    torch.save(metadata, path.with_suffix('.meta'))
+    torch.save(metadata, path.with_suffix(".meta"))
 
 
 def load_checkpoint(
@@ -443,16 +445,16 @@ def load_checkpoint(
 ) -> Tuple[int, float]:
     """Load model checkpoint and training state."""
     # Load model weights safely
-    model.load_state_dict(torch.load(path.with_suffix('.model'), weights_only=True))
-    
+    model.load_state_dict(torch.load(path.with_suffix(".model"), weights_only=True))
+
     # Load training state if optimizer and scheduler are provided
     if optimizer is not None and scheduler is not None:
-        metadata = torch.load(path.with_suffix('.meta'))
-        optimizer.load_state_dict(metadata['optimizer_state_dict'])
-        scheduler.load_state_dict(metadata['scheduler_state_dict'])
-        return metadata['epoch'], metadata['loss']
-    
-    return 0, float('inf')
+        metadata = torch.load(path.with_suffix(".meta"))
+        optimizer.load_state_dict(metadata["optimizer_state_dict"])
+        scheduler.load_state_dict(metadata["scheduler_state_dict"])
+        return metadata["epoch"], metadata["loss"]
+
+    return 0, float("inf")
 
 
 if __name__ == "__main__":

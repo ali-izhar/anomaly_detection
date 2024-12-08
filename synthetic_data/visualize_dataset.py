@@ -4,11 +4,11 @@
 Dataset Visualization Script
 
 This script reads the training data from the dataset and creates visualizations showing:
-1. Sequence-level feature time-series for multiple feature types, with change points
-2. Feature distributions and correlations across the training set
-3. Training data statistics (e.g., sequence lengths, node counts, etc.)
+1. Sequence-level feature time-series for multiple feature types, with change points.
+2. Feature distributions and correlations across the training set.
+3. Training data statistics (e.g., sequence lengths, node counts, etc.).
 
-Also can plot multiple sequences side-by-side on a single figure (dashboard) with dotted lines at actual change points.
+Can also plot multiple sequences side-by-side on a single figure (dashboard) with dotted lines at actual change points.
 """
 
 import sys
@@ -45,10 +45,16 @@ class DatasetVisualizer:
 
         plt.style.use("seaborn-v0_8-darkgrid")
 
-        # Default feature names from dataset creation
-        self.centrality_features = ["degree", "betweenness", "closeness", "eigenvector"]
-        self.embedding_features = ["svd", "lsvd"]
-        self.feature_names = self.centrality_features + self.embedding_features
+        # Define feature names in the order they appear in features["all"]:
+        # (seq_len, 6) -> 0: degree, 1: betweenness, 2: eigenvector, 3: closeness, 4: svd, 5: lsvd
+        self.feature_names = [
+            "Degree",
+            "Betweenness",
+            "Eigenvector",
+            "Closeness",
+            "SVD",
+            "LSVD",
+        ]
 
         # Set colors
         self.colors = sns.color_palette(
@@ -83,12 +89,11 @@ class DatasetVisualizer:
             for i in range(1, num_sequences):
                 all_graphs[i] = graphs_group[f"sequence_{i}"][:]
 
-            # Load features
+            # Load features (now a single dataset "all" with shape (num_sequences, max_seq_len, 6))
             feat_group = hf["features"]
-            features = {}
-            for feat_name in self.feature_names:
-                if feat_name in feat_group:
-                    features[feat_name] = feat_group[feat_name][:]
+            if "all" not in feat_group:
+                raise ValueError("Features dataset 'all' not found")
+            features = {"all": feat_group["all"][:]}
 
             # Load change points if available
             change_points = []
@@ -115,28 +120,17 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot the time-series of features for a single sequence.
-        For centralities, plot the average value over nodes at each time step.
-        For embeddings, average over nodes and embedding dimensions.
+        Plot the time-series of features (already aggregated) for a single sequence.
         If change_points are provided, add vertical dashed lines at those points.
         """
-
         seq_length = int(sequence_lengths[sequence_idx])
+        feat_data = features["all"][sequence_idx, :seq_length, :]  # shape: (seq_len, 6)
 
         plt.figure(figsize=(12, 8))
         for i, (feat_name, color) in enumerate(zip(self.feature_names, self.colors)):
-            feat_data = features[feat_name][sequence_idx]
-
-            # For centralities: shape (max_seq_len, n_nodes)
-            # For embeddings: shape (max_seq_len, n_nodes, embedding_dim)
-            if feat_name in self.centrality_features:
-                feat_ts = np.mean(feat_data[:seq_length], axis=1)
-            else:
-                feat_ts = np.mean(feat_data[:seq_length], axis=(1, 2))
-
             plt.plot(
-                feat_ts,
-                label=feat_name.capitalize(),
+                feat_data[:, i],
+                label=feat_name,
                 color=color,
                 linewidth=1.5,
                 alpha=0.8,
@@ -151,7 +145,7 @@ class DatasetVisualizer:
 
         plt.title(f"Sequence {sequence_idx} Feature Time-Series")
         plt.xlabel("Time Step")
-        plt.ylabel("Average Feature Value")
+        plt.ylabel("Normalized Feature Value")
         plt.legend()
         plt.tight_layout()
 
@@ -172,23 +166,15 @@ class DatasetVisualizer:
         """
         Plot multiple sequences in a single figure (dashboard).
         Each subplot shows one sequence with all features and dotted lines at change points.
-
-        Args:
-            features: dictionary of feature arrays
-            sequence_lengths: array of sequence lengths
-            sequence_indices: list of sequence indices to plot
-            change_points: list of lists, where each element corresponds to a sequence and contains change point indices
-            rows: number of subplot rows
-            cols: number of subplot columns
-            save_path: path to save the resulting figure
         """
-
         fig, axes = plt.subplots(rows, cols, figsize=(15, 8))
         axes = axes.flatten()
 
         for i, seq_idx in enumerate(sequence_indices):
             ax = axes[i]
             seq_length = int(sequence_lengths[seq_idx])
+            feat_data = features["all"][seq_idx, :seq_length, :]  # (seq_len, 6)
+
             cp_list = (
                 change_points[i]
                 if (change_points is not None and i < len(change_points))
@@ -196,15 +182,12 @@ class DatasetVisualizer:
             )
 
             # Plot features
-            for feat_name, color in zip(self.feature_names, self.colors):
-                feat_data = features[feat_name][seq_idx]
-                if feat_name in self.centrality_features:
-                    feat_ts = np.mean(feat_data[:seq_length], axis=1)
-                else:
-                    feat_ts = np.mean(feat_data[:seq_length], axis=(1, 2))
+            for feat_name, color, f_idx in zip(
+                self.feature_names, self.colors, range(len(self.feature_names))
+            ):
                 ax.plot(
-                    feat_ts,
-                    label=feat_name.capitalize(),
+                    feat_data[:, f_idx],
+                    label=feat_name,
                     color=color,
                     linewidth=1.5,
                     alpha=0.8,
@@ -242,26 +225,27 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot distribution of each feature (flattened across all valid timesteps and sequences).
+        Plot distribution of each feature.
+        features["all"] is (num_sequences, max_seq_len, 6).
+        We'll flatten across all sequences and valid timesteps.
         """
-        valid_values = {}
-        for feat_name in self.feature_names:
-            f_data = features[feat_name]
+        feat_data = features["all"]
+        num_sequences, max_seq_len, n_features = feat_data.shape
+
+        # Flatten each feature across all sequences and valid lengths
+        valid_values = []
+        for f_idx in range(n_features):
             vals = []
             for i, length in enumerate(sequence_lengths):
-                seq_data = f_data[i, :length]
-                if feat_name in self.centrality_features:
-                    vals.append(seq_data.flatten())
-                else:
-                    vals.append(seq_data.reshape(-1))
+                vals.append(feat_data[i, :length, f_idx])
             vals = np.concatenate(vals)
-            valid_values[feat_name] = vals
+            valid_values.append(vals)
 
         plt.figure(figsize=(15, 10))
         for i, (feat_name, color) in enumerate(zip(self.feature_names, self.colors)):
             plt.subplot(2, 3, i + 1)
-            sns.histplot(valid_values[feat_name], color=color, kde=True)
-            plt.title(f"{feat_name.capitalize()} Distribution")
+            sns.histplot(valid_values[i], color=color, kde=True)
+            plt.title(f"{feat_name} Distribution")
             plt.xlabel("Value")
 
         plt.tight_layout()
@@ -276,33 +260,22 @@ class DatasetVisualizer:
         save_path: str = None,
     ) -> None:
         """
-        Plot correlation matrix between features by first aggregating them into a single array.
-
-        We'll compute a single scalar per time step per feature (like the average over nodes/emb dims),
-        then stack these scalars from all sequences and timesteps to compute correlations.
+        Plot correlation matrix between features.
+        We have (N, T, 6). We'll flatten all sequences and timesteps into one large array of shape (total_samples, 6).
         """
-        feat_table = []
+        feat_data = features["all"]
+        rows = []
         for i, length in enumerate(sequence_lengths):
-            row = []
-            for feat_name in self.feature_names:
-                f_data = features[feat_name][i, :length]
-                if feat_name in self.centrality_features:
-                    vals = f_data.mean(axis=1)
-                else:
-                    vals = f_data.mean(axis=(1, 2))
-                row.append(vals)
-            row = np.column_stack(row)
-            feat_table.append(row)
+            rows.append(feat_data[i, :length, :])  # (length, 6)
+        all_data = np.vstack(rows)  # (total_timesteps_across_all_sequences, 6)
 
-        feat_table = np.vstack(feat_table)  # [total_timesteps, n_features]
-
-        correlation_matrix = np.corrcoef(feat_table.T)
+        correlation_matrix = np.corrcoef(all_data.T)
 
         plt.figure(figsize=(10, 8))
         sns.heatmap(
             correlation_matrix,
-            xticklabels=[f.capitalize() for f in self.feature_names],
-            yticklabels=[f.capitalize() for f in self.feature_names],
+            xticklabels=self.feature_names,
+            yticklabels=self.feature_names,
             annot=True,
             cmap="coolwarm",
             center=0,

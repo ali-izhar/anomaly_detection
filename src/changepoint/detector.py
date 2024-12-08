@@ -58,16 +58,6 @@ class ChangePointDetector:
         )
 
     def extract_features(self) -> Dict[str, List[List[float]]]:
-        """Extract topological features from graph sequence.
-        - Centrality measures: degree, betweenness, eigenvector, closeness
-        - Embeddings: SVD (global structure), LSVD (local structure)
-
-        Returns:
-            Dictionary mapping feature names to sequences of feature vectors.
-
-        Raises:
-            ValueError: If no graphs have been initialized.
-        """
         if not self._graphs:
             logger.error("Feature extraction attempted without initialized graphs")
             raise ValueError("No graphs initialized. Call initialize() first")
@@ -80,12 +70,36 @@ class ChangePointDetector:
             f"Extracted centrality measures: {list(self._centralities.keys())}"
         )
 
-        # Add embedding-based features
+        # Compute embeddings
         logger.info("Computing graph embeddings")
+        svd_list = compute_embeddings(
+            self._graphs, method="svd"
+        )  # Each element should be (n_nodes, embedding_dim) or (n_nodes,)
+        lsvd_list = compute_embeddings(self._graphs, method="lsvd")  # Same as above
+
+        # Ensure that both svd_list and lsvd_list arrays are 2D
+        # If an array is 1D (n_nodes,), reshape it to (n_nodes, 1)
+        def ensure_2d(arr_list):
+            new_list = []
+            for arr in arr_list:
+                arr = np.asarray(arr)
+                if arr.ndim == 1:
+                    arr = arr[:, np.newaxis]  # Make it (n_nodes,1)
+                new_list.append(arr)
+            return new_list
+
+        svd_list = ensure_2d(svd_list)
+        lsvd_list = ensure_2d(lsvd_list)
+
+        # Now we can safely average over axis=1
+        svd_node_level = [arr.mean(axis=1) for arr in svd_list]  # seq_len x n_nodes
+        lsvd_node_level = [arr.mean(axis=1) for arr in lsvd_list]  # seq_len x n_nodes
+
         embeddings = {
-            "svd": compute_embeddings(self._graphs, method="svd"),
-            "lsvd": compute_embeddings(self._graphs, method="lsvd"),
+            "svd": svd_node_level,
+            "lsvd": lsvd_node_level,
         }
+
         self._centralities.update(embeddings)
 
         logger.info(
