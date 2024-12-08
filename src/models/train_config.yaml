@@ -11,7 +11,7 @@ data:
   window_size: 20
   stride: 5
   forecast_horizon: 10
-  batch_size: 128  # Increased for better GPU utilization
+  batch_size: 128
   
   # Feature selection
   use_centrality: true
@@ -31,9 +31,9 @@ data:
 
 model:
   # Model architecture
-  hidden_dim: 256        # Increased for better GPU utilization
-  num_layers: 3         # More layers
-  dropout: 0.2         # Regularization
+  hidden_dim: 512        # Changed from 256 to 512 to match LSTM expectations
+  num_layers: 2          # Reduced from 3 to 2 for better stability
+  dropout: 0.2
   
   # Feature processing
   use_node_features: true
@@ -42,22 +42,22 @@ model:
   
   # GNN parameters
   gnn_type: "gcn"
-  attention_heads: 8    # Increased attention heads
+  attention_heads: 4     # Changed from 8 to 4 (must divide hidden_dim evenly: 512/4=128)
   
   # LSTM parameters
-  lstm_layers: 3        # Increased LSTM layers
-  bidirectional: true   # Enable bidirectional
+  lstm_layers: 2         # Changed from 3 to 2 to match num_layers
+  bidirectional: false   # Changed to false to match decoder expectations
   
   # Training parameters
   learning_rate: 0.001
-  weight_decay: 0.0001  # L2 regularization
-  clip_grad_norm: 1.0   # Increased for stability
+  weight_decay: 0.0001
+  clip_grad_norm: 1.0
 
 training:
-  epochs: 100           # Maximum epochs
-  patience: 15         # Early stopping patience
-  val_interval: 1      # Validate every epoch
-  save_interval: 5     # Save checkpoints every N epochs
+  epochs: 5
+  patience: 15
+  val_interval: 1
+  save_interval: 5
   
   # Loss function weights
   loss_weights:
@@ -65,25 +65,25 @@ training:
     betweenness: 1.0
     closeness: 1.0
     eigenvector: 1.0
-    svd: 0.5           # Lower weight for embeddings
+    svd: 0.5
     lsvd: 0.5
     
   # Learning rate schedule
   lr_schedule:
-    factor: 0.5        # Multiply LR by this when plateauing
-    patience: 5        # Epochs to wait before reducing LR
-    min_lr: 0.000001   # Minimum learning rate
+    factor: 0.5
+    patience: 5
+    min_lr: 0.000001
     
   # Logging and monitoring
-  log_interval: 50     # Log every N batches
-  tensorboard: true    # Enable tensorboard logging
+  log_interval: 50
+  tensorboard: true
 
 # Hardware optimization for RTX 4090
 hardware:
-  num_workers: 8       # DataLoader workers
-  pin_memory: true     # Pin memory for faster GPU transfer
-  prefetch_factor: 4   # Number of batches to prefetch
-  persistent_workers: true  # Keep workers alive between epochs
+  num_workers: 8
+  pin_memory: true
+  prefetch_factor: 4
+  persistent_workers: true
   cuda_settings:
     allow_tf32: true
     benchmark: true

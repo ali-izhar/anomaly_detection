@@ -47,13 +47,18 @@ class WeightedMSELoss(nn.Module):
 
     def forward(
         self, pred: Dict[str, torch.Tensor], target: Dict[str, torch.Tensor]
-    ) -> torch.Tensor:
-        loss = 0.0
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        total_loss = 0.0
+        feature_losses = {}
+        
         for feat_name in pred:
             if feat_name in self.weights:
                 feat_loss = F.mse_loss(pred[feat_name], target[feat_name])
-                loss += self.weights[feat_name] * feat_loss
-        return loss
+                weighted_loss = self.weights[feat_name] * feat_loss
+                feature_losses[feat_name] = feat_loss.item()
+                total_loss += weighted_loss
+                
+        return total_loss, feature_losses
 
 
 def load_config(config_path: str) -> dict:
@@ -79,30 +84,26 @@ def train_epoch(
     use_amp = scaler is not None
     num_batches = len(train_loader)
     
-    # Pre-fetch data to GPU
     for batch_idx, batch in enumerate(train_loader):
-        # Prefetch next batch
-        torch.cuda.current_stream().wait_stream(torch.cuda.Stream())
-        with torch.cuda.stream(torch.cuda.Stream()):
-            x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
-            y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
-            adj = batch["adj"].to(device, non_blocking=True)
+        # Move data to device
+        x = {k: v.to(device, non_blocking=True) for k, v in batch["x"].items()}
+        y = {k: v.to(device, non_blocking=True) for k, v in batch["y"].items()}
+        adj = batch["adj"].to(device, non_blocking=True)
 
-        # Zero gradients using faster method
-        for param in model.parameters():
-            param.grad = None
+        # Zero gradients
+        optimizer.zero_grad()
 
         # Forward pass with mixed precision
         amp_context = autocast(device_type=str(device)) if use_amp else nullcontext()
         with amp_context:
             predictions = model(x, adj)
-            loss = criterion(predictions, y)
+            loss, _ = criterion(predictions, y)
 
         # Backward pass with scaling
         if use_amp:
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
             if clip_grad_norm > 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             scaler.step(optimizer)
             scaler.update()
@@ -112,9 +113,8 @@ def train_epoch(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
             optimizer.step()
 
-        # Logging with GPU synchronization
+        # Logging
         if batch_idx % log_interval == 0:
-            torch.cuda.synchronize()  # Ensure accurate timing
             logger.info(
                 f"Batch {batch_idx}/{num_batches}, Loss: {loss.item():.4f}, "
                 f"GPU Memory: {torch.cuda.memory_allocated(device)/1e9:.2f}GB"
@@ -144,10 +144,10 @@ def validate(
             adj = batch["adj"].to(device, non_blocking=True)
 
             predictions = model(x, adj)
-            loss, feat_losses = criterion(predictions, y)
+            batch_loss, batch_feat_losses = criterion(predictions, y)
 
-            total_loss += loss.item()
-            for feat, feat_loss in feat_losses.items():
+            total_loss += batch_loss.item()
+            for feat, feat_loss in batch_feat_losses.items():
                 feature_losses_dict[feat] += feat_loss
 
     # Average losses
@@ -291,8 +291,9 @@ def main():
     best_val_loss = float("inf")
     patience = config["training"]["patience"]
     patience_counter = 0
+    start_epoch = 0
 
-    for epoch in range(config["training"]["epochs"]):
+    for epoch in range(start_epoch, config["training"]["epochs"]):
         # Training
         train_loss = train_epoch(
             model=model,
@@ -334,7 +335,7 @@ def main():
                 epoch=epoch,
                 loss=val_loss,
                 config=config,
-                path=output_dir / "best_model.pt",
+                path=output_dir / "best_model",
             )
         else:
             patience_counter += 1
@@ -345,7 +346,13 @@ def main():
             break
 
     # Final evaluation on test set
-    model.load_state_dict(torch.load(output_dir / "best_model.pt")["model_state_dict"])
+    logger.info("Loading best model for testing...")
+    load_checkpoint(
+        model=model,
+        optimizer=None,
+        scheduler=None,
+        path=output_dir / "best_model",
+    )
     test_loss, test_feature_losses = validate(model, test_loader, criterion, device)
     logger.info(f"Test Loss: {test_loss:.4f}")
 
@@ -394,10 +401,6 @@ def setup_device() -> torch.device:
         # Set memory allocation to optimal for RTX 4090
         torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
         
-        # Optional: Set larger chunk sizes for better memory allocation
-        torch.cuda.set_per_process_memory_fraction(0.95, device)
-        torch.cuda.set_chunk_size_limit(512 * 1024 * 1024)  # 512MB chunks
-        
         logger.info(f"GPU Device: {torch.cuda.get_device_name(device)}")
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1e9:.2f} GB")
     else:
@@ -418,17 +421,38 @@ def save_checkpoint(
     path: Path,
 ):
     """Save model checkpoint."""
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-            "loss": loss,
-            "config": config,
-        },
-        path,
-    )
+    # Save model state dict separately with weights_only=True
+    torch.save(model.state_dict(), path.with_suffix('.model'), weights_only=True)
+    
+    # Save other training state
+    metadata = {
+        'epoch': epoch,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss': loss,
+        'config': config,
+    }
+    torch.save(metadata, path.with_suffix('.meta'))
+
+
+def load_checkpoint(
+    model: nn.Module,
+    optimizer: Optional[torch.optim.Optimizer],
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    path: Path,
+) -> Tuple[int, float]:
+    """Load model checkpoint and training state."""
+    # Load model weights safely
+    model.load_state_dict(torch.load(path.with_suffix('.model'), weights_only=True))
+    
+    # Load training state if optimizer and scheduler are provided
+    if optimizer is not None and scheduler is not None:
+        metadata = torch.load(path.with_suffix('.meta'))
+        optimizer.load_state_dict(metadata['optimizer_state_dict'])
+        scheduler.load_state_dict(metadata['scheduler_state_dict'])
+        return metadata['epoch'], metadata['loss']
+    
+    return 0, float('inf')
 
 
 if __name__ == "__main__":
