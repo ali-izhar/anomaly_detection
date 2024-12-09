@@ -44,15 +44,15 @@ class GraphTemporalForecaster(nn.Module):
         gnn_config = config["model"]["gnn"]
         temporal_config = config["model"]["temporal"]
         hw_config = config.get("hardware", {})
-        
+
         # Memory optimization settings
         self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
         self.memory_efficient = hw_config.get("memory_efficient_attention", True)
-        
+
         # Define dimensions
         self.gnn_hidden_dim = gnn_config["hidden_dim"]
         self.temporal_hidden_dim = temporal_config["hidden_dim"]
-        
+
         # Initialize GNN
         self.gnn = TemporalGNN(
             in_channels=node_feat_dim,
@@ -61,13 +61,19 @@ class GraphTemporalForecaster(nn.Module):
             num_nodes=num_nodes,
             num_layers=gnn_config["num_layers"],
             dropout=gnn_config.get("dropout", 0.3),
-            config=config
+            config=config,
         )
 
         # Add projections for dimension matching
-        self.gnn_to_temporal_proj = nn.Linear(self.gnn_hidden_dim, self.temporal_hidden_dim)
-        self.feature_to_temporal_proj = nn.Linear(node_feat_dim, self.temporal_hidden_dim)
-        self.temporal_to_output_proj = nn.Linear(self.temporal_hidden_dim, node_feat_dim)
+        self.gnn_to_temporal_proj = nn.Linear(
+            self.gnn_hidden_dim, self.temporal_hidden_dim
+        )
+        self.feature_to_temporal_proj = nn.Linear(
+            node_feat_dim, self.temporal_hidden_dim
+        )
+        self.temporal_to_output_proj = nn.Linear(
+            self.temporal_hidden_dim, node_feat_dim
+        )
 
         # Initialize temporal model with correct dimensions
         self.temporal = TemporalPredictor(
@@ -78,7 +84,7 @@ class GraphTemporalForecaster(nn.Module):
             num_layers=temporal_config["num_layers"],
             dropout=temporal_config["dropout"],
             model_type=temporal_config["type"],
-            config=config
+            config=config,
         )
 
         # Add batch normalization
@@ -86,14 +92,14 @@ class GraphTemporalForecaster(nn.Module):
         self.gnn_norm = nn.LayerNorm(self.temporal_hidden_dim)
         self.feature_norm = nn.LayerNorm(self.temporal_hidden_dim)
         self.output_norm = nn.LayerNorm(node_feat_dim)
-        
+
         # Initialize weights with smaller values
         def _init_weights(m):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight, gain=0.01)  # Reduced gain
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-        
+
         self.apply(_init_weights)
 
     def forward(
@@ -118,29 +124,33 @@ class GraphTemporalForecaster(nn.Module):
         # Unpack and normalize input
         adj_matrices = batch_data["adj_matrices"]
         features = batch_data["features"]
-        
+
         batch_size, seq_len, num_features = features.shape
         features_flat = features.view(-1, num_features)
-        features_norm = self.input_norm(features_flat).view(batch_size, seq_len, num_features)
-        
+        features_norm = self.input_norm(features_flat).view(
+            batch_size, seq_len, num_features
+        )
+
         # Process with GNN
-        node_embeddings, graph_embeddings = self.gnn(x=features_norm, adj=adj_matrices, mask=mask)
-        
+        node_embeddings, graph_embeddings = self.gnn(
+            x=features_norm, adj=adj_matrices, mask=mask
+        )
+
         # Project GNN output to temporal dimension
         graph_features = self.gnn_norm(self.gnn_to_temporal_proj(graph_embeddings))
         features_proj = self.feature_norm(self.feature_to_temporal_proj(features_norm))
-        
+
         # Scaled combination
         combined_features = graph_features + 0.1 * features_proj
-        
+
         # Generate predictions with normalization
         temporal_output = self.temporal(combined_features, mask)
         predictions = self.output_norm(self.temporal_to_output_proj(temporal_output))
-        
+
         # Smaller residual connection
         last_input = features_norm[:, -1:].expand(-1, predictions.shape[1], -1)
         predictions = predictions + 0.01 * last_input
-        
+
         return {
             "predictions": predictions,
             "node_embeddings": node_embeddings,
@@ -157,27 +167,27 @@ class GraphTemporalForecaster(nn.Module):
         opt_config = self.config["training"]["optimizer"]
         betas = tuple(float(b) for b in opt_config["betas"])  # Convert to float tuple
         eps = float(opt_config["eps"])  # Convert eps to float
-        
+
         # Create optimizers with configured parameters
         gnn_optimizer = torch.optim.AdamW(
             self.gnn.parameters(),
             lr=float(learning_rate),
             weight_decay=float(weight_decay),
             betas=betas,
-            eps=eps
+            eps=eps,
         )
-        
+
         temporal_optimizer = torch.optim.AdamW(
             self.temporal.parameters(),
             lr=float(learning_rate),
             weight_decay=float(weight_decay),
             betas=betas,
-            eps=eps
+            eps=eps,
         )
 
         # Get scheduler settings from config and convert to proper types
         sched_config = self.config["training"]["scheduler"]
-        
+
         # Create schedulers
         gnn_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             gnn_optimizer,
@@ -185,16 +195,16 @@ class GraphTemporalForecaster(nn.Module):
             factor=float(sched_config["factor"]),
             patience=int(sched_config["patience"]),
             min_lr=float(sched_config["min_lr"]),
-            cooldown=int(sched_config["cooldown"])
+            cooldown=int(sched_config["cooldown"]),
         )
-        
+
         temporal_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             temporal_optimizer,
             mode=sched_config["mode"],
             factor=float(sched_config["factor"]),
             patience=int(sched_config["patience"]),
             min_lr=float(sched_config["min_lr"]),
-            cooldown=int(sched_config["cooldown"])
+            cooldown=int(sched_config["cooldown"]),
         )
 
         return {

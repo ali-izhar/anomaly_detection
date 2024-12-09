@@ -38,25 +38,25 @@ class TemporalEncoder(nn.Module):
             config = {}
         temporal_config = config.get("model", {}).get("temporal", {})
         hw_config = config.get("hardware", {})
-        
+
         # Use config values
         self.hidden_dim = temporal_config.get("hidden_dim", hidden_dim)
         self.num_layers = temporal_config.get("num_layers", num_layers)
         self.dropout_rate = temporal_config.get("dropout", dropout)
         self.model_type = temporal_config.get("type", model_type)
-        
+
         # Memory optimization
         self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
-        
+
         self.bidirectional = bidirectional
         self.num_directions = 2 if bidirectional else 1
 
         # Add layer normalization
         self.layer_norm = nn.LayerNorm(hidden_dim)
-        
+
         # Add residual connections
         self.use_residual = True if num_layers > 1 else False
-        
+
         if model_type == "LSTM":
             # Use variational dropout for better regularization
             self.rnn = nn.LSTM(
@@ -67,21 +67,18 @@ class TemporalEncoder(nn.Module):
                 bidirectional=bidirectional,
                 batch_first=True,
             )
-            
+
             # Add attention mechanism
             if bidirectional:
                 self.attention = nn.MultiheadAttention(
                     embed_dim=hidden_dim * 2,  # *2 for bidirectional
                     num_heads=8,
                     dropout=dropout,
-                    batch_first=True
+                    batch_first=True,
                 )
             else:
                 self.attention = nn.MultiheadAttention(
-                    embed_dim=hidden_dim,
-                    num_heads=8,
-                    dropout=dropout,
-                    batch_first=True
+                    embed_dim=hidden_dim, num_heads=8, dropout=dropout, batch_first=True
                 )
         elif model_type == "GRU":
             self.rnn = nn.GRU(
@@ -185,24 +182,24 @@ class TemporalDecoder(nn.Module):
             model_type: One of ['LSTM', 'GRU']
         """
         super().__init__()
-        
+
         if config is None:
             config = {}
         temporal_config = config.get("model", {}).get("temporal", {})
         hw_config = config.get("hardware", {})
-        
+
         # Use config values with defaults
         self.model_type = temporal_config.get("type", model_type)
         self.hidden_dim = temporal_config.get("hidden_dim", hidden_dim)
         self.num_layers = temporal_config.get("num_layers", num_layers)
         self.dropout_rate = temporal_config.get("dropout", dropout)
         self.bidirectional = bidirectional
-        
+
         # Memory optimization settings
         self.use_checkpoint = hw_config.get("gradient_checkpointing", True)
-        
+
         rnn_hidden = self.hidden_dim // 2 if bidirectional else self.hidden_dim
-        
+
         if self.model_type == "LSTM":
             self.rnn = nn.LSTM(
                 input_size=input_dim,
@@ -289,7 +286,7 @@ class TemporalPredictor(nn.Module):
             dropout=dropout,
             bidirectional=bidirectional,
             model_type=model_type,
-            config=config
+            config=config,
         )
 
         self.decoder = TemporalDecoder(
@@ -300,7 +297,7 @@ class TemporalPredictor(nn.Module):
             dropout=dropout,
             model_type=model_type,
             bidirectional=bidirectional,
-            config=config
+            config=config,
         )
 
         self.forecast_horizon = forecast_horizon

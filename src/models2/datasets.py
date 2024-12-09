@@ -108,27 +108,30 @@ class GraphTimeSeriesDataset(data.Dataset):
         """Setup data normalization using robust scaling."""
         if split == "train":
             features = self.features.reshape(-1, self.features.shape[-1])
-            
+
             # Calculate robust statistics
             q1 = torch.quantile(features, 0.25, dim=0)
             q3 = torch.quantile(features, 0.75, dim=0)
             median = torch.median(features, dim=0).values
             iqr = q3 - q1 + 1e-6  # Add epsilon to avoid division by zero
-            
+
             self.feature_center = median
             self.feature_scale = iqr
-            
+
             # Save statistics
-            torch.save({
-                'center': self.feature_center,
-                'scale': self.feature_scale,
-                'q1': q1,
-                'q3': q3
-            }, os.path.join(data_dir, "normalization_stats.pt"))
+            torch.save(
+                {
+                    "center": self.feature_center,
+                    "scale": self.feature_scale,
+                    "q1": q1,
+                    "q3": q3,
+                },
+                os.path.join(data_dir, "normalization_stats.pt"),
+            )
         else:
             stats = torch.load(os.path.join(data_dir, "normalization_stats.pt"))
-            self.feature_center = stats['center']
-            self.feature_scale = stats['scale']
+            self.feature_center = stats["center"]
+            self.feature_scale = stats["scale"]
 
     def __len__(self) -> int:
         return len(self.features)
@@ -186,33 +189,21 @@ def get_dataloaders(
 
     # Create dataloaders with hardware optimizations
     dataloader_kwargs = {
-        'batch_size': config['data']['batch_size'],
-        'num_workers': num_workers,
-        'pin_memory': pin_memory,
-        'persistent_workers': persistent_workers if num_workers > 0 else False,
+        "batch_size": config["data"]["batch_size"],
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers if num_workers > 0 else False,
     }
-    
+
     # Add prefetch_factor only if using workers
     if num_workers > 0 and prefetch_factor is not None:
-        dataloader_kwargs['prefetch_factor'] = prefetch_factor
+        dataloader_kwargs["prefetch_factor"] = prefetch_factor
 
-    train_loader = data.DataLoader(
-        train_dataset,
-        shuffle=True,
-        **dataloader_kwargs
-    )
+    train_loader = data.DataLoader(train_dataset, shuffle=True, **dataloader_kwargs)
 
-    val_loader = data.DataLoader(
-        val_dataset,
-        shuffle=False,
-        **dataloader_kwargs
-    )
+    val_loader = data.DataLoader(val_dataset, shuffle=False, **dataloader_kwargs)
 
-    test_loader = data.DataLoader(
-        test_dataset,
-        shuffle=False,
-        **dataloader_kwargs
-    )
+    test_loader = data.DataLoader(test_dataset, shuffle=False, **dataloader_kwargs)
 
     return train_loader, val_loader, test_loader
 

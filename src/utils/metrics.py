@@ -10,28 +10,30 @@ def mse_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """Calculate scaled MSE loss."""
     # Ensure same device and type
     predictions = predictions.to(targets.device, targets.dtype)
-    
+
     # Calculate mean and std of targets for scaling
     target_mean = targets.mean()
     target_std = targets.std() + 1e-6  # Add epsilon to avoid division by zero
-    
+
     # Scale predictions and targets
     predictions_scaled = (predictions - target_mean) / target_std
     targets_scaled = (targets - target_mean) / target_std
-    
+
     # Calculate MSE on scaled values
-    loss = torch.nn.functional.mse_loss(predictions_scaled, targets_scaled, reduction='mean')
-    
+    loss = torch.nn.functional.mse_loss(
+        predictions_scaled, targets_scaled, reduction="mean"
+    )
+
     return loss
 
 
 def mae_loss(pred: Tensor, target: Tensor) -> Tensor:
     """Mean absolute error loss.
-    
+
     Args:
         pred: Predictions [batch_size, forecast_horizon, num_features]
         target: Ground truth [batch_size, forecast_horizon, num_features]
-        
+
     Returns:
         MAE loss value
     """
@@ -40,10 +42,10 @@ def mae_loss(pred: Tensor, target: Tensor) -> Tensor:
 
 def rmse_loss(mse: Tensor) -> Tensor:
     """Root mean squared error loss.
-    
+
     Args:
         mse: Mean squared error value
-        
+
     Returns:
         RMSE value
     """
@@ -51,17 +53,15 @@ def rmse_loss(mse: Tensor) -> Tensor:
 
 
 def compute_metrics(
-    pred: Tensor,
-    target: Tensor,
-    mask: Optional[Tensor] = None
+    pred: Tensor, target: Tensor, mask: Optional[Tensor] = None
 ) -> Dict[str, float]:
     """Compute multiple metrics.
-    
+
     Args:
         pred: Predictions [batch_size, forecast_horizon, num_features]
         target: Ground truth [batch_size, forecast_horizon, num_features]
         mask: Optional mask for valid timesteps [batch_size, forecast_horizon]
-        
+
     Returns:
         Dictionary of metric values
     """
@@ -70,16 +70,12 @@ def compute_metrics(
         mask = mask.unsqueeze(-1)  # [batch_size, forecast_horizon, 1]
         pred = pred * mask
         target = target * mask
-    
+
     mse = mse_loss(pred, target)
     mae = mae_loss(pred, target)
     rmse = rmse_loss(mse)
-    
-    return {
-        "MSE": mse.item(),
-        "MAE": mae.item(),
-        "RMSE": rmse.item()
-    }
+
+    return {"MSE": mse.item(), "MAE": mae.item(), "RMSE": rmse.item()}
 
 
 def evaluate(
@@ -89,13 +85,13 @@ def evaluate(
     loss_fn: callable,
 ) -> Tuple[float, Dict[str, float]]:
     """Evaluate model on dataloader.
-    
+
     Args:
         model: Model to evaluate
         dataloader: Data loader for evaluation
         device: Device to run on
         loss_fn: Loss function
-        
+
     Returns:
         Tuple of (average loss, metrics dictionary)
     """
@@ -107,11 +103,11 @@ def evaluate(
     with torch.no_grad():
         for batch in dataloader:
             input_seq, target_seq = batch
-            
+
             # Move data to device
             input_data = {
                 "adj_matrices": input_seq["adj_matrices"].to(device, non_blocking=True),
-                "features": input_seq["features"].to(device, non_blocking=True)
+                "features": input_seq["features"].to(device, non_blocking=True),
             }
             targets = target_seq.to(device, non_blocking=True)
 
@@ -122,12 +118,12 @@ def evaluate(
             # Compute loss and metrics
             loss = loss_fn(predictions, targets)
             metrics = compute_metrics(predictions, targets)
-            
+
             # Update totals
             batch_size = len(predictions)
             total_loss += loss.item() * batch_size
             num_samples += batch_size
-            
+
             # Accumulate metrics
             if total_metrics is None:
                 total_metrics = {k: v * batch_size for k, v in metrics.items()}
