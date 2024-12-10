@@ -175,23 +175,23 @@ if __name__ == "__main__":
     sequence_idx = 0  # Use first sequence for testing
     train_dataset, test_dataset = dataset.get_train_test_split(sequence_idx=sequence_idx)
     
-    # Create model
+    # Create model with optimized parameters
     model = DynamicLinkPredictor(
         num_nodes=dataset.num_nodes,
         num_features=dataset.num_features,
-        hidden_channels=64,
-        num_layers=2,
-        dropout=0.1,
+        hidden_channels=128,  # Increased from 64
+        num_layers=3,        # Increased from 2
+        dropout=0.2,         # Increased from 0.1
     )
     
-    # Train model
+    # Train with modified parameters
     trained_model, history = train_model(
         model,
         train_dataset,
         test_dataset,
-        num_epochs=100,
-        learning_rate=0.001,
-        patience=15,
+        num_epochs=200,      # Increased from 100
+        learning_rate=0.0005, # Decreased from 0.001
+        patience=20,         # Increased from 15
     )
     
     # Plot training history

@@ -12,7 +12,7 @@ class DynamicLinkPredictor(nn.Module):
     """
 
     def __init__(
-        self, num_nodes, num_features, hidden_channels=32, num_layers=2, dropout=0.1
+        self, num_nodes, num_features, hidden_channels=128, num_layers=3, dropout=0.2
     ):
         """
         Initialize the model.
@@ -29,25 +29,35 @@ class DynamicLinkPredictor(nn.Module):
         self.num_nodes = num_nodes
         self.num_features = num_features
 
-        # Stack of GC-LSTM layers
+        # Increase complexity of GC-LSTM layers
         self.gclstm_layers = nn.ModuleList(
             [
                 GCLSTM(
                     in_channels=num_features if i == 0 else hidden_channels,
                     out_channels=hidden_channels,
-                    K=3,  # Number of filter taps
+                    K=5,  # Increased filter taps
                 )
                 for i in range(num_layers)
             ]
         )
 
+        # Add batch normalization
+        self.batch_norms = nn.ModuleList([
+            nn.BatchNorm1d(hidden_channels) for _ in range(num_layers)
+        ])
+
         # Dropout layer
         self.dropout = nn.Dropout(dropout)
 
-        # MLP for link prediction
+        # More complex link prediction head
         self.link_predictor = nn.Sequential(
+            nn.Linear(hidden_channels * 2, hidden_channels * 2),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_channels * 2),
+            nn.Dropout(dropout),
             nn.Linear(hidden_channels * 2, hidden_channels),
             nn.ReLU(),
+            nn.BatchNorm1d(hidden_channels),
             nn.Dropout(dropout),
             nn.Linear(hidden_channels, 1),
             nn.Sigmoid(),
@@ -65,12 +75,16 @@ class DynamicLinkPredictor(nn.Module):
         Returns:
             tensor: predicted adjacency matrix for next timestep
         """
-        # Pass through GC-LSTM layers
+        # Pass through GC-LSTM layers with residual connections
         h = x
-        for gclstm in self.gclstm_layers:
-            # GCLSTM returns a tuple of (hidden_state, cell_state)
-            h = gclstm(h, edge_index, edge_weight)[0]  # Get only the hidden state
-            h = self.dropout(h)
+        for i, (gclstm, bn) in enumerate(zip(self.gclstm_layers, self.batch_norms)):
+            h_new = gclstm(h, edge_index, edge_weight)[0]
+            h_new = bn(h_new)
+            h_new = self.dropout(h_new)
+            if i > 0:  # Add residual connection after first layer
+                h = h + h_new
+            else:
+                h = h_new
 
         # Create all possible node pairs
         row, col = torch.cartesian_prod(
@@ -78,15 +92,13 @@ class DynamicLinkPredictor(nn.Module):
             torch.arange(self.num_nodes, device=x.device),
         ).T
 
-        # Get node pair features
+        # Get node pair features with concatenation
         row_h = h[row]
         col_h = h[col]
         pair_features = torch.cat([row_h, col_h], dim=-1)
 
         # Predict link probabilities
         link_probs = self.link_predictor(pair_features)
-
-        # Reshape to adjacency matrix
         adj_pred = link_probs.view(self.num_nodes, self.num_nodes)
 
         return adj_pred
