@@ -189,3 +189,7 @@ visualizations*/
 # model checkpoints
 checkpoints*/
 *.pth
+
+
+# misc.
+synthetic_data*/
