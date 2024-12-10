@@ -1,0 +1,51 @@
+# DATASET CONFIGURATION
+dataset:
+  # Number of sequences to generate per graph type
+  num_sequences: 300
+
+  # Types of graphs to generate
+  graph_types: ["BA", "ER", "NW"]
+  # BA: Barabasi-Albert (scale-free networks)
+  # ER: Erdos-Renyi (random networks)
+  # NW: Newman-Watts (small-world networks)
+
+  # Dataset split ratios
+  split_ratio:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+
+  # Output directory for the dataset
+  output_dir: "dataset"
+
+# Dataset generation configuration
+
+data:
+  num_sequences: 300  # Number of sequences per graph type
+  num_features: 6  # Number of node features
+  feature_params:
+    mean: 0.0
+    std: 1.0
+    temporal_correlation: 0.7  # Correlation between consecutive timesteps
+    spatial_correlation: 0.3  # Correlation between connected nodes
+
+paths:
+  output_dir: "data/processed"
+  adjacency_matrices: "adjacency_matrices.npz"
+  feature_sequences: "feature_sequences.npz"
+  metadata: "metadata.json"
+
+# Feature generation methods
+features:
+  - name: "degree_centrality"
+    enabled: true
+  - name: "clustering_coefficient"
+    enabled: true
+  - name: "betweenness_centrality"
+    enabled: true
+  - name: "eigenvector_centrality"
+    enabled: true
+  - name: "pagerank"
+    enabled: true
+  - name: "closeness_centrality"
+    enabled: true

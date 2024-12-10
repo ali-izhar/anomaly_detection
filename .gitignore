@@ -193,3 +193,5 @@ checkpoints*/
 
 # misc.
 synthetic_data*/
+
+torch_geometric_temporal*/
