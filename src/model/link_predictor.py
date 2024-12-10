@@ -42,9 +42,9 @@ class DynamicLinkPredictor(nn.Module):
         )
 
         # Add batch normalization
-        self.batch_norms = nn.ModuleList([
-            nn.BatchNorm1d(hidden_channels) for _ in range(num_layers)
-        ])
+        self.batch_norms = nn.ModuleList(
+            [nn.BatchNorm1d(hidden_channels) for _ in range(num_layers)]
+        )
 
         # Dropout layer
         self.dropout = nn.Dropout(dropout)
