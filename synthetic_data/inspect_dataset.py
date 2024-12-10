@@ -1,3 +1,5 @@
+# synthetic_data/inspect_dataset.py
+
 """
 Dataset Inspector
 
@@ -11,14 +13,12 @@ import sys
 import os
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tqdm import tqdm
 import networkx as nx
-from ast import literal_eval
 
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
@@ -200,16 +200,22 @@ class DatasetInspector:
 
                 # Plot feature boxplots
                 sns.boxplot(data=feat_data, ax=axes[i])
+                # Fix tick labels
+                axes[i].set_xticks(range(len(stats["names"][-6:])))
                 axes[i].set_xticklabels(stats["names"][-6:], rotation=45)
             else:
                 # For node-level and combined features
                 sns.boxplot(data=data, ax=axes[i])
                 if len(stats["names"]) > 10:  # For combined features
-                    axes[i].set_xticklabels(
-                        [n if j % 5 == 0 else "" for j, n in enumerate(stats["names"])],
-                        rotation=45,
-                    )
+                    # Fix tick labels
+                    tick_positions = range(len(stats["names"]))
+                    tick_labels = [
+                        n if j % 5 == 0 else "" for j, n in enumerate(stats["names"])
+                    ]
+                    axes[i].set_xticks(tick_positions)
+                    axes[i].set_xticklabels(tick_labels, rotation=45)
                 else:
+                    axes[i].set_xticks(range(len(stats["names"])))
                     axes[i].set_xticklabels(stats["names"], rotation=45)
 
             axes[i].set_title(f"{graph_type} Feature Distributions")
@@ -219,7 +225,7 @@ class DatasetInspector:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path)
-        plt.show()
+        plt.close(fig)  # Close the figure instead of showing it
 
     def plot_change_point_distribution(self, save_path: Optional[str] = None):
         """Plot change point distributions"""
@@ -260,7 +266,7 @@ class DatasetInspector:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path)
-        plt.show()
+        plt.close(fig)  # Close instead of show
 
     def visualize_graph_evolution(
         self,
@@ -300,7 +306,7 @@ class DatasetInspector:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path)
-        plt.show()
+        plt.close(fig)  # Close instead of show
 
     def print_feature_summary(self):
         """Print detailed feature summary based on dataset type"""
@@ -378,6 +384,10 @@ class DatasetInspector:
             ax2.set_title("Global Features")
             plt.xticks(rotation=45)
 
+            # Fix tick labels
+            ax2.set_xticks(range(len(feature_names)))
+            ax2.set_xticklabels(feature_names, rotation=45)
+
         else:  # node_level or combined
             if self.dataset_type == "combined":
                 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
@@ -426,7 +436,7 @@ class DatasetInspector:
                     save_dir, f"{graph_type}_seq{seq_idx}_time{time_idx}_inspection.png"
                 )
             )
-        plt.show()
+        plt.close(fig)  # Close the figure instead of showing it
 
         # Print feature statistics
         print(f"\nFeature Statistics at t={time_idx}:")

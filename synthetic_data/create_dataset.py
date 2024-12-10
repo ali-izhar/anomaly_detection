@@ -1,3 +1,5 @@
+# synthetic_data/create_dataset.py
+
 """
 Dataset Generator
 
@@ -11,7 +13,7 @@ import sys
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 import yaml
 import h5py

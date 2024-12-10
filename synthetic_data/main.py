@@ -1,3 +1,5 @@
+# synthetic_data/main.py
+
 """
 Main Dataset Generation Script
 
@@ -11,8 +13,6 @@ import os
 import sys
 import logging
 import argparse
-from pathlib import Path
-import shutil
 from typing import Dict
 
 import yaml

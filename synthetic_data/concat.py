@@ -1,3 +1,5 @@
+# synthetic_data/concat.py
+
 """
 Graph and Feature Concatenation
 
@@ -8,7 +10,7 @@ for all time instances in the sequences. Supports both node-level and global fea
 import sys
 import logging
 from pathlib import Path
-from typing import List, Dict, Union, Tuple, Optional
+from typing import List, Dict, Tuple, Optional
 import numpy as np
 
 project_root = Path(__file__).resolve().parent.parent
@@ -34,7 +36,7 @@ def concat_features(
         graphs: List of adjacency matrices [n_nodes x n_nodes]
         feature_types: List of features to extract and concatenate. If None, uses all available
         use_node_features: If True, concatenates node-level features
-                         If False, concatenates global features
+                           If False, concatenates global features
         include_adjacency: If True, includes adjacency information in node-level features
         normalize: If True, normalizes features to [0,1] range
 

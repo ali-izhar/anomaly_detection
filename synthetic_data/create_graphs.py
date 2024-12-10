@@ -1,3 +1,5 @@
+# synthetic_data/create_graphs.py
+
 """
 Graph Sequence Generator
 This module generates sequences of graphs (BA, ER, or NW) with config/graph_config.yaml params.
