@@ -332,6 +332,133 @@ class DatasetInspector:
                     print(f"      Mean: {feature_stats[graph_type]['mean'][i]:.4f}")
                     print(f"      Std:  {feature_stats[graph_type]['std'][i]:.4f}")
 
+    def inspect_sequence_element(
+        self,
+        graph_type: str,
+        seq_idx: int = 0,
+        time_idx: int = 0,
+        save_dir: Optional[str] = None,
+    ):
+        """
+        Inspect a specific element of a sequence in detail.
+        Shows adjacency matrix and feature values at the given time instance.
+
+        Args:
+            graph_type: Type of graph (BA, ER, NW)
+            seq_idx: Sequence index to inspect
+            time_idx: Time index to inspect
+            save_dir: Directory to save visualizations
+        """
+        # Get data
+        if self.format == "h5":
+            adjacency = self.data[graph_type][f"sequences/seq_{seq_idx}/adjacency"][
+                time_idx
+            ]
+            features = self.data[graph_type][f"sequences/seq_{seq_idx}/features"][
+                time_idx
+            ]
+        else:
+            adjacency = self.data[graph_type]["adjacency"][seq_idx][time_idx]
+            features = self.data[graph_type]["features"][seq_idx][time_idx]
+
+        # Create figure with subplots
+        if self.dataset_type == "global":
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            fig.suptitle(f"{graph_type} Sequence {seq_idx}, Time {time_idx}")
+
+            # Plot adjacency matrix
+            adj_reshaped = adjacency.reshape(int(np.sqrt(len(adjacency))), -1)
+            im1 = ax1.imshow(adj_reshaped, cmap="viridis")
+            ax1.set_title("Adjacency Matrix")
+            plt.colorbar(im1, ax=ax1)
+
+            # Plot feature values
+            feature_names = self._get_feature_names()
+            ax2.bar(feature_names, features[-6:])
+            ax2.set_title("Global Features")
+            plt.xticks(rotation=45)
+
+        else:  # node_level or combined
+            if self.dataset_type == "combined":
+                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+
+                # Plot original adjacency matrix
+                im1 = ax1.imshow(adjacency, cmap="viridis")
+                ax1.set_title("Original Adjacency Matrix")
+                plt.colorbar(im1, ax=ax1)
+
+                # Plot adjacency from features
+                im2 = ax2.imshow(features[:, :30], cmap="viridis")
+                ax2.set_title("Adjacency from Features")
+                plt.colorbar(im2, ax=ax2)
+
+                # Plot node features
+                feature_names = self._get_feature_names()[30:]  # Skip adjacency names
+                node_features = features[:, 30:]
+                im3 = ax3.imshow(node_features, cmap="viridis", aspect="auto")
+                ax3.set_title("Node Features")
+                ax3.set_xticks(range(len(feature_names)))
+                ax3.set_xticklabels(feature_names, rotation=45)
+                plt.colorbar(im3, ax=ax3)
+
+            else:  # node_level
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+                # Plot adjacency matrix
+                im1 = ax1.imshow(adjacency, cmap="viridis")
+                ax1.set_title("Adjacency Matrix")
+                plt.colorbar(im1, ax=ax1)
+
+                # Plot node features
+                feature_names = self._get_feature_names()
+                im2 = ax2.imshow(features, cmap="viridis", aspect="auto")
+                ax2.set_title("Node Features")
+                ax2.set_xticks(range(len(feature_names)))
+                ax2.set_xticklabels(feature_names, rotation=45)
+                plt.colorbar(im2, ax=ax2)
+
+        plt.tight_layout()
+
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(
+                    save_dir, f"{graph_type}_seq{seq_idx}_time{time_idx}_inspection.png"
+                )
+            )
+        plt.show()
+
+        # Print feature statistics
+        print(f"\nFeature Statistics at t={time_idx}:")
+        print("-" * 50)
+
+        if self.dataset_type == "global":
+            feature_names = self._get_feature_names()[-6:]  # Only global features
+            for i, name in enumerate(feature_names):
+                print(f"{name}: {features[-6+i]:.4f}")
+            print("\nAdjacency Statistics:")
+            print(f"Mean: {features[:-6].mean():.4f}")
+            print(f"Std: {features[:-6].std():.4f}")
+        else:
+            feature_names = self._get_feature_names()
+            if self.dataset_type == "combined":
+                print("Adjacency Statistics:")
+                print(f"Mean: {features[:, :30].mean():.4f}")
+                print(f"Std: {features[:, :30].std():.4f}")
+                print("\nNode Feature Statistics:")
+                for i, name in enumerate(feature_names[30:]):
+                    node_vals = features[:, 30 + i]
+                    print(f"{name}:")
+                    print(f"  Mean: {node_vals.mean():.4f}")
+                    print(f"  Std: {node_vals.std():.4f}")
+            else:
+                print("Node Feature Statistics:")
+                for i, name in enumerate(feature_names):
+                    node_vals = features[:, i]
+                    print(f"{name}:")
+                    print(f"  Mean: {node_vals.mean():.4f}")
+                    print(f"  Std: {node_vals.std():.4f}")
+
 
 def main():
     """Example usage of dataset inspection"""
@@ -342,7 +469,7 @@ def main():
         "--dataset", type=str, help="Path to dataset file", required=True
     )
     parser.add_argument(
-        "--output", type=str, default="figures", help="Output directory for plots"
+        "--output", type=str, default="analysis", help="Output directory for analysis"
     )
     args = parser.parse_args()
 
@@ -350,41 +477,61 @@ def main():
         # Create inspector
         inspector = DatasetInspector(args.dataset)
 
-        # Print basic stats
-        print("\nDataset Statistics:")
-        print("-" * 50)
-        stats = inspector.get_basic_stats()
-        for graph_type, graph_stats in stats.items():
-            print(f"\n{graph_type}:")
-            for key, value in graph_stats.items():
-                print(f"  {key}: {value}")
+        # Create output directories
+        stats_dir = os.path.join(args.output, "statistics")
+        plots_dir = os.path.join(args.output, "plots")
+        inspection_dir = os.path.join(args.output, "element_inspection")
+        os.makedirs(stats_dir, exist_ok=True)
+        os.makedirs(plots_dir, exist_ok=True)
+        os.makedirs(inspection_dir, exist_ok=True)
 
-        # Print change point analysis
-        print("\nChange Point Analysis:")
-        print("-" * 50)
-        cp_stats = inspector.analyze_change_points()
-        for graph_type, cp_stat in cp_stats.items():
-            print(f"\n{graph_type}:")
-            for key, value in cp_stat.items():
-                print(f"  {key}: {value:.2f}")
+        # Save basic statistics
+        with open(os.path.join(stats_dir, "basic_stats.txt"), "w") as f:
+            stats = inspector.get_basic_stats()
+            f.write("Dataset Statistics:\n")
+            f.write("-" * 50 + "\n")
+            for graph_type, graph_stats in stats.items():
+                f.write(f"\n{graph_type}:\n")
+                for key, value in graph_stats.items():
+                    f.write(f"  {key}: {value}\n")
 
-        # Create plots
-        os.makedirs(args.output, exist_ok=True)
+        # Save change point analysis
+        with open(os.path.join(stats_dir, "change_point_stats.txt"), "w") as f:
+            cp_stats = inspector.analyze_change_points()
+            f.write("Change Point Analysis:\n")
+            f.write("-" * 50 + "\n")
+            for graph_type, cp_stat in cp_stats.items():
+                f.write(f"\n{graph_type}:\n")
+                for key, value in cp_stat.items():
+                    f.write(f"  {key}: {value:.2f}\n")
+
+        # Generate plots
         inspector.plot_feature_distributions(
-            save_path=os.path.join(args.output, "feature_distributions.png")
+            save_path=os.path.join(plots_dir, "feature_distributions.png")
         )
         inspector.plot_change_point_distribution(
-            save_path=os.path.join(args.output, "change_point_distribution.png")
+            save_path=os.path.join(plots_dir, "change_point_distribution.png")
         )
 
-        # Visualize example graphs
+        # Visualize graph evolution
         for graph_type in ["BA", "ER", "NW"]:
             inspector.visualize_graph_evolution(
                 graph_type=graph_type,
                 seq_idx=0,
                 timesteps=[0, 50, 100, 150],
-                save_path=os.path.join(args.output, f"{graph_type}_evolution.png"),
+                save_path=os.path.join(plots_dir, f"{graph_type}_evolution.png"),
             )
+
+            # Inspect specific elements
+            for time_idx in [0, 50, 100]:
+                inspector.inspect_sequence_element(
+                    graph_type=graph_type,
+                    seq_idx=0,
+                    time_idx=time_idx,
+                    save_dir=inspection_dir,
+                )
+
+        print(f"\nAnalysis saved to {args.output}/")
 
     except Exception as e:
         print(f"Error: {str(e)}")
