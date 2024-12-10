@@ -1,0 +1,28 @@
+# GRAPH GENERATION PARAMETERS
+common:
+  nodes: 30            # Number of nodes in each graph
+  seq_len: 200         # Sequence length
+  min_segment: 40      # Minimum length between changes
+  min_changes: 1       # Minimum number of change points
+  max_changes: 4       # Maximum number of change points
+
+# BARABASI-ALBERT PARAMETERS
+ba:
+  edges: 3             # Initial number of edges (sparse)
+  min_edges: 2         # Minimum edges after change
+  max_edges: 8         # Maximum edges after change
+
+# ERDOS-RENYI PARAMETERS
+er:
+  p: 0.05             # Initial probability (sparse)
+  min_p: 0.03         # Minimum probability after change
+  max_p: 0.15         # Maximum probability after change
+
+# NEWMAN-WATTS PARAMETERS
+nw:
+  k: 4                 # Initial nearest neighbors
+  min_k: 2             # Minimum neighbors after change
+  max_k: 8             # Maximum neighbors after change
+  p: 0.05              # Initial rewiring probability
+  min_p: 0.02          # Minimum rewiring probability
+  max_p: 0.20          # Maximum rewiring probability
