@@ -40,10 +40,10 @@ class GraphConfig:
         """Validate configuration parameters"""
         if self.nodes <= 0:
             raise ValueError("Number of nodes must be positive")
-        
+
         if self.min_changes > self.max_changes:
             raise ValueError("min_changes cannot be greater than max_changes")
-        
+
         # Check if sequence length can accommodate minimum segments
         min_total_length = self.min_segment * (self.max_changes + 1)
         if self.seq_len < min_total_length:
@@ -51,7 +51,7 @@ class GraphConfig:
                 f"Sequence length ({self.seq_len}) too short to accommodate "
                 f"{self.max_changes} changes with minimum segment length {self.min_segment}"
             )
-        
+
         # Validate graph-specific parameters
         if self.graph_type == GraphType.BA:
             self._validate_ba_params()
@@ -117,14 +117,14 @@ def _generate_random_change_points(
     seq_len = config.seq_len
     n = config.nodes
     min_seg = config.min_segment
-    
+
     MAX_ATTEMPTS = 100  # Prevent infinite loops
     num_changes = np.random.randint(config.min_changes, config.max_changes + 1)
-    
+
     for _ in range(MAX_ATTEMPTS):
         points = []
         available_positions = list(range(min_seg, seq_len - min_seg))
-        
+
         if len(available_positions) < num_changes:
             raise ValueError(
                 f"Cannot generate {num_changes} changes with current constraints. "
@@ -138,7 +138,9 @@ def _generate_random_change_points(
             points.append(point)
             # Remove positions that are too close to the chosen point
             mask = np.abs(np.array(available_positions) - point) >= min_seg
-            available_positions = [p for i, p in enumerate(available_positions) if mask[i]]
+            available_positions = [
+                p for i, p in enumerate(available_positions) if mask[i]
+            ]
 
         points = sorted(points)
         if len(points) >= config.min_changes:
@@ -245,7 +247,7 @@ def generate_graph_sequence(config: GraphConfig) -> Dict:
         # Generate final segment
         final_length = seq_length - (change_points[-1] if change_points else 0)
         final_config = {"n": n, "set1": final_length, "set2": 0, **params[-1]}
-        
+
         try:
             final_segment = generator_method(**final_config)
             all_graphs.extend(final_segment)
@@ -285,7 +287,9 @@ def main():
                 print(f"  - Nodes per graph: {config.nodes}")
                 print(f"  - Sequence length: {config.seq_len}")
                 print(f"  - Minimum segment length: {config.min_segment}")
-                print(f"  - Change points range: [{config.min_changes}, {config.max_changes}]")
+                print(
+                    f"  - Change points range: [{config.min_changes}, {config.max_changes}]"
+                )
                 print(f"  - Parameters: {config.params}")
 
                 result = generate_graph_sequence(config)

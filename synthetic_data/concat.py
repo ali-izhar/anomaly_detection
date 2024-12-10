@@ -29,7 +29,7 @@ def concat_features(
 ) -> Tuple[np.ndarray, Dict[str, Dict[str, float]]]:
     """
     Concatenate graph adjacency matrices with their features for each time instance.
-    
+
     Args:
         graphs: List of adjacency matrices [n_nodes x n_nodes]
         feature_types: List of features to extract and concatenate. If None, uses all available
@@ -37,71 +37,73 @@ def concat_features(
                          If False, concatenates global features
         include_adjacency: If True, includes adjacency information in node-level features
         normalize: If True, normalizes features to [0,1] range
-    
+
     Returns:
         Tuple containing:
         - Combined features array with shape:
           If use_node_features=True: [seq_len, n_nodes, n_features + n_nodes]
           If use_node_features=False: [seq_len, n_features + n_nodes * n_nodes]
         - Dictionary with normalization parameters for each feature
-    
+
     Raises:
         ValueError: If graphs list is empty or contains invalid matrices
     """
     try:
         validate_graph_shapes(graphs)
-        
+
         features = extract_features(
-            graphs,
-            feature_types=feature_types,
-            return_node_features=use_node_features
+            graphs, feature_types=feature_types, return_node_features=use_node_features
         )
-        
+
         seq_len = len(graphs)
         n_nodes = graphs[0].shape[0]
         norm_params = {}
-        
+
         if use_node_features:
             n_features = len(features)
             if include_adjacency:
                 # Combined: include both adjacency and features
                 combined = np.zeros((seq_len, n_nodes, n_nodes + n_features))
-                
+
                 # Add adjacency information
                 for t in range(seq_len):
                     combined[t, :, :n_nodes] = graphs[t]
-                
+
                 # Add node features
                 for i, (feat_name, feat_data) in enumerate(features.items()):
-                    node_features = feat_data['node']
+                    node_features = feat_data["node"]
                     if normalize:
                         feat_min = node_features.min()
                         feat_max = node_features.max()
                         if feat_max > feat_min:
-                            node_features = (node_features - feat_min) / (feat_max - feat_min)
-                        norm_params[feat_name] = {'min': feat_min, 'max': feat_max}
+                            node_features = (node_features - feat_min) / (
+                                feat_max - feat_min
+                            )
+                        norm_params[feat_name] = {"min": feat_min, "max": feat_max}
                     combined[:, :, n_nodes + i] = node_features
             else:
                 # Node-level only: just the features
                 combined = np.zeros((seq_len, n_nodes, n_features))
                 for i, (feat_name, feat_data) in enumerate(features.items()):
-                    node_features = feat_data['node']
+                    node_features = feat_data["node"]
                     if normalize:
                         feat_min = node_features.min()
                         feat_max = node_features.max()
                         if feat_max > feat_min:
-                            node_features = (node_features - feat_min) / (feat_max - feat_min)
-                        norm_params[feat_name] = {'min': feat_min, 'max': feat_max}
+                            node_features = (node_features - feat_min) / (
+                                feat_max - feat_min
+                            )
+                        norm_params[feat_name] = {"min": feat_min, "max": feat_max}
                     combined[:, :, i] = node_features
         else:
             # Global features with flattened adjacency
             n_features = len(features)
             combined = np.zeros((seq_len, n_nodes * n_nodes + n_features))
-            
+
             # Add flattened adjacency
             flat_adj = np.array([g.flatten() for g in graphs])
-            combined[:, :n_nodes * n_nodes] = flat_adj
-            
+            combined[:, : n_nodes * n_nodes] = flat_adj
+
             # Add global features
             for i, (feat_name, feat_data) in enumerate(features.items()):
                 global_features = feat_data
@@ -109,10 +111,12 @@ def concat_features(
                     feat_min = global_features.min()
                     feat_max = global_features.max()
                     if feat_max > feat_min:
-                        global_features = (global_features - feat_min) / (feat_max - feat_min)
-                    norm_params[feat_name] = {'min': feat_min, 'max': feat_max}
+                        global_features = (global_features - feat_min) / (
+                            feat_max - feat_min
+                        )
+                    norm_params[feat_name] = {"min": feat_min, "max": feat_max}
                 combined[:, n_nodes * n_nodes + i] = global_features
-        
+
         return combined, norm_params
 
     except Exception as e:
@@ -125,7 +129,9 @@ def main():
     import argparse
     from create_graphs import GraphConfig, GraphType, generate_graph_sequence
 
-    parser = argparse.ArgumentParser(description="Concatenate graphs with their features")
+    parser = argparse.ArgumentParser(
+        description="Concatenate graphs with their features"
+    )
     parser.add_argument(
         "--graph-type",
         type=str,
@@ -168,7 +174,7 @@ def main():
             graphs,
             use_node_features=args.node_features,
             include_adjacency=args.include_adjacency,
-            normalize=not args.no_normalize
+            normalize=not args.no_normalize,
         )
 
         # Print results
@@ -179,7 +185,7 @@ def main():
             print(f"Format: [seq_len, n_nodes, n_features + n_nodes]")
         else:
             print(f"Format: [seq_len, n_features + n_nodes * n_nodes]")
-        
+
         if not args.no_normalize:
             print("\nNormalization Parameters:")
             for feat_name, params in norm_params.items():

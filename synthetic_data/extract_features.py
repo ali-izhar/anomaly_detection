@@ -49,13 +49,13 @@ def extract_features(
 ) -> Dict[str, Union[np.ndarray, List[List[float]]]]:
     """
     Extract features from a sequence of graphs.
-    
+
     Args:
         graphs: List of adjacency matrices [n_nodes x n_nodes]
         feature_types: List of features to extract. If None, extracts all available features
         return_node_features: If True, returns both node-level and global features
                             If False, returns only global features (averaged over nodes)
-    
+
     Returns:
         Dictionary containing:
         - If return_node_features=False:
@@ -65,7 +65,7 @@ def extract_features(
                 'node': node_features,     # shape [seq_len, n_nodes]
                 'global': global_features  # shape [seq_len]
             }}
-    
+
     Raises:
         ValueError: If graphs list is empty or contains invalid matrices
     """
@@ -115,8 +115,8 @@ def extract_features(
 
             if return_node_features:
                 result[feat_name] = {
-                    'node': feat,  # shape [seq_len, n_nodes]
-                    'global': global_feat  # shape [seq_len]
+                    "node": feat,  # shape [seq_len, n_nodes]
+                    "global": global_feat,  # shape [seq_len]
                 }
             else:
                 result[feat_name] = global_feat  # shape [seq_len]
@@ -137,7 +137,9 @@ def main():
     import argparse
     from create_graphs import GraphConfig, GraphType, generate_graph_sequence
 
-    parser = argparse.ArgumentParser(description="Extract features from graph sequences")
+    parser = argparse.ArgumentParser(
+        description="Extract features from graph sequences"
+    )
     parser.add_argument(
         "--graph-type",
         type=str,
@@ -166,10 +168,7 @@ def main():
         graphs = sequence["graphs"]
 
         # Extract features
-        features = extract_features(
-            graphs,
-            return_node_features=args.node_features
-        )
+        features = extract_features(graphs, return_node_features=args.node_features)
 
         # Print results
         print("\nExtracted Features:")

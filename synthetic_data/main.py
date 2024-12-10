@@ -20,39 +20,36 @@ from create_dataset import create_dataset
 from inspect_dataset import DatasetInspector
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 def create_config_variant(
-    base_config_path: str,
-    output_dir: str,
-    feature_config: Dict,
-    variant_name: str
+    base_config_path: str, output_dir: str, feature_config: Dict, variant_name: str
 ) -> str:
     """Create a variant of the config file with specific feature settings."""
     # Load base config
-    with open(base_config_path, 'r') as f:
+    with open(base_config_path, "r") as f:
         config = yaml.safe_load(f)
-    
+
     # Modify feature settings
-    config['dataset']['features'] = feature_config
-    config['dataset']['output_dir'] = os.path.join(output_dir, variant_name)
-    
+    config["dataset"]["features"] = feature_config
+    config["dataset"]["output_dir"] = os.path.join(output_dir, variant_name)
+
     # Save variant config
     os.makedirs(output_dir, exist_ok=True)
-    variant_path = os.path.join(output_dir, f'dataset_config_{variant_name}.yaml')
-    
-    with open(variant_path, 'w') as f:
+    variant_path = os.path.join(output_dir, f"dataset_config_{variant_name}.yaml")
+
+    with open(variant_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
-    
+
     return variant_path
 
 
 def generate_datasets(
     base_config: str = "configs/dataset_config.yaml",
     graph_config: str = "configs/graph_config.yaml",
-    output_dir: str = "datasets"
+    output_dir: str = "datasets",
 ):
     """Generate three variants of the dataset."""
     try:
@@ -68,8 +65,8 @@ def generate_datasets(
                     "eigenvector",
                     "closeness",
                     "svd",
-                    "lsvd"
-                ]
+                    "lsvd",
+                ],
             },
             "global": {
                 "use_node_features": False,
@@ -81,8 +78,8 @@ def generate_datasets(
                     "eigenvector",
                     "closeness",
                     "svd",
-                    "lsvd"
-                ]
+                    "lsvd",
+                ],
             },
             "combined": {
                 "use_node_features": True,
@@ -94,38 +91,34 @@ def generate_datasets(
                     "eigenvector",
                     "closeness",
                     "svd",
-                    "lsvd"
-                ]
-            }
+                    "lsvd",
+                ],
+            },
         }
 
         # Generate each variant
         for variant_name, feature_config in variants.items():
             logger.info(f"\nGenerating {variant_name} dataset...")
-            
+
             # Create variant config
             variant_config = create_config_variant(
-                base_config,
-                output_dir,
-                feature_config,
-                variant_name
+                base_config, output_dir, feature_config, variant_name
             )
-            
+
             # Generate dataset
             dataset = create_dataset(
-                config_path=variant_config,
-                graph_config_path=graph_config
+                config_path=variant_config, graph_config_path=graph_config
             )
-            
+
             # Inspect and save analysis
             inspector = DatasetInspector(
                 os.path.join(output_dir, variant_name, "dataset.h5")
             )
-            
+
             # Create analysis directory
             analysis_dir = os.path.join(output_dir, variant_name, "analysis")
             os.makedirs(analysis_dir, exist_ok=True)
-            
+
             # Generate plots
             inspector.plot_feature_distributions(
                 save_path=os.path.join(analysis_dir, "feature_distributions.png")
@@ -133,19 +126,19 @@ def generate_datasets(
             inspector.plot_change_point_distribution(
                 save_path=os.path.join(analysis_dir, "change_point_distribution.png")
             )
-            
+
             # Save statistics
             stats = inspector.get_basic_stats()
             cp_stats = inspector.analyze_change_points()
-            
-            with open(os.path.join(analysis_dir, "statistics.txt"), 'w') as f:
+
+            with open(os.path.join(analysis_dir, "statistics.txt"), "w") as f:
                 f.write("Dataset Statistics:\n")
                 f.write("-" * 50 + "\n")
                 for graph_type, graph_stats in stats.items():
                     f.write(f"\n{graph_type}:\n")
                     for key, value in graph_stats.items():
                         f.write(f"  {key}: {value}\n")
-                
+
                 f.write("\nChange Point Analysis:\n")
                 f.write("-" * 50 + "\n")
                 for graph_type, cp_stat in cp_stats.items():
@@ -163,24 +156,26 @@ def generate_datasets(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate multiple graph sequence datasets")
+    parser = argparse.ArgumentParser(
+        description="Generate multiple graph sequence datasets"
+    )
     parser.add_argument(
         "--base-config",
         type=str,
         default="configs/dataset_config.yaml",
-        help="Path to base dataset config"
+        help="Path to base dataset config",
     )
     parser.add_argument(
         "--graph-config",
         type=str,
         default="configs/graph_config.yaml",
-        help="Path to graph config"
+        help="Path to graph config",
     )
     parser.add_argument(
         "--output",
         type=str,
         default="datasets",
-        help="Output directory for all datasets"
+        help="Output directory for all datasets",
     )
     args = parser.parse_args()
 
@@ -188,7 +183,7 @@ def main():
         generate_datasets(
             base_config=args.base_config,
             graph_config=args.graph_config,
-            output_dir=args.output
+            output_dir=args.output,
         )
     except Exception as e:
         logger.error(f"Error: {str(e)}")
