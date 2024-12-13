@@ -166,6 +166,14 @@ def train_model(
         for seq_data in train_data:
             x, edge_indices, edge_weights, y = seq_data
 
+            # Validate shapes
+            print("\nInput Validation:")
+            print(f"x shape: {x.shape}")
+            print(f"y shape: {y.shape}")
+            print(f"Number of edge indices: {len(edge_indices)}")
+            print(f"First edge index shape: {edge_indices[0].shape}")
+            print(f"First edge weight shape: {edge_weights[0].shape}")
+
             # Process in batches
             num_batches = (len(x) + batch_size - 1) // batch_size
             for b in range(num_batches):
@@ -174,15 +182,23 @@ def train_model(
 
                 batch_x = x[start_idx:end_idx].to(device)
                 batch_y = y[start_idx:end_idx].to(device)
-
-                # Get edges for last timestep in each sequence
                 batch_edge_index = edge_indices[end_idx - 1].to(device)
                 batch_edge_weight = edge_weights[end_idx - 1].to(device)
 
-                optimizer.zero_grad()
+                # Validate batch shapes
+                print("\nBatch Validation:")
+                print(f"batch_x shape: {batch_x.shape}")
+                print(f"batch_y shape: {batch_y.shape}")
+                print(f"batch_edge_index shape: {batch_edge_index.shape}")
+                print(f"batch_edge_weight shape: {batch_edge_weight.shape}")
 
-                # Forward pass
+                optimizer.zero_grad()
                 adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
+
+                # Validate output shape
+                print(f"adj_pred shape: {adj_pred.shape}")
+                print(f"Expected shape: {batch_y.shape}")
+                assert adj_pred.shape == batch_y.shape, "Prediction shape mismatch"
 
                 loss = criterion(adj_pred, batch_y)
                 loss.backward()

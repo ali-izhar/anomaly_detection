@@ -516,15 +516,22 @@ class DynamicGraphDataset:
             y: Target adjacency matrices
         """
         # Get sequence data
-        features = self.feature_sequences[sequence_idx]
-        adj_matrices = self.adjacency_matrices[sequence_idx]
+        features = self.feature_sequences[
+            sequence_idx
+        ]  # (timesteps, num_nodes, num_features)
+        adj_matrices = self.adjacency_matrices[
+            sequence_idx
+        ]  # (timesteps, num_nodes, num_nodes)
 
         # Calculate number of possible windows
         num_windows = (len(features) - temporal_periods - 1) // stride + 1
 
         # Initialize tensors
         x = torch.zeros(
-            num_windows, self.num_nodes, self.num_features, temporal_periods
+            num_windows,  # batch dimension
+            self.num_nodes,  # number of nodes
+            self.num_features,  # number of features per node
+            temporal_periods,  # number of timesteps in window
         )
         y = torch.zeros(num_windows, self.num_nodes, self.num_nodes)
         edge_indices = []
@@ -536,8 +543,13 @@ class DynamicGraphDataset:
             end_idx = start_idx + temporal_periods
 
             # Get features for this window
-            window_features = features[start_idx:end_idx]
-            x[i, :, :, :] = torch.FloatTensor(window_features.transpose(1, 0))
+            window_features = features[
+                start_idx:end_idx
+            ]  # (temporal_periods, num_nodes, num_features)
+
+            # Rearrange dimensions to match required shape
+            # From (temporal_periods, num_nodes, num_features) to (num_nodes, num_features, temporal_periods)
+            x[i] = torch.FloatTensor(np.transpose(window_features, (1, 2, 0)))
 
             # Get target adjacency (next timestep after window)
             y[i] = torch.FloatTensor(adj_matrices[end_idx])
@@ -548,6 +560,19 @@ class DynamicGraphDataset:
             )
             edge_indices.append(edge_index)
             edge_weights.append(edge_weight)
+
+        # Add shape validation
+        assert x.shape == (
+            num_windows,
+            self.num_nodes,
+            self.num_features,
+            temporal_periods,
+        ), f"Expected shape {(num_windows, self.num_nodes, self.num_features, temporal_periods)}, got {x.shape}"
+
+        # Log shapes for debugging
+        logger.debug(f"Features shape: {x.shape}")
+        logger.debug(f"Target shape: {y.shape}")
+        logger.debug(f"Number of edge indices: {len(edge_indices)}")
 
         return x, edge_indices, edge_weights, y
 

@@ -35,7 +35,7 @@ class DynamicLinkPredictor(nn.Module):
 
         # Input feature projection
         self.input_proj = nn.Sequential(
-            nn.Linear(num_features, hidden_channels),
+            nn.Linear(num_features * temporal_periods, hidden_channels),
             nn.ReLU(),
             nn.LayerNorm(hidden_channels),
             nn.Dropout(dropout),
@@ -45,7 +45,7 @@ class DynamicLinkPredictor(nn.Module):
         self.temporal_attention = A3TGCN2(
             in_channels=hidden_channels,
             out_channels=hidden_channels,
-            periods=temporal_periods,
+            periods=1,
             batch_size=batch_size,
             improved=True,
             cached=False,
@@ -112,27 +112,47 @@ class DynamicLinkPredictor(nn.Module):
         edge_weight: Optional[torch.Tensor] = None,
         hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Forward pass with A3TGCN2 temporal attention and GConvLSTM layers.
-
-        Args:
-            x: Input tensor of shape (batch_size, num_nodes, num_features, temporal_periods)
-            edge_index: Edge indices
-            edge_weight: Optional edge weights
-            hidden_state: Optional previous hidden state
-        """
+        """Forward pass with A3TGCN2 temporal attention and GConvLSTM layers."""
         batch_size = x.size(0)
         device = x.device
 
-        # Project features
-        h = self.input_proj(
-            x
-        )  # (batch_size, num_nodes, hidden_channels, temporal_periods)
+        # Validate input dimensions
+        assert (
+            x.dim() == 4
+        ), f"Expected 4D input (batch, nodes, features, time), got {x.dim()}D"
+        assert (
+            x.size(1) == self.num_nodes
+        ), f"Expected {self.num_nodes} nodes, got {x.size(1)}"
+        assert (
+            x.size(2) == self.num_features
+        ), f"Expected {self.num_features} features, got {x.size(2)}"
+        assert (
+            x.size(3) == self.temporal_periods
+        ), f"Expected {self.temporal_periods} timesteps, got {x.size(3)}"
+
+        # Reshape input for temporal attention
+        # From: (batch_size, num_nodes, num_features, temporal_periods)
+        # To: (batch_size, num_nodes, hidden_channels, temporal_periods)
+        x = x.permute(
+            0, 1, 3, 2
+        )  # (batch_size, num_nodes, temporal_periods, num_features)
+        x = x.reshape(
+            batch_size, self.num_nodes, -1
+        )  # Flatten temporal and feature dims
+        h = self.input_proj(x)  # Project to hidden size
+        h = h.view(
+            batch_size, self.num_nodes, self.hidden_channels, 1
+        )  # Add temporal dim back
+
+        # Debug prints
+        print(f"After reshape - h shape: {h.shape}")
+        print(f"Edge index shape: {edge_index.shape}")
+        if edge_weight is not None:
+            print(f"Edge weight shape: {edge_weight.shape}")
 
         # Apply temporal attention
-        h = self.temporal_attention(
-            h, edge_index, edge_weight
-        )  # (batch_size, num_nodes, hidden_channels)
+        h = self.temporal_attention(h, edge_index, edge_weight)
+        print(f"After attention - h shape: {h.shape}")
 
         # Initialize or use provided hidden state
         if hidden_state is None:
@@ -144,12 +164,40 @@ class DynamicLinkPredictor(nn.Module):
         for i, (gconv_lstm, norm) in enumerate(
             zip(self.gconv_lstm_layers, self.layer_norms)
         ):
+            # Expand edge_index for batch dimension
+            batch_edge_index = edge_index.repeat(1, batch_size)
+            batch_edge_index[0] += (
+                torch.arange(batch_size, device=device).repeat_interleave(
+                    edge_index.size(1)
+                )
+                * self.num_nodes
+            )
+            batch_edge_index[1] += (
+                torch.arange(batch_size, device=device).repeat_interleave(
+                    edge_index.size(1)
+                )
+                * self.num_nodes
+            )
+
+            # Expand edge_weight if needed
+            batch_edge_weight = (
+                edge_weight.repeat(batch_size) if edge_weight is not None else None
+            )
+
+            # Reshape h for GConvLSTM
+            h_reshaped = h.reshape(
+                -1, self.hidden_channels
+            )  # Flatten batch and node dimensions
+
             h_new, new_state = gconv_lstm(
-                h,
-                edge_index,
-                edge_weight if self.use_edge_weights else None,
+                h_reshaped,
+                batch_edge_index,
+                batch_edge_weight if self.use_edge_weights else None,
                 hidden_state[i],
             )
+
+            # Reshape back
+            h_new = h_new.view(batch_size, self.num_nodes, -1)
 
             # Apply normalization and residual connection
             h_new = norm(h_new)
