@@ -1,0 +1,122 @@
+# Training Configuration
+
+# Model parameters
+model:
+    hidden_channels: 64
+    num_layers: 2
+    dropout: 0.2
+    K: 3  # Graph conv kernel size
+    use_edge_weights: true
+    attention_heads: 4
+    attention_dropout: 0.1
+
+# Training parameters
+training:
+    num_epochs: 1
+    batch_size: 32
+    learning_rate: 0.001
+    temporal_periods: 10
+    patience: 10
+    val_ratio: 0.2
+
+# Data parameters
+data:
+    variant: "node_level"  # node_level, global, or combined
+    sequences_per_type: 50  # Number of sequences to use per graph type
+    graph_types: ["BA", "ER", "NW"]
+
+# Checkpointing
+checkpoint:
+    dir: "checkpoints"
+    save_best: true
+    save_interval: 5  # Save every N epochs
+    keep_last: 3  # Keep last N checkpoints
+    filename_template: "model_epoch_{epoch:03d}_loss_{loss:.4f}.pt"
+
+# Logging
+logging:
+    dir: "logs"
+    level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    console_level: "INFO"
+    file_level: "DEBUG"
+    log_interval: 10  # Log every N batches
+
+# Visualization
+visualization:
+    save_dir: "visualizations"
+    plot_interval: 10  # Plot every N epochs
+    formats: ["png"]
+    dpi: 300
+    plot_types:
+        - "loss"
+        - "auc"
+        - "graph_structure"
+
+# Metrics
+metrics:
+    train:
+        - "loss"
+        - "accuracy"
+    validation:
+        - "loss"
+        - "auc"
+        - "precision"
+        - "recall"
+        - "f1"
+    test:
+        - "loss"
+        - "auc"
+        - "precision"
+        - "recall"
+        - "f1"
+        - "confusion_matrix"
+
+# Device
+device: "cuda"  # or "cpu"
+
+# Random seed for reproducibility
+seed: 42
+
+# Early stopping
+early_stopping:
+    monitor: "val_loss"
+    min_delta: 0.001
+    patience: 10
+    mode: "min"  # min or max
+
+# Optimizer
+optimizer:
+    type: "adam"
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    amsgrad: false
+
+# Learning rate scheduler
+scheduler:
+    type: "reduce_on_plateau"
+    mode: "min"
+    factor: 0.1
+    patience: 5
+    min_lr: 0.00001
+    threshold: 0.0001
+
+# Gradient clipping
+gradient_clipping:
+    enabled: true
+    max_norm: 1.0
+    norm_type: 2
+
+# Loss function
+loss:
+    type: "bce"
+    weights: null  # Can be set to handle class imbalance
+    reduction: "mean"  # mean, sum, none
+
+# Debug mode
+debug:
+    enabled: false
+    subset_size: 100  # Number of sequences to use in debug mode
+    profile: false    # Enable performance profiling
+    verbose: true     # Print detailed debug information

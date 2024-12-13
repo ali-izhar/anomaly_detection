@@ -10,6 +10,8 @@ from tqdm import tqdm
 import logging
 from pathlib import Path
 from datetime import datetime
+import yaml
+from typing import Dict, Any, Optional
 
 from dataset import DynamicGraphDataset
 from link_predictor import DynamicLinkPredictor
@@ -127,29 +129,99 @@ def evaluate_predictions(
     return metrics
 
 
+def load_config(config_path: str = "configs/training_config.yaml") -> Dict[str, Any]:
+    """Load training configuration."""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    epoch: int,
+    loss: float,
+    history: Dict,
+    config: Dict,
+    checkpoint_dir: str = "checkpoints",
+    is_best: bool = False,
+) -> str:
+    """Save model checkpoint."""
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(exist_ok=True)
+
+    # Create checkpoint
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "history": history,
+        "config": config,
+    }
+
+    # Save checkpoint
+    if is_best:
+        checkpoint_path = checkpoint_dir / "model_best.pt"
+    else:
+        checkpoint_path = checkpoint_dir / config["checkpoint"][
+            "filename_template"
+        ].format(epoch=epoch, loss=loss)
+
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Checkpoint saved: {checkpoint_path}")
+
+    # Clean up old checkpoints
+    if not is_best and config["checkpoint"]["keep_last"] > 0:
+        checkpoints = sorted(
+            checkpoint_dir.glob("model_epoch_*.pt"),
+            key=lambda x: int(x.stem.split("_")[2]),
+        )
+        while len(checkpoints) > config["checkpoint"]["keep_last"]:
+            old_checkpoint = checkpoints.pop(0)
+            old_checkpoint.unlink()
+            logger.debug(f"Removed old checkpoint: {old_checkpoint}")
+
+    return str(checkpoint_path)
+
+
+def load_checkpoint(
+    checkpoint_path: str,
+    model: Optional[nn.Module] = None,
+    optimizer: Optional[optim.Optimizer] = None,
+    device: str = "cuda",
+) -> Dict:
+    """Load model checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    if model is not None:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    return checkpoint
+
+
 def train_model(
     model,
     dataset,
     sequence_indices,
-    num_epochs=10,
-    learning_rate=0.001,
-    patience=10,
-    temporal_periods=10,
-    batch_size=32,
-    val_ratio=0.2,
+    config: Dict[str, Any],
     device="cuda" if torch.cuda.is_available() else "cpu",
-    log_interval: int = 10,  # Log every N batches
 ):
     """Train the model with temporal sequences."""
     logger.info(f"Starting training with {len(sequence_indices)} sequences")
     logger.info(
-        f"Model parameters: lr={learning_rate}, batch_size={batch_size}, "
-        f"temporal_periods={temporal_periods}"
+        f"Model parameters: lr={config['training']['learning_rate']}, "
+        f"batch_size={config['training']['batch_size']}, "
+        f"temporal_periods={config['training']['temporal_periods']}"
     )
 
     model = model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", patience=patience // 2)
+    optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="min", patience=config["training"]["patience"] // 2
+    )
     criterion = nn.BCELoss()
 
     best_val_loss = float("inf")
@@ -164,11 +236,11 @@ def train_model(
 
     for seq_idx in tqdm(sequence_indices, desc="Processing sequences"):
         x, edge_indices, edge_weights, y = dataset.get_temporal_batch(
-            seq_idx, temporal_periods=temporal_periods
+            seq_idx, temporal_periods=config["training"]["temporal_periods"]
         )
 
         num_windows = len(x)
-        num_val = int(num_windows * val_ratio)
+        num_val = int(num_windows * config["training"]["val_ratio"])
 
         if num_val > 0:
             val_data.append(
@@ -196,23 +268,28 @@ def train_model(
     )
 
     # Training loop
-    for epoch in range(num_epochs):
+    for epoch in range(config["training"]["num_epochs"]):
         model.train()
         total_loss = 0
         batch_count = 0
 
         # Training
-        train_pbar = tqdm(train_data, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+        train_pbar = tqdm(
+            train_data,
+            desc=f"Epoch {epoch+1}/{config['training']['num_epochs']} [Train]",
+        )
         for seq_idx, seq_data in enumerate(train_pbar):
             x, edge_indices, edge_weights, y = seq_data
 
             # Process in batches
-            num_batches = (len(x) + batch_size - 1) // batch_size
+            num_batches = (len(x) + config["training"]["batch_size"] - 1) // config[
+                "training"
+            ]["batch_size"]
             batch_losses = []
 
             for b in range(num_batches):
-                start_idx = b * batch_size
-                end_idx = min((b + 1) * batch_size, len(x))
+                start_idx = b * config["training"]["batch_size"]
+                end_idx = min((b + 1) * config["training"]["batch_size"], len(x))
 
                 batch_x = x[start_idx:end_idx].to(device)
                 batch_y = y[start_idx:end_idx].to(device)
@@ -231,8 +308,11 @@ def train_model(
                 batch_count += 1
 
                 # Update progress bar
-                if batch_count % log_interval == 0:
-                    avg_loss = sum(batch_losses[-log_interval:]) / log_interval
+                if batch_count % config["logging"]["log_interval"] == 0:
+                    avg_loss = (
+                        sum(batch_losses[-config["logging"]["log_interval"] :])
+                        / config["logging"]["log_interval"]
+                    )
                     train_pbar.set_postfix(
                         {
                             "batch_loss": f"{avg_loss:.4f}",
@@ -249,15 +329,20 @@ def train_model(
         val_targets = []
 
         with torch.no_grad():
-            val_pbar = tqdm(val_data, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+            val_pbar = tqdm(
+                val_data,
+                desc=f"Epoch {epoch+1}/{config['training']['num_epochs']} [Val]",
+            )
             for seq_data in val_pbar:
                 x, edge_indices, edge_weights, y = seq_data
 
                 # Process in batches
-                num_batches = (len(x) + batch_size - 1) // batch_size
+                num_batches = (len(x) + config["training"]["batch_size"] - 1) // config[
+                    "training"
+                ]["batch_size"]
                 for b in range(num_batches):
-                    start_idx = b * batch_size
-                    end_idx = min((b + 1) * batch_size, len(x))
+                    start_idx = b * config["training"]["batch_size"]
+                    end_idx = min((b + 1) * config["training"]["batch_size"], len(x))
 
                     batch_x = x[start_idx:end_idx].to(device)
                     batch_y = y[start_idx:end_idx].to(device)
@@ -280,7 +365,7 @@ def train_model(
 
         # Log epoch results
         logger.info(
-            f"Epoch {epoch+1}/{num_epochs} - "
+            f"Epoch {epoch+1}/{config['training']['num_epochs']} - "
             f"Train Loss: {avg_train_loss:.4f}, "
             f"Val Loss: {val_loss:.4f}, "
             f"Val AUC: {val_auc:.4f}"
@@ -294,7 +379,7 @@ def train_model(
             logger.info(f"New best model! Val Loss: {val_loss:.4f}")
         else:
             patience_counter += 1
-            if patience_counter >= patience:
+            if patience_counter >= config["training"]["patience"]:
                 logger.info(f"Early stopping triggered after {epoch+1} epochs")
                 break
 
@@ -305,6 +390,33 @@ def train_model(
         history["val_loss"].append(val_loss)
         history["val_auc"].append(val_auc)
 
+        # Save checkpoint
+        if config["checkpoint"]["save_best"] and val_loss < best_val_loss:
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                val_loss,
+                history,
+                config,
+                config["checkpoint"]["dir"],
+                is_best=True,
+            )
+
+        if (
+            config["checkpoint"]["save_interval"] > 0
+            and epoch % config["checkpoint"]["save_interval"] == 0
+        ):
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                val_loss,
+                history,
+                config,
+                config["checkpoint"]["dir"],
+            )
+
     # Load best model
     model.load_state_dict(best_model)
     logger.info("Training completed!")
@@ -312,37 +424,39 @@ def train_model(
 
 
 if __name__ == "__main__":
+    # Load config
+    config = load_config()
+
     # Set up logging
-    setup_logging()
+    setup_logging(log_dir=config["logging"]["dir"], level=config["logging"]["level"])
     logger.info("Starting script")
 
     try:
         # Create dataset
-        dataset = DynamicGraphDataset(variant="node_level")
+        dataset = DynamicGraphDataset(variant=config["data"]["variant"])
         logger.info(f"Dataset loaded: {len(dataset.metadata)} sequences")
 
-        # Parameters
-        temporal_periods = 10
-        batch_size = 32
-
         # Get sequence indices
-        ba_indices = dataset.get_graph_type_indices("BA")
-        er_indices = dataset.get_graph_type_indices("ER")
-        nw_indices = dataset.get_graph_type_indices("NW")
-
-        train_sequences = np.concatenate(
-            [ba_indices[:50], er_indices[:50], nw_indices[:50]]
-        )
+        train_sequences = []
+        for graph_type in config["data"]["graph_types"]:
+            indices = dataset.get_graph_type_indices(graph_type)
+            train_sequences.extend(indices[: config["data"]["sequences_per_type"]])
+        train_sequences = np.array(train_sequences)
         logger.info(f"Training with {len(train_sequences)} sequences")
 
         # Create model
         model = DynamicLinkPredictor(
             num_nodes=dataset.num_nodes,
             num_features=dataset.num_features,
-            hidden_channels=64,
-            num_layers=2,
-            temporal_periods=temporal_periods,
-            batch_size=batch_size,
+            hidden_channels=config["model"]["hidden_channels"],
+            num_layers=config["model"]["num_layers"],
+            dropout=config["model"]["dropout"],
+            K=config["model"]["K"],
+            use_edge_weights=config["model"]["use_edge_weights"],
+            attention_heads=config["model"]["attention_heads"],
+            attention_dropout=config["model"]["attention_dropout"],
+            temporal_periods=config["training"]["temporal_periods"],
+            batch_size=config["training"]["batch_size"],
         )
         logger.info(
             f"Model created with {sum(p.numel() for p in model.parameters())} parameters"
@@ -353,9 +467,8 @@ if __name__ == "__main__":
             model,
             dataset,
             train_sequences,
-            num_epochs=50,
-            temporal_periods=temporal_periods,
-            batch_size=batch_size,
+            config,
+            device=config["device"],
         )
 
         # Plot and save training history
