@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from torch_geometric_temporal.signal import (
-    DynamicGraphTemporalSignal,
+    DynamicGraphTemporalSignalBatch,
     temporal_signal_split,
 )
 
@@ -194,8 +194,8 @@ class DynamicGraphDataset:
 
     def get_temporal_signal(
         self, sequence_idx: int, window_size: Optional[int] = None
-    ) -> DynamicGraphTemporalSignal:
-        """Create a DynamicGraphTemporalSignal for a specific sequence."""
+    ) -> DynamicGraphTemporalSignalBatch:
+        """Create a DynamicGraphTemporalSignalBatch for a specific sequence."""
         # Use config window size if not specified
         window_size = window_size or self.temporal_config["window_size"]
 
@@ -210,6 +210,7 @@ class DynamicGraphDataset:
         edge_weights = []
         features = []
         targets = []
+        batch_indices = []
 
         for t in range(self.sequence_length - window_size):
             # Get edges
@@ -219,34 +220,100 @@ class DynamicGraphDataset:
             # Convert to numpy for consistency
             edge_indices.append(edge_index.numpy())
             edge_weights.append(edge_weight.numpy())
+            
+            # Add batch indices for this timestep
+            batch_idx = np.zeros(self.num_nodes, dtype=np.int64)  # All nodes belong to batch 0
+            batch_indices.append(batch_idx)
 
-            # Get features
+            # Rest of the feature processing remains the same
             curr_features = self.feature_sequences[sequence_idx, t]
             if self.variant == "global":
-                # For global variant, separate adjacency and features
                 adj_size = self.num_nodes * self.num_nodes
-                global_features = curr_features[
-                    adj_size:
-                ]  # Take only the global features
-                # Replicate global features for each node
+                global_features = curr_features[adj_size:]
                 node_features = np.tile(global_features, (self.num_nodes, 1))
                 features.append(node_features)
             else:
                 features.append(curr_features)
 
-            # Target is next timestep's adjacency
             targets.append(self.adjacency_matrices[sequence_idx, t + 1])
 
-        return DynamicGraphTemporalSignal(
+        return DynamicGraphTemporalSignalBatch(
             edge_indices=edge_indices,
             edge_weights=edge_weights,
             features=features,
             targets=targets,
+            batch_indices=batch_indices,
+            batches=batch_indices
+        )
+
+    def get_batch_temporal_signal(
+        self, sequence_indices: List[int], window_size: Optional[int] = None
+    ) -> DynamicGraphTemporalSignalBatch:
+        """Create a batched temporal signal from multiple sequences."""
+        window_size = window_size or self.temporal_config["window_size"]
+
+        edge_indices = []
+        edge_weights = []
+        features = []
+        targets = []
+        batch_indices = []
+
+        for t in range(self.sequence_length - window_size):
+            batch_edge_indices = []
+            batch_edge_weights = []
+            batch_features = []
+            batch_targets = []
+            batch_idx = []
+            
+            node_offset = 0
+            for batch_id, seq_idx in enumerate(sequence_indices):
+                # Get edges and offset them based on batch position
+                curr_adj = self.adjacency_matrices[seq_idx, t]
+                edge_index, edge_weight = self._get_edges_from_adjacency(curr_adj)
+                edge_index = edge_index.numpy()
+                edge_index[0] += node_offset  # Offset source nodes
+                edge_index[1] += node_offset  # Offset target nodes
+                
+                batch_edge_indices.append(edge_index)
+                batch_edge_weights.append(edge_weight.numpy())
+                
+                # Process features
+                curr_features = self.feature_sequences[seq_idx, t]
+                if self.variant == "global":
+                    adj_size = self.num_nodes * self.num_nodes
+                    global_features = curr_features[adj_size:]
+                    node_features = np.tile(global_features, (self.num_nodes, 1))
+                    batch_features.append(node_features)
+                else:
+                    batch_features.append(curr_features)
+                
+                # Add targets
+                batch_targets.append(self.adjacency_matrices[seq_idx, t + 1])
+                
+                # Add batch indices for this sequence
+                batch_idx.append(np.full(self.num_nodes, batch_id, dtype=np.int64))
+                
+                node_offset += self.num_nodes
+
+            # Concatenate all batch data for this timestep
+            edge_indices.append(np.concatenate(batch_edge_indices, axis=1))
+            edge_weights.append(np.concatenate(batch_edge_weights))
+            features.append(np.concatenate(batch_features))
+            targets.append(np.concatenate(batch_targets))
+            batch_indices.append(np.concatenate(batch_idx))
+
+        return DynamicGraphTemporalSignalBatch(
+            edge_indices=edge_indices,
+            edge_weights=edge_weights,
+            features=features,
+            targets=targets,
+            batch_indices=batch_indices,
+            batches=batch_indices
         )
 
     def get_train_test_split(
         self, train_ratio: Optional[float] = None, sequence_idx: Optional[int] = None
-    ) -> Tuple[DynamicGraphTemporalSignal, DynamicGraphTemporalSignal]:
+    ) -> Tuple[DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch]:
         """Get train/test split for a sequence."""
         train_ratio = train_ratio or self.temporal_config["train_ratio"]
 
@@ -278,11 +345,9 @@ class DynamicGraphDataset:
         """Get full metadata for a specific sequence."""
         return self.metadata[sequence_idx]
 
-    def get_train_val_test_split(self, sequence_idx: Optional[int] = None) -> Tuple[
-        DynamicGraphTemporalSignal,
-        DynamicGraphTemporalSignal,
-        DynamicGraphTemporalSignal,
-    ]:
+    def get_train_val_test_split(
+        self, sequence_idx: Optional[int] = None
+    ) -> Tuple[DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch]:
         """Get train/validation/test split for a sequence."""
         train_ratio = self.temporal_config["train_ratio"]
         val_ratio = self.temporal_config["validation_ratio"]
