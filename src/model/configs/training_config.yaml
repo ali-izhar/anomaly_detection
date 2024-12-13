@@ -12,7 +12,7 @@ model:
 
 # Training parameters
 training:
-    num_epochs: 1
+    num_epochs: 10
     batch_size: 32
     learning_rate: 0.001
     temporal_periods: 10
@@ -44,10 +44,17 @@ checkpoint:
 # Logging
 logging:
     dir: "logs"
-    level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    console_level: "DEBUG"
-    file_level: "DEBUG"
+    level: "DEBUG"  # Root logger level
+    console_level: "INFO"   # Keep console clean with INFO level
+    file_level: "DEBUG"    # Detailed DEBUG logs in file
     log_interval: 10  # Log every N batches
+    console_format: "%(message)s"  # Even simpler console format
+    file_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    progress_bar: true  # Whether to show progress bars
+    console_sections:
+        - "training"    # Show training progress
+        - "validation"  # Show validation results
+        - "summary"     # Show epoch summaries
 
 # Visualization
 visualization:

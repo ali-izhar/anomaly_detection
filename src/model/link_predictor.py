@@ -1,11 +1,14 @@
 # src/model/link_predictor.py
 
+import logging
 from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch_geometric_temporal.nn.recurrent import GConvLSTM
 from torch_geometric_temporal.nn.recurrent.attentiontemporalgcn import A3TGCN2
+
+logger = logging.getLogger(__name__)
 
 
 class DynamicLinkPredictor(nn.Module):
@@ -147,15 +150,14 @@ class DynamicLinkPredictor(nn.Module):
             batch_size, self.num_nodes, self.hidden_channels, 1
         )  # Add temporal dim back
 
-        # Debug prints
-        print(f"After reshape - h shape: {h.shape}")
-        print(f"Edge index shape: {edge_index.shape}")
+        logger.debug(f"After reshape - h shape: {h.shape}")
+        logger.debug(f"Edge index shape: {edge_index.shape}")
         if edge_weight is not None:
-            print(f"Edge weight shape: {edge_weight.shape}")
+            logger.debug(f"Edge weight shape: {edge_weight.shape}")
 
         # Apply temporal attention
         h = self.temporal_attention(h, edge_index, edge_weight)
-        print(f"After attention - h shape: {h.shape}")
+        logger.debug(f"After attention - h shape: {h.shape}")
 
         # Initialize or use provided hidden state
         if hidden_state is None:

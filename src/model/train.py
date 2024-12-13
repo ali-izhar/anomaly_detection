@@ -7,6 +7,7 @@ from pathlib import Path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
+from datetime import datetime
 
 import torch
 import torch.nn.utils as torch_utils
@@ -27,8 +28,6 @@ from utils.helpers import (
 )
 from evaluate import ModelEvaluator
 from utils.logger import setup_logging
-
-logger = setup_logging()
 
 
 def load_config(config_path: str = "configs/training_config.yaml") -> Dict[str, Any]:
@@ -232,25 +231,35 @@ def train_model(
         model, device=device, visualization_dir=config["visualization"]["save_dir"]
     )
 
+    # Add more debug logging
+    logger.debug(f"Configuration loaded: {config}")
+    logger.debug(f"Device: {device}")
+    logger.debug(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+
     # Training loop
     for epoch in range(config["training"]["num_epochs"]):
+        logger.debug(f"\nStarting epoch {epoch+1}")
         model.train()
         total_loss = 0
         batch_count = 0
+        epoch_start_time = datetime.now()
 
         # Training
         train_pbar = tqdm(
             train_data,
             desc=f"Epoch {epoch+1}/{config['training']['num_epochs']} [Train]",
+            disable=not config["logging"]["progress_bar"],
         )
+
         for seq_idx, seq_data in enumerate(train_pbar):
+            logger.debug(f"Processing sequence {seq_idx+1}/{len(train_data)}")
             x, edge_indices, edge_weights, y = seq_data
+            sequence_losses = []
 
             # Process in batches
             num_batches = (len(x) + config["training"]["batch_size"] - 1) // config[
                 "training"
             ]["batch_size"]
-            batch_losses = []
 
             for b in range(num_batches):
                 start_idx = b * config["training"]["batch_size"]
@@ -263,11 +272,9 @@ def train_model(
 
                 optimizer.zero_grad()
                 adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
-
                 loss = criterion(adj_pred, batch_y)
                 loss.backward()
 
-                # Add gradient clipping if enabled
                 if config["gradient_clipping"]["enabled"]:
                     torch_utils.clip_grad_norm_(
                         model.parameters(),
@@ -277,26 +284,38 @@ def train_model(
 
                 optimizer.step()
 
-                batch_losses.append(loss.item())
+                sequence_losses.append(loss.item())
                 total_loss += loss.item()
                 batch_count += 1
 
-                # Update progress bar
+                # Enhanced debug logging
                 if batch_count % config["logging"]["log_interval"] == 0:
-                    avg_loss = (
-                        sum(batch_losses[-config["logging"]["log_interval"] :])
-                        / config["logging"]["log_interval"]
-                    )
-                    train_pbar.set_postfix(
-                        {
-                            "batch_loss": f"{avg_loss:.4f}",
-                            "avg_loss": f"{total_loss/batch_count:.4f}",
-                        }
+                    avg_loss = sum(
+                        sequence_losses[-config["logging"]["log_interval"] :]
+                    ) / len(sequence_losses[-config["logging"]["log_interval"] :])
+                    logger.debug(
+                        f"Epoch {epoch+1}, Sequence {seq_idx+1}/{len(train_data)}, "
+                        f"Batch {b+1}/{num_batches}: Loss = {avg_loss:.4f}, "
+                        f"LR = {optimizer.param_groups[0]['lr']:.6f}"
                     )
 
-        avg_train_loss = total_loss / batch_count if batch_count > 0 else float("inf")
+            # Update progress bar less frequently
+            if seq_idx % max(1, len(train_data) // 10) == 0:
+                train_pbar.set_postfix(
+                    {
+                        "loss": f"{sum(sequence_losses) / len(sequence_losses):.4f}",
+                        "avg_loss": f"{total_loss/batch_count:.4f}",
+                    }
+                )
 
-        # Validation using evaluator
+        # Log epoch summary
+        epoch_time = datetime.now() - epoch_start_time
+        logger.info(
+            f"Epoch {epoch+1}/{config['training']['num_epochs']} completed in {epoch_time}. "
+            f"Average loss: {total_loss/batch_count:.4f}"
+        )
+
+        # Validation
         val_metrics = evaluator.evaluate_predictions(
             val_data,
             phase="val",
@@ -307,13 +326,8 @@ def train_model(
         val_loss = val_metrics["loss"]
         val_auc = val_metrics["auc"]
 
-        # Log epoch results
-        logger.info(
-            f"Epoch {epoch+1}/{config['training']['num_epochs']} - "
-            f"Train Loss: {avg_train_loss:.4f}, "
-            f"Val Loss: {val_loss:.4f}, "
-            f"Val AUC: {val_auc:.4f}"
-        )
+        # Log validation results
+        logger.info(f"Validation - Loss: {val_loss:.4f}, AUC: {val_auc:.4f}")
 
         # Early stopping
         if val_loss < best_val_loss:
@@ -330,7 +344,9 @@ def train_model(
         scheduler.step(val_loss)
 
         # Save history
-        history["train_loss"].append(avg_train_loss)
+        history["train_loss"].append(
+            total_loss / batch_count if batch_count > 0 else float("inf")
+        )
         history["val_loss"].append(val_loss)
         history["val_auc"].append(val_auc)
 
@@ -400,10 +416,9 @@ def train_model(
 
 if __name__ == "__main__":
     config = load_config()
-    logger.info("Starting script")
+    logger = setup_logging(config["logging"])
 
     try:
-        # Create dataset
         dataset = DynamicGraphDataset(variant=config["data"]["variant"])
         logger.info(f"Dataset loaded: {len(dataset.metadata)} sequences")
 
