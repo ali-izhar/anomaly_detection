@@ -55,7 +55,7 @@ class SpatialTransformer(nn.Module):
         self.heads = heads
         self.hidden_channels = hidden_channels
         self.head_dim = hidden_channels // heads
-        
+
         # Fix transformer conv dimensions
         self.conv = TransformerConv(
             in_channels=hidden_channels,
@@ -63,18 +63,18 @@ class SpatialTransformer(nn.Module):
             heads=heads,
             dropout=dropout,
             edge_dim=self.head_dim,  # Set edge dimension to match head dimension
-            beta=True
+            beta=True,
         )
-        
+
         self.norm = nn.LayerNorm(hidden_channels)
         self.dropout = nn.Dropout(dropout)
-        
+
         # Update edge projection to match head dimensions
         self.edge_proj = nn.Sequential(
             nn.Linear(1, self.head_dim),
             nn.LayerNorm(self.head_dim),
             nn.ReLU(),
-            nn.Dropout(dropout)
+            nn.Dropout(dropout),
         )
 
     def forward(self, x, edge_index, edge_weight=None):
@@ -83,10 +83,10 @@ class SpatialTransformer(nn.Module):
             # Ensure edge_weight is 2D
             if edge_weight.dim() == 1:
                 edge_weight = edge_weight.unsqueeze(-1)
-            
+
             # Project edge weights to correct dimension
             edge_attr = self.edge_proj(edge_weight)  # [E, head_dim]
-            
+
             # Debug shapes
             logger.debug(f"Edge weight shape: {edge_weight.shape}")
             logger.debug(f"Edge attr shape: {edge_attr.shape}")
@@ -94,7 +94,7 @@ class SpatialTransformer(nn.Module):
             logger.debug(f"Edge index shape: {edge_index.shape}")
         else:
             edge_attr = None
-        
+
         # Apply transformer convolution
         x = self.conv(x, edge_index, edge_attr=edge_attr)
         x = self.norm(x)
@@ -145,7 +145,7 @@ class DynamicLinkPredictor(nn.Module):
 
         # Temporal processing
         self.temporal_transformer = TemporalTransformer(hidden_channels)
-        
+
         # Fix temporal convolution to maintain correct output size
         self.temporal_conv = nn.Sequential(
             nn.Conv2d(
@@ -153,17 +153,15 @@ class DynamicLinkPredictor(nn.Module):
                 out_channels=hidden_channels,
                 kernel_size=(1, temporal_periods),
                 stride=1,
-                padding=(0, temporal_periods//2),
-                padding_mode='replicate'  # Use replication padding
+                padding=(0, temporal_periods // 2),
+                padding_mode="replicate",  # Use replication padding
             ),
             nn.GELU(),
             nn.BatchNorm2d(hidden_channels),
             # Add a final 1x1 conv to ensure correct output size
             nn.Conv2d(
-                in_channels=hidden_channels,
-                out_channels=hidden_channels,
-                kernel_size=1
-            )
+                in_channels=hidden_channels, out_channels=hidden_channels, kernel_size=1
+            ),
         )
 
         # Spatial-Temporal layers
@@ -179,13 +177,11 @@ class DynamicLinkPredictor(nn.Module):
                     out_channels=hidden_channels,
                     K=K,
                     normalization="sym",
-                    bias=True
+                    bias=True,
                 )
             )
 
-            self.spatial_transformers.append(
-                SpatialTransformer(hidden_channels)
-            )
+            self.spatial_transformers.append(SpatialTransformer(hidden_channels))
 
             self.agcrn_layers.append(
                 GCNConv(
@@ -196,11 +192,15 @@ class DynamicLinkPredictor(nn.Module):
                 )
             )
 
-            self.norms.append(nn.ModuleList([
-                nn.LayerNorm(hidden_channels),
-                nn.LayerNorm(hidden_channels),
-                nn.LayerNorm(hidden_channels)
-            ]))
+            self.norms.append(
+                nn.ModuleList(
+                    [
+                        nn.LayerNorm(hidden_channels),
+                        nn.LayerNorm(hidden_channels),
+                        nn.LayerNorm(hidden_channels),
+                    ]
+                )
+            )
 
         # Node embeddings with regularization
         self.node_embeddings = nn.Parameter(torch.randn(num_nodes, hidden_channels))
@@ -242,22 +242,24 @@ class DynamicLinkPredictor(nn.Module):
 
         # Feature projection
         h = self.feature_proj(x.view(-1, self.num_features))
-        h = h.view(batch_size, self.temporal_periods, self.num_nodes, -1)  # [B, T, N, C]
+        h = h.view(
+            batch_size, self.temporal_periods, self.num_nodes, -1
+        )  # [B, T, N, C]
         logger.debug(f"After projection shape: {h.shape}")
 
         # Temporal processing
         h = self.temporal_transformer(h)  # [B, T, N, C]
         logger.debug(f"After transformer shape: {h.shape}")
-        
+
         # Reshape for temporal convolution
         h = h.permute(0, 3, 2, 1)  # [B, C, N, T]
         logger.debug(f"Before conv shape: {h.shape}")
-        
+
         # Apply temporal convolution and ensure correct output size
-        h = self.temporal_conv(h)   # [B, C, N, T]
+        h = self.temporal_conv(h)  # [B, C, N, T]
         h = h[..., 0]  # Take first temporal slice
         logger.debug(f"After conv shape: {h.shape}")
-        
+
         # Rearrange to [batch, nodes, channels]
         h = h.permute(0, 2, 1)  # [B, N, C]
         logger.debug(f"Final temporal shape: {h.shape}")
@@ -270,56 +272,45 @@ class DynamicLinkPredictor(nn.Module):
         # Process through layers
         hidden_states = []
         for i, (st_conv, spatial_trans, gcn, norms) in enumerate(
-            zip(self.st_layers, self.spatial_transformers, self.agcrn_layers, self.norms)
+            zip(
+                self.st_layers, self.spatial_transformers, self.agcrn_layers, self.norms
+            )
         ):
             logger.debug(f"\nLayer {i} processing:")
             logger.debug(f"Input shape: {h.shape}")
-            
+
             # Flatten batch and nodes for GNN operations
             h_flat = h.reshape(-1, self.hidden_channels)  # [B*N, C]
-            
+
             # Process edge weights
             if edge_weight is not None:
                 # Ensure edge weight is properly shaped
                 if edge_weight.dim() == 1:
                     edge_weight = edge_weight.unsqueeze(-1)
                 logger.debug(f"Edge weight shape: {edge_weight.shape}")
-            
+
             # Spatial-temporal convolution with GConvGRU
-            h_temp = st_conv(
-                h_flat,
-                edge_index,
-                edge_weight,
-                lambda_max=None
-            )
+            h_temp = st_conv(h_flat, edge_index, edge_weight, lambda_max=None)
             h_temp = h_temp.view(batch_size, self.num_nodes, -1)  # [B, N, C]
             h_temp = norms[0](h_temp)
             logger.debug(f"After GConvGRU shape: {h_temp.shape}")
-            
+
             # Spatial transformer with edge weight processing
-            h_struct = spatial_trans(
-                h_flat,
-                edge_index,
-                edge_weight
-            )
+            h_struct = spatial_trans(h_flat, edge_index, edge_weight)
             h_struct = h_struct.view(batch_size, self.num_nodes, -1)  # [B, N, C]
             h_struct = norms[1](h_struct)
             logger.debug(f"After transformer shape: {h_struct.shape}")
-            
+
             # Global features with GCN
-            h_global = gcn(
-                h_flat,
-                edge_index,
-                edge_weight
-            )
+            h_global = gcn(h_flat, edge_index, edge_weight)
             h_global = h_global.view(batch_size, self.num_nodes, -1)  # [B, N, C]
             h_global = norms[2](h_global)
             logger.debug(f"After GCN shape: {h_global.shape}")
-            
+
             # Combine features with gating
             gates = torch.sigmoid(h_temp + h_struct + h_global)
             h = gates * h_temp + (1 - gates) * h_struct + h_global
-            
+
             # Apply regularization
             h = self.feature_dropout(h)
             hidden_states.append(h)
@@ -358,31 +349,39 @@ class DynamicLinkPredictor(nn.Module):
         batch_col = col.unsqueeze(0).expand(batch_size, -1)
 
         # Get node pair features
-        row_h = h_final[torch.arange(batch_size, device=device).unsqueeze(1), batch_row]  # [B, E, C]
-        col_h = h_final[torch.arange(batch_size, device=device).unsqueeze(1), batch_col]  # [B, E, C]
-        
+        row_h = h_final[
+            torch.arange(batch_size, device=device).unsqueeze(1), batch_row
+        ]  # [B, E, C]
+        col_h = h_final[
+            torch.arange(batch_size, device=device).unsqueeze(1), batch_col
+        ]  # [B, E, C]
+
         # Debug shapes and dtypes
         logger.debug(f"Row features shape: {row_h.shape}, dtype: {row_h.dtype}")
         logger.debug(f"Col features shape: {col_h.shape}, dtype: {col_h.dtype}")
-        
+
         # Concatenate node features
         pair_features = torch.cat([row_h, col_h], dim=-1)  # [B, E, 2C]
-        logger.debug(f"Pair features shape: {pair_features.shape}, dtype: {pair_features.dtype}")
-        
+        logger.debug(
+            f"Pair features shape: {pair_features.shape}, dtype: {pair_features.dtype}"
+        )
+
         # Predict links
         logits = self.edge_predictor(pair_features)  # [B, E, 1]
         logger.debug(f"Logits shape: {logits.shape}, dtype: {logits.dtype}")
-        
+
         # Create adjacency matrix (without self-loops) with matching dtype
         adj_logits = torch.zeros(
-            batch_size, 
-            self.num_nodes, 
-            self.num_nodes, 
-            device=device, 
-            dtype=logits.dtype  # Match dtype with logits
+            batch_size,
+            self.num_nodes,
+            self.num_nodes,
+            device=device,
+            dtype=logits.dtype,  # Match dtype with logits
         )
         adj_logits[:, row, col] = logits.squeeze(-1)
-        logger.debug(f"Final adjacency shape: {adj_logits.shape}, dtype: {adj_logits.dtype}")
+        logger.debug(
+            f"Final adjacency shape: {adj_logits.shape}, dtype: {adj_logits.dtype}"
+        )
 
         return adj_logits, None
 

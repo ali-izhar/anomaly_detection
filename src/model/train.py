@@ -204,16 +204,18 @@ def train_model(
             logger.info(f"Using GPU {gpu['id']}: {gpu['name']}")
             logger.info(f"Total Memory: {gpu['total_memory_mb']:.0f}MB")
             logger.info(f"Compute Capability: {gpu['compute_capability']}")
-        
+
         # Set memory usage limit (90% of available memory)
         for i in range(torch.cuda.device_count()):
             total_memory = torch.cuda.get_device_properties(i).total_memory
             torch.cuda.set_per_process_memory_fraction(0.9, i)
-            logger.info(f"Set GPU {i} memory limit to {total_memory * 0.9 / 1024**2:.0f}MB")
-    
+            logger.info(
+                f"Set GPU {i} memory limit to {total_memory * 0.9 / 1024**2:.0f}MB"
+            )
+
     # Mixed precision setup
     scaler = amp.GradScaler()
-    
+
     model = model.to(device)
     logger.info(f"Model moved to {device}")
 
@@ -320,39 +322,45 @@ def train_model(
         )
 
         for seq_idx, (x, edge_indices, edge_weights, y) in train_pbar:
-            num_batches = (len(x) + config["training"]["batch_size"] - 1) // config["training"]["batch_size"]
+            num_batches = (len(x) + config["training"]["batch_size"] - 1) // config[
+                "training"
+            ]["batch_size"]
 
             for b in range(num_batches):
                 start_idx = b * config["training"]["batch_size"]
                 end_idx = min((b + 1) * config["training"]["batch_size"], len(x))
-                
+
                 # Move data to device and handle edge data properly
                 batch_x = x[start_idx:end_idx].to(device)
                 batch_y = y[start_idx:end_idx].to(device)
-                
+
                 # Handle edge indices for current timestep
-                batch_edge_index = edge_indices[end_idx - 1]  # Use last timestep's edges
+                batch_edge_index = edge_indices[
+                    end_idx - 1
+                ]  # Use last timestep's edges
                 if isinstance(batch_edge_index, list):
                     batch_edge_index = torch.tensor(batch_edge_index, device=device)
                 else:
                     batch_edge_index = batch_edge_index.to(device)
-                
+
                 # Handle edge weights for current timestep
-                batch_edge_weight = edge_weights[end_idx - 1]  # Use last timestep's weights
+                batch_edge_weight = edge_weights[
+                    end_idx - 1
+                ]  # Use last timestep's weights
                 if isinstance(batch_edge_weight, list):
                     batch_edge_weight = torch.tensor(batch_edge_weight, device=device)
                 else:
                     batch_edge_weight = batch_edge_weight.to(device)
-                
+
                 # Debug shapes
                 logger.debug(f"Batch shapes:")
                 logger.debug(f"  x: {batch_x.shape}")
                 logger.debug(f"  y: {batch_y.shape}")
                 logger.debug(f"  edge_index: {batch_edge_index.shape}")
                 logger.debug(f"  edge_weight: {batch_edge_weight.shape}")
-                
+
                 optimizer.zero_grad()
-                
+
                 # Use mixed precision training
                 with torch.cuda.amp.autocast():
                     adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
@@ -360,7 +368,7 @@ def train_model(
 
                 # Scale loss and backward pass
                 scaler.scale(loss).backward()
-                
+
                 if config["gradient_clipping"]["enabled"]:
                     scaler.unscale_(optimizer)
                     torch_utils.clip_grad_norm_(
@@ -368,7 +376,7 @@ def train_model(
                         config["gradient_clipping"]["max_norm"],
                         norm_type=config["gradient_clipping"]["norm_type"],
                     )
-                
+
                 scaler.step(optimizer)
                 scaler.update()
 
@@ -378,11 +386,13 @@ def train_model(
                 batch_count += 1
 
                 # Update progress bar
-                train_pbar.set_postfix({
-                    "loss": f"{loss.item():.4f}",
-                    "avg_loss": f"{total_loss/batch_count:.4f}",
-                    "gpu_mem": f"{torch.cuda.memory_allocated() / 1024**2:.0f}MB"
-                })
+                train_pbar.set_postfix(
+                    {
+                        "loss": f"{loss.item():.4f}",
+                        "avg_loss": f"{total_loss/batch_count:.4f}",
+                        "gpu_mem": f"{torch.cuda.memory_allocated() / 1024**2:.0f}MB",
+                    }
+                )
 
         # Log epoch summary
         epoch_time = datetime.now() - epoch_start_time
