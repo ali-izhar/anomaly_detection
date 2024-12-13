@@ -1,3 +1,5 @@
+# src/model/stgcn.py
+
 import torch
 import torch.nn as nn
 from torch_geometric_temporal.nn.attention import STConv

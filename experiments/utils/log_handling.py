@@ -1,4 +1,4 @@
-# src/utils/log_handling.py
+# experiments/utils/log_handling.py
 
 """Centralized logging configuration for the entire application."""
 

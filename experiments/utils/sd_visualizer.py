@@ -1,4 +1,4 @@
-# src/utils/sd_visualizer.py
+# experiments/utils/sd_visualizer.py
 
 """Visualization tools for synthetic data analysis."""
 

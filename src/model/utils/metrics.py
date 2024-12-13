@@ -1,8 +1,9 @@
-# src/utils/metrics.py
+# src/model/utils/metrics.py
+
+from typing import Dict, Tuple, Optional
 
 import torch
 import torch.nn as nn
-from typing import Dict, Tuple, Optional
 from torch import Tensor
 
 

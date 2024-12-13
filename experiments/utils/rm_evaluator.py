@@ -1,4 +1,4 @@
-# src/utils/rm_evaluator.py
+# experiments/utils/rm_evaluator.py
 
 """Evaluator class for the MIT Reality Mining dataset."""
 

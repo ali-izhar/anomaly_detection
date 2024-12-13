@@ -1,6 +1,9 @@
+# src/model/link_predictor.py
+
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple
 from torch_geometric_temporal.nn.recurrent import GConvLSTM
 from torch_geometric_temporal.nn.recurrent.attentiontemporalgcn import A3TGCN2
 

@@ -18,12 +18,20 @@ training:
     temporal_periods: 10
     patience: 10
     val_ratio: 0.2
+    test_ratio: 0.2  # Added test ratio
 
 # Data parameters
 data:
-    variant: "node_level"  # node_level, global, or combined
-    sequences_per_type: 50  # Number of sequences to use per graph type
+    variant: "node_level"
+    total_sequences: 150  # Total number of sequences to use
+    sequences_per_type: 50  # Used only for balanced strategy
     graph_types: ["BA", "ER", "NW"]
+    selection_strategy: "balanced"  # balanced, proportional, random, change_points, difficulty
+    selection_params:
+        min_change_points: 1  # Minimum number of change points (for change_points strategy)
+        max_change_points: 4  # Maximum number of change points
+        min_density: 0.1  # Minimum edge density (for difficulty strategy)
+        max_density: 0.5  # Maximum edge density
 
 # Checkpointing
 checkpoint:
@@ -37,7 +45,7 @@ checkpoint:
 logging:
     dir: "logs"
     level: "DEBUG"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    console_level: "INFO"
+    console_level: "DEBUG"
     file_level: "DEBUG"
     log_interval: 10  # Log every N batches
 

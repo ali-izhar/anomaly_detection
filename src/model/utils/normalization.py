@@ -1,4 +1,4 @@
-# src/utils/normalization.py
+# src/model/utils/normalization.py
 
 import pickle
 

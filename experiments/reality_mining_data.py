@@ -18,11 +18,11 @@ import networkx as nx
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .threshold import CustomThresholdModel
 from config.config import load_config
+from utils import RealityMiningEvaluator, get_logger
 from src.changepoint import ChangePointDetector
 from src.graph import GraphGenerator
-from src.models import CustomThresholdModel
-from src.utils import RealityMiningEvaluator, get_logger
 
 logger = get_logger(__name__)
 

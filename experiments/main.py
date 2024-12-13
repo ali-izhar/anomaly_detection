@@ -28,7 +28,7 @@ def run_experiment(experiment: str, config_path: str) -> None:
         config = load_config(config_path)
         _setup_directories(config)
 
-        from src.utils.log_handling import setup_root_logger, get_logger
+        from utils.log_handling import setup_root_logger, get_logger
 
         setup_root_logger(config, experiment)
         logger = get_logger(__name__)
