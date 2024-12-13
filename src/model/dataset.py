@@ -15,6 +15,7 @@ import yaml
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from torch_geometric_temporal.signal import (
     DynamicGraphTemporalSignalBatch,
@@ -57,9 +58,37 @@ class DynamicGraphDataset:
         self.feature_config = self.config["features"][variant]
         self.temporal_config = self.config["temporal"]
         self.processing_config = self.config["processing"]
+        self.graph_config = self.config["graph"]
 
+        # First load the data to get dimensions
         self._load_data()
+
+        # Then validate graph settings after dimensions are known
+        if self.graph_config["num_nodes"] != self.num_nodes:
+            logger.warning(
+                f"Dataset nodes ({self.num_nodes}) differs from config ({self.graph_config['num_nodes']})"
+            )
+
+        # Validate graph types
+        if graph_type and graph_type not in self.graph_config["types"]:
+            raise ValueError(f"graph_type must be one of {self.graph_config['types']}")
+
         self._validate_data()
+        self._setup_logging()
+
+    def _setup_logging(self):
+        """Configure logging based on config."""
+        log_config = self.config["logging"]
+        log_level = getattr(logging, log_config["level"].upper())
+        logger.setLevel(log_level)
+
+        if not logger.handlers:
+            # Add file handler
+            log_dir = Path(log_config["save_dir"])
+            log_dir.mkdir(exist_ok=True)
+            fh = logging.FileHandler(log_dir / "dataset.log")
+            fh.setLevel(log_level)
+            logger.addHandler(fh)
 
     def _load_data(self):
         """Load the dataset from HDF5 file."""
@@ -159,6 +188,31 @@ class DynamicGraphDataset:
                 len(self.feature_sequences.shape) == 4
             ), "Combined features should be 4D"
 
+        # Add validation for minimum sequence length from config
+        if self.sequence_length < self.temporal_config["min_sequence_length"]:
+            raise ValueError(
+                f"Sequence length {self.sequence_length} is less than configured minimum "
+                f"{self.temporal_config['min_sequence_length']}"
+            )
+
+        # Validate change points based on config
+        for meta in self.metadata:
+            changes = meta["change_points"]
+            if len(changes) > self.graph_config["change_point"]["max_changes"]:
+                logger.warning(
+                    f"Sequence has {len(changes)} changes, exceeding configured maximum "
+                    f"of {self.graph_config['change_point']['max_changes']}"
+                )
+
+            # Check minimum distance between change points
+            min_dist = self.graph_config["change_point"]["min_distance"]
+            for i in range(1, len(changes)):
+                if changes[i] - changes[i - 1] < min_dist:
+                    logger.warning(
+                        f"Change points distance {changes[i] - changes[i-1]} is less than "
+                        f"configured minimum {min_dist}"
+                    )
+
     def _get_edges_from_adjacency(
         self, adj_matrix: np.ndarray
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -180,6 +234,11 @@ class DynamicGraphDataset:
 
     def _process_adjacency(self, adjacency: np.ndarray) -> np.ndarray:
         """Process adjacency matrix according to config settings."""
+        # Add undirected graph handling here
+        if self.processing_config.get("undirected", True):
+            # Make adjacency matrix symmetric for undirected graphs
+            adjacency = (adjacency + adjacency.T) / 2
+
         if self.processing_config["normalize_adjacency"]:
             # Symmetric normalization: D^(-1/2) A D^(-1/2)
             degree = np.sum(adjacency, axis=-1)
@@ -220,9 +279,11 @@ class DynamicGraphDataset:
             # Convert to numpy for consistency
             edge_indices.append(edge_index.numpy())
             edge_weights.append(edge_weight.numpy())
-            
+
             # Add batch indices for this timestep
-            batch_idx = np.zeros(self.num_nodes, dtype=np.int64)  # All nodes belong to batch 0
+            batch_idx = np.zeros(
+                self.num_nodes, dtype=np.int64
+            )  # All nodes belong to batch 0
             batch_indices.append(batch_idx)
 
             # Rest of the feature processing remains the same
@@ -243,7 +304,7 @@ class DynamicGraphDataset:
             features=features,
             targets=targets,
             batch_indices=batch_indices,
-            batches=batch_indices
+            batches=batch_indices,
         )
 
     def get_batch_temporal_signal(
@@ -264,7 +325,7 @@ class DynamicGraphDataset:
             batch_features = []
             batch_targets = []
             batch_idx = []
-            
+
             node_offset = 0
             for batch_id, seq_idx in enumerate(sequence_indices):
                 # Get edges and offset them based on batch position
@@ -273,10 +334,10 @@ class DynamicGraphDataset:
                 edge_index = edge_index.numpy()
                 edge_index[0] += node_offset  # Offset source nodes
                 edge_index[1] += node_offset  # Offset target nodes
-                
+
                 batch_edge_indices.append(edge_index)
                 batch_edge_weights.append(edge_weight.numpy())
-                
+
                 # Process features
                 curr_features = self.feature_sequences[seq_idx, t]
                 if self.variant == "global":
@@ -286,13 +347,13 @@ class DynamicGraphDataset:
                     batch_features.append(node_features)
                 else:
                     batch_features.append(curr_features)
-                
+
                 # Add targets
                 batch_targets.append(self.adjacency_matrices[seq_idx, t + 1])
-                
+
                 # Add batch indices for this sequence
                 batch_idx.append(np.full(self.num_nodes, batch_id, dtype=np.int64))
-                
+
                 node_offset += self.num_nodes
 
             # Concatenate all batch data for this timestep
@@ -308,7 +369,7 @@ class DynamicGraphDataset:
             features=features,
             targets=targets,
             batch_indices=batch_indices,
-            batches=batch_indices
+            batches=batch_indices,
         )
 
     def get_train_test_split(
@@ -345,9 +406,11 @@ class DynamicGraphDataset:
         """Get full metadata for a specific sequence."""
         return self.metadata[sequence_idx]
 
-    def get_train_val_test_split(
-        self, sequence_idx: Optional[int] = None
-    ) -> Tuple[DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch]:
+    def get_train_val_test_split(self, sequence_idx: Optional[int] = None) -> Tuple[
+        DynamicGraphTemporalSignalBatch,
+        DynamicGraphTemporalSignalBatch,
+        DynamicGraphTemporalSignalBatch,
+    ]:
         """Get train/validation/test split for a sequence."""
         train_ratio = self.temporal_config["train_ratio"]
         val_ratio = self.temporal_config["validation_ratio"]
@@ -367,6 +430,33 @@ class DynamicGraphDataset:
         )
 
         return train_data, val_data, test_data
+
+    def get_dataloader(
+        self,
+        sequence_indices: List[int],
+        shuffle: Optional[bool] = None,
+        batch_size: Optional[int] = None,
+    ) -> DataLoader:
+        """Create a DataLoader with configured settings."""
+        shuffle = shuffle if shuffle is not None else self.config["training"]["shuffle"]
+        batch_size = batch_size or self.config["training"]["batch_size"]
+
+        return DataLoader(
+            sequence_indices,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=self.config["training"]["num_workers"],
+            pin_memory=self.config["training"]["pin_memory"],
+            prefetch_factor=self.config["training"]["prefetch_factor"],
+        )
+
+    def get_validation_metrics(self) -> List[str]:
+        """Get configured validation metrics."""
+        return self.config["validation"]["metrics"]
+
+    def get_test_metrics(self) -> List[str]:
+        """Get configured test metrics."""
+        return self.config["testing"]["metrics"]
 
 
 if __name__ == "__main__":
