@@ -5,9 +5,38 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score
 import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
+from tqdm import tqdm
+import logging
+from pathlib import Path
+from datetime import datetime
+
 from dataset import DynamicGraphDataset
 from link_predictor import DynamicLinkPredictor
-import numpy as np
+
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+
+def setup_logging(log_dir: str = "logs", level: str = "INFO"):
+    """Set up logging configuration."""
+    log_dir = Path(log_dir)
+    log_dir.mkdir(exist_ok=True)
+
+    # Create timestamped log file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"training_{timestamp}.log"
+
+    # Configure logging
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(),  # Also print to console
+        ],
+    )
 
 
 def visualize_graphs(original_adj, predicted_adj, timestep, save_path=None):
@@ -102,17 +131,22 @@ def train_model(
     model,
     dataset,
     sequence_indices,
-    num_epochs=50,
+    num_epochs=10,
     learning_rate=0.001,
     patience=10,
     temporal_periods=10,
     batch_size=32,
     val_ratio=0.2,
     device="cuda" if torch.cuda.is_available() else "cpu",
+    log_interval: int = 10,  # Log every N batches
 ):
-    """
-    Train the model with temporal sequences.
-    """
+    """Train the model with temporal sequences."""
+    logger.info(f"Starting training with {len(sequence_indices)} sequences")
+    logger.info(
+        f"Model parameters: lr={learning_rate}, batch_size={batch_size}, "
+        f"temporal_periods={temporal_periods}"
+    )
+
     model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", patience=patience // 2)
@@ -124,16 +158,15 @@ def train_model(
     history = {"train_loss": [], "val_loss": [], "val_auc": []}
 
     # Prepare data for all sequences
+    logger.info("Preparing data splits...")
     train_data = []
     val_data = []
 
-    for seq_idx in sequence_indices:
-        # Get temporal windows for this sequence
+    for seq_idx in tqdm(sequence_indices, desc="Processing sequences"):
         x, edge_indices, edge_weights, y = dataset.get_temporal_batch(
             seq_idx, temporal_periods=temporal_periods
         )
 
-        # Split into train/val
         num_windows = len(x)
         num_val = int(num_windows * val_ratio)
 
@@ -157,25 +190,26 @@ def train_model(
         else:
             train_data.append((x, edge_indices, edge_weights, y))
 
+    logger.info(
+        f"Data split complete. Train sequences: {len(train_data)}, "
+        f"Val sequences: {len(val_data)}"
+    )
+
+    # Training loop
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
         batch_count = 0
 
         # Training
-        for seq_data in train_data:
+        train_pbar = tqdm(train_data, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+        for seq_idx, seq_data in enumerate(train_pbar):
             x, edge_indices, edge_weights, y = seq_data
-
-            # Validate shapes
-            print("\nInput Validation:")
-            print(f"x shape: {x.shape}")
-            print(f"y shape: {y.shape}")
-            print(f"Number of edge indices: {len(edge_indices)}")
-            print(f"First edge index shape: {edge_indices[0].shape}")
-            print(f"First edge weight shape: {edge_weights[0].shape}")
 
             # Process in batches
             num_batches = (len(x) + batch_size - 1) // batch_size
+            batch_losses = []
+
             for b in range(num_batches):
                 start_idx = b * batch_size
                 end_idx = min((b + 1) * batch_size, len(x))
@@ -185,27 +219,26 @@ def train_model(
                 batch_edge_index = edge_indices[end_idx - 1].to(device)
                 batch_edge_weight = edge_weights[end_idx - 1].to(device)
 
-                # Validate batch shapes
-                print("\nBatch Validation:")
-                print(f"batch_x shape: {batch_x.shape}")
-                print(f"batch_y shape: {batch_y.shape}")
-                print(f"batch_edge_index shape: {batch_edge_index.shape}")
-                print(f"batch_edge_weight shape: {batch_edge_weight.shape}")
-
                 optimizer.zero_grad()
                 adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
-
-                # Validate output shape
-                print(f"adj_pred shape: {adj_pred.shape}")
-                print(f"Expected shape: {batch_y.shape}")
-                assert adj_pred.shape == batch_y.shape, "Prediction shape mismatch"
 
                 loss = criterion(adj_pred, batch_y)
                 loss.backward()
                 optimizer.step()
 
+                batch_losses.append(loss.item())
                 total_loss += loss.item()
                 batch_count += 1
+
+                # Update progress bar
+                if batch_count % log_interval == 0:
+                    avg_loss = sum(batch_losses[-log_interval:]) / log_interval
+                    train_pbar.set_postfix(
+                        {
+                            "batch_loss": f"{avg_loss:.4f}",
+                            "avg_loss": f"{total_loss/batch_count:.4f}",
+                        }
+                    )
 
         avg_train_loss = total_loss / batch_count if batch_count > 0 else float("inf")
 
@@ -216,7 +249,8 @@ def train_model(
         val_targets = []
 
         with torch.no_grad():
-            for seq_data in val_data:
+            val_pbar = tqdm(val_data, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+            for seq_data in val_pbar:
                 x, edge_indices, edge_weights, y = seq_data
 
                 # Process in batches
@@ -231,19 +265,25 @@ def train_model(
                     batch_edge_weight = edge_weights[end_idx - 1].to(device)
 
                     adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
+                    batch_loss = criterion(adj_pred, batch_y).item()
 
-                    val_loss += criterion(adj_pred, batch_y).item()
+                    val_loss += batch_loss
                     val_preds.append(adj_pred.cpu())
                     val_targets.append(batch_y.cpu())
+
+                    val_pbar.set_postfix({"val_loss": f"{batch_loss:.4f}"})
 
         val_loss /= len(val_data)
         val_preds = torch.cat(val_preds, dim=0)
         val_targets = torch.cat(val_targets, dim=0)
         val_auc = roc_auc_score(val_targets.numpy().ravel(), val_preds.numpy().ravel())
 
-        print(
-            f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f}, "
-            f"Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}"
+        # Log epoch results
+        logger.info(
+            f"Epoch {epoch+1}/{num_epochs} - "
+            f"Train Loss: {avg_train_loss:.4f}, "
+            f"Val Loss: {val_loss:.4f}, "
+            f"Val AUC: {val_auc:.4f}"
         )
 
         # Early stopping
@@ -251,10 +291,11 @@ def train_model(
             best_val_loss = val_loss
             best_model = model.state_dict().copy()
             patience_counter = 0
+            logger.info(f"New best model! Val Loss: {val_loss:.4f}")
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print("Early stopping triggered")
+                logger.info(f"Early stopping triggered after {epoch+1} epochs")
                 break
 
         scheduler.step(val_loss)
@@ -266,63 +307,79 @@ def train_model(
 
     # Load best model
     model.load_state_dict(best_model)
+    logger.info("Training completed!")
     return model, history
 
 
 if __name__ == "__main__":
-    # Create dataset
-    dataset = DynamicGraphDataset(variant="node_level")  # Use node-level features
+    # Set up logging
+    setup_logging()
+    logger.info("Starting script")
 
-    # Parameters
-    temporal_periods = 10
-    batch_size = 32
+    try:
+        # Create dataset
+        dataset = DynamicGraphDataset(variant="node_level")
+        logger.info(f"Dataset loaded: {len(dataset.metadata)} sequences")
 
-    # Get sequence indices for each graph type
-    ba_indices = dataset.get_graph_type_indices("BA")
-    er_indices = dataset.get_graph_type_indices("ER")
-    nw_indices = dataset.get_graph_type_indices("NW")
+        # Parameters
+        temporal_periods = 10
+        batch_size = 32
 
-    # Use a subset of sequences for training
-    train_sequences = np.concatenate(
-        [ba_indices[:50], er_indices[:50], nw_indices[:50]]
-    )
+        # Get sequence indices
+        ba_indices = dataset.get_graph_type_indices("BA")
+        er_indices = dataset.get_graph_type_indices("ER")
+        nw_indices = dataset.get_graph_type_indices("NW")
 
-    # Create model
-    model = DynamicLinkPredictor(
-        num_nodes=dataset.num_nodes,
-        num_features=dataset.num_features,
-        hidden_channels=64,
-        num_layers=2,
-        temporal_periods=temporal_periods,
-        batch_size=batch_size,
-    )
+        train_sequences = np.concatenate(
+            [ba_indices[:50], er_indices[:50], nw_indices[:50]]
+        )
+        logger.info(f"Training with {len(train_sequences)} sequences")
 
-    # Train model
-    trained_model, history = train_model(
-        model,
-        dataset,
-        train_sequences,
-        num_epochs=50,
-        temporal_periods=temporal_periods,
-        batch_size=batch_size,
-    )
+        # Create model
+        model = DynamicLinkPredictor(
+            num_nodes=dataset.num_nodes,
+            num_features=dataset.num_features,
+            hidden_channels=64,
+            num_layers=2,
+            temporal_periods=temporal_periods,
+            batch_size=batch_size,
+        )
+        logger.info(
+            f"Model created with {sum(p.numel() for p in model.parameters())} parameters"
+        )
 
-    # Plot training history
-    plt.figure(figsize=(12, 4))
+        # Train model
+        trained_model, history = train_model(
+            model,
+            dataset,
+            train_sequences,
+            num_epochs=50,
+            temporal_periods=temporal_periods,
+            batch_size=batch_size,
+        )
 
-    plt.subplot(1, 2, 1)
-    plt.plot(history["train_loss"], label="Train Loss")
-    plt.plot(history["val_loss"], label="Validation Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.legend()
+        # Plot and save training history
+        plt.figure(figsize=(12, 4))
 
-    plt.subplot(1, 2, 2)
-    plt.plot(history["val_auc"], label="Validation AUC")
-    plt.xlabel("Epoch")
-    plt.ylabel("AUC")
-    plt.legend()
+        plt.subplot(1, 2, 1)
+        plt.plot(history["train_loss"], label="Train Loss")
+        plt.plot(history["val_loss"], label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
 
-    plt.tight_layout()
-    plt.savefig("training_history.png")
-    plt.close()
+        plt.subplot(1, 2, 2)
+        plt.plot(history["val_auc"], label="Validation AUC")
+        plt.xlabel("Epoch")
+        plt.ylabel("AUC")
+        plt.legend()
+
+        plt.tight_layout()
+        plt.savefig("training_history.png")
+        plt.close()
+
+        logger.info("Training history plot saved")
+
+    except Exception as e:
+        logger.exception("An error occurred during training")
+        raise e
