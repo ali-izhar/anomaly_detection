@@ -18,6 +18,7 @@ import networkx as nx
 
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +44,7 @@ class ModelEvaluator:
         metrics: Optional[List[str]] = None,
         visualize: bool = False,
     ) -> Dict:
-        """
-        Evaluate model predictions and compute metrics.
-
-        Args:
-            data: Can be:
-                - tuple (x, edge_indices, edge_weights, y)
-                - list of such tuples
-                - DynamicGraphTemporalSignalBatch
-            phase: Phase name (train/val/test)
-            metrics: List of metrics to compute
-            visualize: Whether to generate visualizations
-        """
+        """Evaluate model predictions and compute metrics."""
         self.model.eval()
         all_preds = []
         all_targets = []
@@ -63,29 +53,33 @@ class ModelEvaluator:
         criterion = nn.BCEWithLogitsLoss()
 
         with torch.no_grad():
-            # Handle list of tuples
             if isinstance(data, list):
-                for seq_idx, seq_data in enumerate(data):
+                # Create progress bar for sequences
+                seq_pbar = tqdm(
+                    enumerate(data),
+                    total=len(data),
+                    desc=f"Evaluating {phase}",
+                    leave=False,
+                )
+
+                for seq_idx, seq_data in seq_pbar:
                     if not isinstance(seq_data, tuple) or len(seq_data) != 4:
                         raise ValueError(
                             f"Invalid sequence data format at index {seq_idx}"
                         )
 
                     x, edge_indices, edge_weights, y = seq_data
+                    num_batches = (len(x) + 32 - 1) // 32
+                    sequence_losses = []  # Track losses for this sequence
 
-                    # Process in batches
-                    num_batches = (
-                        len(x) + 32 - 1
-                    ) // 32  # Using default batch size of 32
-
-                    # Only visualize first sequence at specific intervals
-                    vis_timesteps = (
-                        [0, num_batches // 2, num_batches - 1]
-                        if visualize and seq_idx == 0
-                        else []
+                    # Create progress bar for batches
+                    batch_pbar = tqdm(
+                        range(num_batches),
+                        desc=f"Sequence {seq_idx+1}/{len(data)}",
+                        leave=False,
                     )
 
-                    for b in range(num_batches):
+                    for b in batch_pbar:
                         start_idx = b * 32
                         end_idx = min((b + 1) * 32, len(x))
 
@@ -102,6 +96,7 @@ class ModelEvaluator:
                         # Compute loss with logits
                         loss = criterion(logits, batch_y)
                         total_loss += loss.item()
+                        sequence_losses.append(loss.item())
                         batch_count += 1
 
                         # Convert to probabilities for metrics
@@ -109,7 +104,11 @@ class ModelEvaluator:
                         all_preds.append(probs.cpu())
                         all_targets.append(batch_y.cpu())
 
-                        if visualize and b in vis_timesteps:
+                        # Calculate edge statistics
+                        pred_edges = (probs > 0.5).float().mean().item()
+                        true_edges = batch_y.float().mean().item()
+
+                        if visualize and b in [0, num_batches // 2, num_batches - 1]:
                             try:
                                 self.visualize_predictions(
                                     batch_y, probs, b, f"{phase}_seq_{seq_idx}"
@@ -119,19 +118,38 @@ class ModelEvaluator:
                                     f"Visualization failed at sequence {seq_idx}, batch {b}: {str(e)}"
                                 )
 
+                        # Update batch progress
+                        batch_pbar.set_postfix(
+                            {
+                                "loss": f"{loss.item():.4f}",
+                                "pred_edges": f"{pred_edges:.3f}",
+                                "true_edges": f"{true_edges:.3f}",
+                            }
+                        )
+
+                    # Update sequence progress
+                    avg_sequence_loss = sum(sequence_losses) / len(sequence_losses)
+                    seq_pbar.set_postfix(
+                        {
+                            "avg_loss": f"{avg_sequence_loss:.4f}",
+                            "batch_count": batch_count,
+                        }
+                    )
+
             # Handle single tuple
             elif isinstance(data, tuple) and len(data) == 4:
                 x, edge_indices, edge_weights, y = data
+                sequence_losses = []  # Track losses for this sequence
 
                 # Process in batches
-                num_batches = (len(x) + 32 - 1) // 32  # Using default batch size of 32
+                num_batches = (len(x) + 32 - 1) // 32
 
-                # Only visualize at specific intervals if requested
-                vis_timesteps = (
-                    [0, num_batches // 2, num_batches - 1] if visualize else []
+                # Create progress bar for batches
+                batch_pbar = tqdm(
+                    range(num_batches), desc=f"Processing {phase}", leave=False
                 )
 
-                for b in range(num_batches):
+                for b in batch_pbar:
                     start_idx = b * 32
                     end_idx = min((b + 1) * 32, len(x))
 
@@ -140,14 +158,11 @@ class ModelEvaluator:
                     batch_edge_index = edge_indices[end_idx - 1].to(self.device)
                     batch_edge_weight = edge_weights[end_idx - 1].to(self.device)
 
-                    # Get logits (not probabilities)
-                    logits, _ = self.model(
-                        batch_x, batch_edge_index, batch_edge_weight
-                    )
-
-                    # Compute loss with logits
+                    # Get logits and compute loss
+                    logits, _ = self.model(batch_x, batch_edge_index, batch_edge_weight)
                     loss = criterion(logits, batch_y)
                     total_loss += loss.item()
+                    sequence_losses.append(loss.item())
                     batch_count += 1
 
                     # Convert to probabilities for metrics
@@ -155,41 +170,71 @@ class ModelEvaluator:
                     all_preds.append(probs.cpu())
                     all_targets.append(batch_y.cpu())
 
-                    if visualize and b in vis_timesteps:
-                        try:
-                            self.visualize_predictions(batch_y, probs, b, phase)
-                        except Exception as e:
-                            logger.warning(
-                                f"Visualization failed at batch {b}: {str(e)}"
-                            )
+                    # Calculate edge statistics
+                    pred_edges = (probs > 0.5).float().mean().item()
+                    true_edges = batch_y.float().mean().item()
+
+                    # Update progress bar
+                    batch_pbar.set_postfix(
+                        {
+                            "loss": f"{loss.item():.4f}",
+                            "pred_edges": f"{pred_edges:.3f}",
+                            "true_edges": f"{true_edges:.3f}",
+                        }
+                    )
+
+                    if visualize and b in [0, num_batches // 2, num_batches - 1]:
+                        self.visualize_predictions(batch_y, probs, b, phase)
 
             # Handle DynamicGraphTemporalSignalBatch
             elif hasattr(data, "features"):
-                for time, (features, edge_index, edge_weight, target) in enumerate(
-                    zip(
-                        data.features,
-                        data.edge_indices,
-                        data.edge_weights,
-                        data.targets,
-                    )
-                ):
+                sequence_losses = []
+
+                # Create progress bar
+                time_pbar = tqdm(
+                    enumerate(
+                        zip(
+                            data.features,
+                            data.edge_indices,
+                            data.edge_weights,
+                            data.targets,
+                        )
+                    ),
+                    total=len(data.features),
+                    desc=f"Processing {phase}",
+                    leave=False,
+                )
+
+                for time, (features, edge_index, edge_weight, target) in time_pbar:
                     x = torch.FloatTensor(features).to(self.device)
                     edge_index = torch.LongTensor(edge_index).to(self.device)
                     edge_weight = torch.FloatTensor(edge_weight).to(self.device)
                     y = torch.FloatTensor(target).to(self.device)
 
-                    # Get logits (not probabilities)
+                    # Get predictions and compute loss
                     logits = self.model(x, edge_index, edge_weight)
-
-                    # Compute loss with logits
                     loss = criterion(logits, (y > 0).float())
                     total_loss += loss.item()
+                    sequence_losses.append(loss.item())
                     batch_count += 1
 
                     # Convert to probabilities for metrics
                     probs = torch.sigmoid(logits)
                     all_preds.append(probs.cpu())
                     all_targets.append(y.cpu())
+
+                    # Calculate edge statistics
+                    pred_edges = (probs > 0.5).float().mean().item()
+                    true_edges = y.float().mean().item()
+
+                    # Update progress bar
+                    time_pbar.set_postfix(
+                        {
+                            "loss": f"{loss.item():.4f}",
+                            "pred_edges": f"{pred_edges:.3f}",
+                            "true_edges": f"{true_edges:.3f}",
+                        }
+                    )
 
                     if visualize and time in [
                         0,
@@ -201,48 +246,50 @@ class ModelEvaluator:
             else:
                 raise ValueError(f"Unsupported data format: {type(data)}")
 
-        # Stack predictions and targets
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
+            # Stack predictions and targets
+            all_preds = torch.cat(all_preds, dim=0)
+            all_targets = torch.cat(all_targets, dim=0)
 
-        # Convert to numpy for metric computation
-        preds_np = all_preds.numpy().ravel()
-        targets_np = all_targets.numpy().ravel()
-        preds_binary = (all_preds > 0.5).float().numpy().ravel()
+            # Convert to numpy for metric computation
+            preds_np = all_preds.numpy().ravel()
+            targets_np = all_targets.numpy().ravel()
+            preds_binary = (all_preds > 0.5).float().numpy().ravel()
 
-        # Compute metrics
-        results = {
-            "loss": total_loss / batch_count if batch_count > 0 else float("inf")
-        }
+            # Compute metrics
+            results = {
+                "loss": total_loss / batch_count if batch_count > 0 else float("inf")
+            }
 
-        if metrics is None:
-            metrics = ["auc", "precision", "recall", "f1"]
+            if metrics is None:
+                metrics = ["auc", "precision", "recall", "f1"]
 
-        for metric in metrics:
-            if metric == "auc":
-                results["auc"] = roc_auc_score(targets_np, preds_np)
-            elif metric == "ap":
-                results["ap"] = average_precision_score(targets_np, preds_np)
-            elif metric == "precision":
-                results["precision"] = precision_score(
-                    targets_np, preds_binary, zero_division=0
-                )
-            elif metric == "recall":
-                results["recall"] = recall_score(
-                    targets_np, preds_binary, zero_division=0
-                )
-            elif metric == "f1":
-                results["f1"] = f1_score(targets_np, preds_binary, zero_division=0)
-            elif metric == "confusion_matrix":
-                results["confusion_matrix"] = confusion_matrix(targets_np, preds_binary)
+            for metric in metrics:
+                if metric == "auc":
+                    results["auc"] = roc_auc_score(targets_np, preds_np)
+                elif metric == "ap":
+                    results["ap"] = average_precision_score(targets_np, preds_np)
+                elif metric == "precision":
+                    results["precision"] = precision_score(
+                        targets_np, preds_binary, zero_division=0
+                    )
+                elif metric == "recall":
+                    results["recall"] = recall_score(
+                        targets_np, preds_binary, zero_division=0
+                    )
+                elif metric == "f1":
+                    results["f1"] = f1_score(targets_np, preds_binary, zero_division=0)
+                elif metric == "confusion_matrix":
+                    results["confusion_matrix"] = confusion_matrix(
+                        targets_np, preds_binary
+                    )
 
-        # Log results
-        logger.info(f"\n{phase.capitalize()} Results:")
-        for metric, value in results.items():
-            if metric != "confusion_matrix":
-                logger.info(f"{metric}: {value:.4f}")
+            # Log results
+            logger.info(f"\n{phase.capitalize()} Results:")
+            for metric, value in results.items():
+                if metric != "confusion_matrix":
+                    logger.info(f"{metric}: {value:.4f}")
 
-        return results
+            return results
 
     def visualize_predictions(
         self,

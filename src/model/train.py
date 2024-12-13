@@ -11,6 +11,8 @@ from datetime import datetime
 
 import torch
 import torch.nn.utils as torch_utils
+import torch.cuda as cuda
+from torch.cuda import amp  # For mixed precision training
 
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
@@ -141,6 +143,52 @@ def get_sequence_indices(
     return np.array(selected_indices)
 
 
+def get_gpu_info():
+    """Get GPU information."""
+    if not torch.cuda.is_available():
+        return "No GPU available"
+
+    gpu_info = []
+    for i in range(torch.cuda.device_count()):
+        gpu = torch.cuda.get_device_properties(i)
+        total_memory = gpu.total_memory / 1024**2  # Convert to MB
+        used_memory = torch.cuda.memory_allocated(i) / 1024**2
+        free_memory = total_memory - used_memory
+        gpu_info.append(
+            {
+                "id": i,
+                "name": gpu.name,
+                "total_memory_mb": total_memory,
+                "used_memory_mb": used_memory,
+                "free_memory_mb": free_memory,
+                "compute_capability": f"{gpu.major}.{gpu.minor}",
+            }
+        )
+    return gpu_info
+
+
+def optimize_gpu_memory():
+    """Configure GPU memory optimization settings."""
+    if torch.cuda.is_available():
+        # Enable memory caching
+        torch.backends.cudnn.benchmark = True
+
+        # Enable TF32 precision for better performance on Ampere GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+        # Empty cache
+        torch.cuda.empty_cache()
+
+        # Set memory allocator settings
+        torch.cuda.set_per_process_memory_fraction(0.9)  # Use 90% of available memory
+        torch.cuda.memory.set_per_process_memory_fraction(0.9)
+
+        # Enable memory pinning
+        torch.cuda.set_device(0)  # Set primary GPU
+        torch.set_float32_matmul_precision("high")
+
+
 def train_model(
     model,
     dataset,
@@ -149,12 +197,29 @@ def train_model(
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
     """Train the model with temporal sequences."""
-    model = model.to(device)
-    logger.info(f"Using device: {device}")
+    # GPU setup and logging
+    if device == "cuda":
+        gpu_info = get_gpu_info()
+        for gpu in gpu_info:
+            logger.info(f"Using GPU {gpu['id']}: {gpu['name']}")
+            logger.info(f"Total Memory: {gpu['total_memory_mb']:.0f}MB")
+            logger.info(f"Compute Capability: {gpu['compute_capability']}")
+        
+        # Set memory usage limit (90% of available memory)
+        for i in range(torch.cuda.device_count()):
+            total_memory = torch.cuda.get_device_properties(i).total_memory
+            torch.cuda.set_per_process_memory_fraction(0.9, i)
+            logger.info(f"Set GPU {i} memory limit to {total_memory * 0.9 / 1024**2:.0f}MB")
     
+    # Mixed precision setup
+    scaler = amp.GradScaler()
+    
+    model = model.to(device)
+    logger.info(f"Model moved to {device}")
+
     # Move criterion to device if it has parameters
     criterion = get_loss_function(config).to(device)
-    
+
     # Set random seed
     if config.get("seed"):
         set_seed(config["seed"])
@@ -242,82 +307,82 @@ def train_model(
 
     # Training loop
     for epoch in range(config["training"]["num_epochs"]):
-        logger.debug(f"\nStarting epoch {epoch+1}")
+        epoch_start_time = datetime.now()
         model.train()
         total_loss = 0
         batch_count = 0
-        epoch_start_time = datetime.now()
+        sequence_losses = []
 
-        # Training
         train_pbar = tqdm(
-            train_data,
+            enumerate(train_data),
+            total=len(train_data),
             desc=f"Epoch {epoch+1}/{config['training']['num_epochs']} [Train]",
-            disable=not config["logging"]["progress_bar"],
         )
 
-        for seq_idx, seq_data in enumerate(train_pbar):
-            logger.debug(f"Processing sequence {seq_idx+1}/{len(train_data)}")
-            x, edge_indices, edge_weights, y = seq_data
-            sequence_losses = []
-
-            # Process in batches
-            num_batches = (len(x) + config["training"]["batch_size"] - 1) // config[
-                "training"
-            ]["batch_size"]
+        for seq_idx, (x, edge_indices, edge_weights, y) in train_pbar:
+            num_batches = (len(x) + config["training"]["batch_size"] - 1) // config["training"]["batch_size"]
 
             for b in range(num_batches):
                 start_idx = b * config["training"]["batch_size"]
                 end_idx = min((b + 1) * config["training"]["batch_size"], len(x))
                 
-                # Move all tensors to device
+                # Move data to device and handle edge data properly
                 batch_x = x[start_idx:end_idx].to(device)
                 batch_y = y[start_idx:end_idx].to(device)
-                batch_edge_index = edge_indices[end_idx - 1].to(device)
-                batch_edge_weight = edge_weights[end_idx - 1].to(device)
-
-                optimizer.zero_grad()
-                adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
                 
-                # Ensure target is on same device
-                loss = criterion(adj_pred, batch_y)
-                loss.backward()
+                # Handle edge indices for current timestep
+                batch_edge_index = edge_indices[end_idx - 1]  # Use last timestep's edges
+                if isinstance(batch_edge_index, list):
+                    batch_edge_index = torch.tensor(batch_edge_index, device=device)
+                else:
+                    batch_edge_index = batch_edge_index.to(device)
+                
+                # Handle edge weights for current timestep
+                batch_edge_weight = edge_weights[end_idx - 1]  # Use last timestep's weights
+                if isinstance(batch_edge_weight, list):
+                    batch_edge_weight = torch.tensor(batch_edge_weight, device=device)
+                else:
+                    batch_edge_weight = batch_edge_weight.to(device)
+                
+                # Debug shapes
+                logger.debug(f"Batch shapes:")
+                logger.debug(f"  x: {batch_x.shape}")
+                logger.debug(f"  y: {batch_y.shape}")
+                logger.debug(f"  edge_index: {batch_edge_index.shape}")
+                logger.debug(f"  edge_weight: {batch_edge_weight.shape}")
+                
+                optimizer.zero_grad()
+                
+                # Use mixed precision training
+                with torch.cuda.amp.autocast():
+                    adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
+                    loss = criterion(adj_pred, batch_y)
+
+                # Scale loss and backward pass
+                scaler.scale(loss).backward()
                 
                 if config["gradient_clipping"]["enabled"]:
+                    scaler.unscale_(optimizer)
                     torch_utils.clip_grad_norm_(
                         model.parameters(),
                         config["gradient_clipping"]["max_norm"],
                         norm_type=config["gradient_clipping"]["norm_type"],
                     )
                 
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
 
+                # Update metrics
                 sequence_losses.append(loss.item())
                 total_loss += loss.item()
                 batch_count += 1
 
-                # Enhanced debug logging
-                if batch_count % config["logging"]["log_interval"] == 0:
-                    avg_loss = sum(
-                        sequence_losses[-config["logging"]["log_interval"] :]
-                    ) / len(sequence_losses[-config["logging"]["log_interval"] :])
-                    # Calculate edge statistics
-                    pred_edges = (torch.sigmoid(adj_pred) > 0.5).float().mean().item()
-                    true_edges = batch_y.float().mean().item()
-                    logger.debug(
-                        f"Epoch {epoch+1}, Sequence {seq_idx+1}/{len(train_data)}, "
-                        f"Batch {b+1}/{num_batches}: Loss = {avg_loss:.4f}, "
-                        f"LR = {optimizer.param_groups[0]['lr']:.6f}, "
-                        f"Pred edges: {pred_edges:.3f}, True edges: {true_edges:.3f}"
-                    )
-
-            # Update progress bar less frequently
-            if seq_idx % max(1, len(train_data) // 10) == 0:
-                train_pbar.set_postfix(
-                    {
-                        "loss": f"{sum(sequence_losses) / len(sequence_losses):.4f}",
-                        "avg_loss": f"{total_loss/batch_count:.4f}",
-                    }
-                )
+                # Update progress bar
+                train_pbar.set_postfix({
+                    "loss": f"{loss.item():.4f}",
+                    "avg_loss": f"{total_loss/batch_count:.4f}",
+                    "gpu_mem": f"{torch.cuda.memory_allocated() / 1024**2:.0f}MB"
+                })
 
         # Log epoch summary
         epoch_time = datetime.now() - epoch_start_time
@@ -387,6 +452,11 @@ def train_model(
                 config,
                 config["checkpoint"]["dir"],
             )
+
+        # End of epoch cleanup
+        if device == "cuda":
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     # Final evaluation
     logger.info("Performing final evaluation...")

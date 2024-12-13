@@ -12,7 +12,7 @@ model:
 
 # Training parameters
 training:
-    num_epochs: 10
+    num_epochs: 5
     batch_size: 32
     learning_rate: 0.001
     temporal_periods: 10
@@ -135,3 +135,22 @@ debug:
     subset_size: 100  # Number of sequences to use in debug mode
     profile: false    # Enable performance profiling
     verbose: true     # Print detailed debug information
+
+# GPU Optimization
+gpu:
+    memory_fraction: 0.9
+    benchmark: true
+    deterministic: false
+    allow_tf32: true
+    cudnn_benchmark: true
+    mixed_precision:
+        enabled: true
+        init_scale: 65536
+        growth_factor: 2
+        backoff_factor: 0.5
+        growth_interval: 2000
+    memory_optimization:
+        empty_cache_interval: 10  # Empty cache every N batches
+        prefetch_factor: 2  # Number of batches to prefetch
+        pin_memory: true
+        non_blocking: true

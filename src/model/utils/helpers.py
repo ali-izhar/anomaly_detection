@@ -86,12 +86,15 @@ def get_scheduler(config: Dict[str, Any], optimizer: optim.Optimizer):
 def get_loss_function(config: Dict[str, Any]) -> nn.Module:
     """Create loss function based on config."""
     loss_config = config["loss"]
-    
+
     # Always use BCEWithLogitsLoss for numerical stability
-    pos_weight = torch.tensor([loss_config["pos_weight"]]) if loss_config.get("pos_weight") else None
+    pos_weight = (
+        torch.tensor([loss_config["pos_weight"]])
+        if loss_config.get("pos_weight")
+        else None
+    )
     return nn.BCEWithLogitsLoss(
-        pos_weight=pos_weight,
-        reduction=loss_config["reduction"]
+        pos_weight=pos_weight, reduction=loss_config["reduction"]
     )
 
 
