@@ -149,6 +149,12 @@ def train_model(
     device="cuda" if torch.cuda.is_available() else "cpu",
 ):
     """Train the model with temporal sequences."""
+    model = model.to(device)
+    logger.info(f"Using device: {device}")
+    
+    # Move criterion to device if it has parameters
+    criterion = get_loss_function(config).to(device)
+    
     # Set random seed
     if config.get("seed"):
         set_seed(config["seed"])
@@ -168,10 +174,8 @@ def train_model(
         f"temporal_periods={config['training']['temporal_periods']}"
     )
 
-    model = model.to(device)
     optimizer = get_optimizer(config, model.parameters())
     scheduler = get_scheduler(config, optimizer)
-    criterion = get_loss_function(config)
 
     best_val_loss = float("inf")
     best_model = None
@@ -264,7 +268,8 @@ def train_model(
             for b in range(num_batches):
                 start_idx = b * config["training"]["batch_size"]
                 end_idx = min((b + 1) * config["training"]["batch_size"], len(x))
-
+                
+                # Move all tensors to device
                 batch_x = x[start_idx:end_idx].to(device)
                 batch_y = y[start_idx:end_idx].to(device)
                 batch_edge_index = edge_indices[end_idx - 1].to(device)
@@ -272,16 +277,18 @@ def train_model(
 
                 optimizer.zero_grad()
                 adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
+                
+                # Ensure target is on same device
                 loss = criterion(adj_pred, batch_y)
                 loss.backward()
-
+                
                 if config["gradient_clipping"]["enabled"]:
                     torch_utils.clip_grad_norm_(
                         model.parameters(),
                         config["gradient_clipping"]["max_norm"],
                         norm_type=config["gradient_clipping"]["norm_type"],
                     )
-
+                
                 optimizer.step()
 
                 sequence_losses.append(loss.item())
@@ -293,10 +300,14 @@ def train_model(
                     avg_loss = sum(
                         sequence_losses[-config["logging"]["log_interval"] :]
                     ) / len(sequence_losses[-config["logging"]["log_interval"] :])
+                    # Calculate edge statistics
+                    pred_edges = (torch.sigmoid(adj_pred) > 0.5).float().mean().item()
+                    true_edges = batch_y.float().mean().item()
                     logger.debug(
                         f"Epoch {epoch+1}, Sequence {seq_idx+1}/{len(train_data)}, "
                         f"Batch {b+1}/{num_batches}: Loss = {avg_loss:.4f}, "
-                        f"LR = {optimizer.param_groups[0]['lr']:.6f}"
+                        f"LR = {optimizer.param_groups[0]['lr']:.6f}, "
+                        f"Pred edges: {pred_edges:.3f}, True edges: {true_edges:.3f}"
                     )
 
             # Update progress bar less frequently
@@ -443,10 +454,9 @@ if __name__ == "__main__":
             dropout=config["model"]["dropout"],
             K=config["model"]["K"],
             use_edge_weights=config["model"]["use_edge_weights"],
-            attention_heads=config["model"]["attention_heads"],
-            attention_dropout=config["model"]["attention_dropout"],
-            temporal_periods=config["training"]["temporal_periods"],
+            temporal_periods=config["model"]["temporal_periods"],
             batch_size=config["training"]["batch_size"],
+            pos_weight=config["model"]["pos_weight"],
         )
         logger.info(
             f"Model created with {sum(p.numel() for p in model.parameters())} parameters"

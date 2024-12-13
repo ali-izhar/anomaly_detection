@@ -86,14 +86,13 @@ def get_scheduler(config: Dict[str, Any], optimizer: optim.Optimizer):
 def get_loss_function(config: Dict[str, Any]) -> nn.Module:
     """Create loss function based on config."""
     loss_config = config["loss"]
-    if loss_config["type"].lower() == "bce":
-        return nn.BCELoss(
-            weight=(
-                torch.tensor(loss_config["weights"]) if loss_config["weights"] else None
-            ),
-            reduction=loss_config["reduction"],
-        )
-    raise ValueError(f"Unsupported loss type: {loss_config['type']}")
+    
+    # Always use BCEWithLogitsLoss for numerical stability
+    pos_weight = torch.tensor([loss_config["pos_weight"]]) if loss_config.get("pos_weight") else None
+    return nn.BCEWithLogitsLoss(
+        pos_weight=pos_weight,
+        reduction=loss_config["reduction"]
+    )
 
 
 def save_checkpoint(

@@ -60,7 +60,7 @@ class ModelEvaluator:
         all_targets = []
         total_loss = 0
         batch_count = 0
-        criterion = nn.BCELoss()
+        criterion = nn.BCEWithLogitsLoss()
 
         with torch.no_grad():
             # Handle list of tuples
@@ -94,21 +94,25 @@ class ModelEvaluator:
                         batch_edge_index = edge_indices[end_idx - 1].to(self.device)
                         batch_edge_weight = edge_weights[end_idx - 1].to(self.device)
 
-                        adj_pred, _ = self.model(
+                        # Get logits (not probabilities)
+                        logits, _ = self.model(
                             batch_x, batch_edge_index, batch_edge_weight
                         )
 
-                        loss = criterion(adj_pred, batch_y)
+                        # Compute loss with logits
+                        loss = criterion(logits, batch_y)
                         total_loss += loss.item()
                         batch_count += 1
 
-                        all_preds.append(adj_pred.cpu())
+                        # Convert to probabilities for metrics
+                        probs = torch.sigmoid(logits)
+                        all_preds.append(probs.cpu())
                         all_targets.append(batch_y.cpu())
 
                         if visualize and b in vis_timesteps:
                             try:
                                 self.visualize_predictions(
-                                    batch_y, adj_pred, b, f"{phase}_seq_{seq_idx}"
+                                    batch_y, probs, b, f"{phase}_seq_{seq_idx}"
                                 )
                             except Exception as e:
                                 logger.warning(
@@ -136,20 +140,24 @@ class ModelEvaluator:
                     batch_edge_index = edge_indices[end_idx - 1].to(self.device)
                     batch_edge_weight = edge_weights[end_idx - 1].to(self.device)
 
-                    adj_pred, _ = self.model(
+                    # Get logits (not probabilities)
+                    logits, _ = self.model(
                         batch_x, batch_edge_index, batch_edge_weight
                     )
 
-                    loss = criterion(adj_pred, batch_y)
+                    # Compute loss with logits
+                    loss = criterion(logits, batch_y)
                     total_loss += loss.item()
                     batch_count += 1
 
-                    all_preds.append(adj_pred.cpu())
+                    # Convert to probabilities for metrics
+                    probs = torch.sigmoid(logits)
+                    all_preds.append(probs.cpu())
                     all_targets.append(batch_y.cpu())
 
                     if visualize and b in vis_timesteps:
                         try:
-                            self.visualize_predictions(batch_y, adj_pred, b, phase)
+                            self.visualize_predictions(batch_y, probs, b, phase)
                         except Exception as e:
                             logger.warning(
                                 f"Visualization failed at batch {b}: {str(e)}"
@@ -170,12 +178,17 @@ class ModelEvaluator:
                     edge_weight = torch.FloatTensor(edge_weight).to(self.device)
                     y = torch.FloatTensor(target).to(self.device)
 
-                    adj_pred = self.model(x, edge_index, edge_weight)
-                    loss = criterion(adj_pred, (y > 0).float())
+                    # Get logits (not probabilities)
+                    logits = self.model(x, edge_index, edge_weight)
+
+                    # Compute loss with logits
+                    loss = criterion(logits, (y > 0).float())
                     total_loss += loss.item()
                     batch_count += 1
 
-                    all_preds.append(adj_pred.cpu())
+                    # Convert to probabilities for metrics
+                    probs = torch.sigmoid(logits)
+                    all_preds.append(probs.cpu())
                     all_targets.append(y.cpu())
 
                     if visualize and time in [
@@ -183,7 +196,7 @@ class ModelEvaluator:
                         len(data.features) // 2,
                         len(data.features) - 1,
                     ]:
-                        self.visualize_predictions(y, adj_pred, time, phase)
+                        self.visualize_predictions(y, probs, time, phase)
 
             else:
                 raise ValueError(f"Unsupported data format: {type(data)}")
@@ -252,6 +265,10 @@ class ModelEvaluator:
             true_adj = true_adj[0]  # Take first graph from batch
         if pred_adj.dim() == 3:
             pred_adj = pred_adj[0]  # Take first graph from batch
+
+        # Ensure values are in [0,1] range
+        true_adj = true_adj.clamp(0, 1)
+        pred_adj = pred_adj.clamp(0, 1)
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 

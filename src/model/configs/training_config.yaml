@@ -7,8 +7,8 @@ model:
     dropout: 0.2
     K: 3  # Graph conv kernel size
     use_edge_weights: true
-    attention_heads: 4
-    attention_dropout: 0.1
+    pos_weight: 5.0  # Weight for positive class
+    temporal_periods: 10  # Number of time steps to consider
 
 # Training parameters
 training:
@@ -125,9 +125,9 @@ gradient_clipping:
 
 # Loss function
 loss:
-    type: "bce"
-    weights: null  # Can be set to handle class imbalance
-    reduction: "mean"  # mean, sum, none
+    type: "bce_with_logits"
+    pos_weight: 5.0  # Weight for positive class (helps with imbalance)
+    reduction: "mean"
 
 # Debug mode
 debug:
