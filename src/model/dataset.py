@@ -462,21 +462,60 @@ class DynamicGraphDataset:
 if __name__ == "__main__":
     # Example usage
     for variant in ["node_level", "global", "combined"]:
-        print(f"\nTesting {variant} dataset:")
+        print(f"\n{'='*50}")
+        print(f"Testing {variant} dataset:")
+        print(f"{'='*50}")
         try:
             dataset = DynamicGraphDataset(variant=variant)
 
-            print(f"Dataset Summary:")
+            print(f"\nDataset Summary:")
             print(f"Variant: {dataset.variant}")
             print(f"Number of sequences: {dataset.num_sequences}")
             print(f"Sequence length: {dataset.sequence_length}")
             print(f"Number of nodes: {dataset.num_nodes}")
             print(f"Feature dimension: {dataset.num_features}")
 
-            # Test loading specific graph type
+            # Inspect first sequence
+            if dataset.num_sequences > 0:
+                print("\nFirst Sequence Inspection:")
+                print(f"Features shape: {dataset.feature_sequences[0].shape}")
+                print(f"Adjacency shape: {dataset.adjacency_matrices[0].shape}")
+
+                # Inspect first timestep
+                print("\nFirst Timestep Statistics:")
+                features = dataset.feature_sequences[
+                    0, 0
+                ]  # First sequence, first timestep
+                adjacency = dataset.adjacency_matrices[
+                    0, 0
+                ]  # First sequence, first timestep
+
+                print("\nFeatures:")
+                print(f"Shape: {features.shape}")
+                print(f"Range: [{features.min():.3f}, {features.max():.3f}]")
+                print(f"Mean: {features.mean():.3f}")
+                print(f"Std: {features.std():.3f}")
+                if variant == "global":
+                    print("First few global features:", features[:5])
+                else:
+                    print("First node features:", features[0])
+
+                print("\nAdjacency Matrix:")
+                print(f"Shape: {adjacency.shape}")
+                print(f"Range: [{adjacency.min():.3f}, {adjacency.max():.3f}]")
+                print(f"Mean: {adjacency.mean():.3f}")
+                print(f"Std: {adjacency.std():.3f}")
+                print(f"Number of edges: {(adjacency > 0).sum()}")
+                print(
+                    f"Sparsity: {(adjacency > 0).sum() / (adjacency.shape[0] * adjacency.shape[1]):.3f}"
+                )
+
+            # Test loading specific graph types
+            print("\nGraph Type Statistics:")
             for graph_type in ["BA", "ER", "NW"]:
                 indices = dataset.get_graph_type_indices(graph_type)
-                print(f"\n{graph_type} sequences: {len(indices)}")
+                print(f"\n{graph_type}:")
+                print(f"Number of sequences: {len(indices)}")
 
                 if len(indices) > 0:
                     idx = indices[0]
@@ -492,3 +531,6 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"Error loading {variant} dataset: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
