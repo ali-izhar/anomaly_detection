@@ -1,104 +1,209 @@
 import torch
 import torch.nn as nn
-from torch_geometric_temporal.nn.recurrent import GCLSTM
+from typing import Optional, Tuple
+from torch_geometric_temporal.nn.recurrent import GConvLSTM
+from torch_geometric_temporal.nn.recurrent.attentiontemporalgcn import A3TGCN2
 
 
 class DynamicLinkPredictor(nn.Module):
     """
-    A neural network model for dynamic link prediction using GC-LSTM.
-
-    This model combines a Graph Convolutional LSTM with a link prediction
-    head to predict the next timestep's adjacency matrix.
+    Enhanced neural network model for dynamic link prediction using GConvLSTM
+    with A3TGCN2 temporal attention mechanisms.
     """
 
     def __init__(
-        self, num_nodes, num_features, hidden_channels=128, num_layers=3, dropout=0.2
+        self,
+        num_nodes: int,
+        num_features: int = 6,
+        hidden_channels: int = 64,
+        num_layers: int = 2,
+        dropout: float = 0.2,
+        K: int = 3,
+        use_edge_weights: bool = True,
+        attention_heads: int = 4,
+        attention_dropout: float = 0.1,
+        temporal_periods: int = 10,  # Number of time steps to consider
+        batch_size: int = 32,
     ):
-        """
-        Initialize the model.
-
-        Args:
-            num_nodes: int, number of nodes in the graph
-            num_features: int, number of features per node
-            hidden_channels: int, dimension of hidden representations
-            num_layers: int, number of GCLSTM layers
-            dropout: float, dropout probability
-        """
         super(DynamicLinkPredictor, self).__init__()
 
         self.num_nodes = num_nodes
         self.num_features = num_features
+        self.use_edge_weights = use_edge_weights
+        self.hidden_channels = hidden_channels
+        self.temporal_periods = temporal_periods
 
-        # Increase complexity of GC-LSTM layers
-        self.gclstm_layers = nn.ModuleList(
+        # Input feature projection
+        self.input_proj = nn.Sequential(
+            nn.Linear(num_features, hidden_channels),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_channels),
+            nn.Dropout(dropout),
+        )
+
+        # Temporal attention using A3TGCN2
+        self.temporal_attention = A3TGCN2(
+            in_channels=hidden_channels,
+            out_channels=hidden_channels,
+            periods=temporal_periods,
+            batch_size=batch_size,
+            improved=True,
+            cached=False,
+            add_self_loops=True,
+        )
+
+        # GConvLSTM layers
+        self.gconv_lstm_layers = nn.ModuleList(
             [
-                GCLSTM(
-                    in_channels=num_features if i == 0 else hidden_channels,
+                GConvLSTM(
+                    in_channels=hidden_channels,
                     out_channels=hidden_channels,
-                    K=5,  # Increased filter taps
+                    K=K,
+                    normalization="sym",
+                    bias=True,
                 )
-                for i in range(num_layers)
+                for _ in range(num_layers)
             ]
         )
 
-        # Add batch normalization
-        self.batch_norms = nn.ModuleList(
-            [nn.BatchNorm1d(hidden_channels) for _ in range(num_layers)]
+        # Layer normalization
+        self.layer_norms = nn.ModuleList(
+            [nn.LayerNorm(hidden_channels) for _ in range(num_layers)]
         )
 
-        # Dropout layer
         self.dropout = nn.Dropout(dropout)
 
-        # More complex link prediction head
-        self.link_predictor = nn.Sequential(
-            nn.Linear(hidden_channels * 2, hidden_channels * 2),
+        # Node embedding projection
+        self.node_proj = nn.Sequential(
+            nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_channels * 2),
+            nn.LayerNorm(hidden_channels),
             nn.Dropout(dropout),
+        )
+
+        # Link prediction MLP with residual connections
+        self.link_predictor = nn.Sequential(
             nn.Linear(hidden_channels * 2, hidden_channels),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_channels),
+            nn.LayerNorm(hidden_channels),
             nn.Dropout(dropout),
-            nn.Linear(hidden_channels, 1),
+            ResidualBlock(hidden_channels, hidden_channels // 2),
+            ResidualBlock(hidden_channels // 2, hidden_channels // 2),
+            nn.Linear(hidden_channels // 2, 1),
             nn.Sigmoid(),
         )
 
-    def forward(self, x, edge_index, edge_weight):
-        """
-        Forward pass of the model.
-
-        Args:
-            x: tensor of node features
-            edge_index: tensor of edge indices
-            edge_weight: tensor of edge weights
-
-        Returns:
-            tensor: predicted adjacency matrix for next timestep
-        """
-        # Pass through GC-LSTM layers with residual connections
-        h = x
-        for i, (gclstm, bn) in enumerate(zip(self.gclstm_layers, self.batch_norms)):
-            h_new = gclstm(h, edge_index, edge_weight)[0]
-            h_new = bn(h_new)
-            h_new = self.dropout(h_new)
-            if i > 0:  # Add residual connection after first layer
-                h = h + h_new
-            else:
-                h = h_new
-
-        # Create all possible node pairs
+    def _create_node_pairs(self, batch_size: int, device: torch.device):
+        """Create all possible node pairs for link prediction."""
         row, col = torch.cartesian_prod(
-            torch.arange(self.num_nodes, device=x.device),
-            torch.arange(self.num_nodes, device=x.device),
+            torch.arange(self.num_nodes, device=device),
+            torch.arange(self.num_nodes, device=device),
         ).T
 
-        # Get node pair features with concatenation
-        row_h = h[row]
-        col_h = h[col]
+        batch_row = row.unsqueeze(0).expand(batch_size, -1)
+        batch_col = col.unsqueeze(0).expand(batch_size, -1)
+
+        return batch_row, batch_col
+
+    def forward(
+        self,
+        x: torch.Tensor,  # Shape: (batch_size, num_nodes, num_features, temporal_periods)
+        edge_index: torch.Tensor,
+        edge_weight: Optional[torch.Tensor] = None,
+        hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass with A3TGCN2 temporal attention and GConvLSTM layers.
+
+        Args:
+            x: Input tensor of shape (batch_size, num_nodes, num_features, temporal_periods)
+            edge_index: Edge indices
+            edge_weight: Optional edge weights
+            hidden_state: Optional previous hidden state
+        """
+        batch_size = x.size(0)
+        device = x.device
+
+        # Project features
+        h = self.input_proj(
+            x
+        )  # (batch_size, num_nodes, hidden_channels, temporal_periods)
+
+        # Apply temporal attention
+        h = self.temporal_attention(
+            h, edge_index, edge_weight
+        )  # (batch_size, num_nodes, hidden_channels)
+
+        # Initialize or use provided hidden state
+        if hidden_state is None:
+            hidden_state = [None] * len(self.gconv_lstm_layers)
+
+        new_hidden_states = []
+
+        # Process through GConvLSTM layers
+        for i, (gconv_lstm, norm) in enumerate(
+            zip(self.gconv_lstm_layers, self.layer_norms)
+        ):
+            h_new, new_state = gconv_lstm(
+                h,
+                edge_index,
+                edge_weight if self.use_edge_weights else None,
+                hidden_state[i],
+            )
+
+            # Apply normalization and residual connection
+            h_new = norm(h_new)
+            h_new = self.dropout(h_new)
+            h = h + h_new
+            new_hidden_states.append(new_state)
+
+        # Project node embeddings
+        h = self.node_proj(h)
+
+        # Create and process node pairs
+        batch_row, batch_col = self._create_node_pairs(batch_size, device)
+        row_h = h[torch.arange(batch_size).unsqueeze(1), batch_row]
+        col_h = h[torch.arange(batch_size).unsqueeze(1), batch_col]
+
+        # Predict links
         pair_features = torch.cat([row_h, col_h], dim=-1)
-
-        # Predict link probabilities
         link_probs = self.link_predictor(pair_features)
-        adj_pred = link_probs.view(self.num_nodes, self.num_nodes)
+        adj_pred = link_probs.view(batch_size, self.num_nodes, self.num_nodes)
 
-        return adj_pred
+        return adj_pred, tuple(new_hidden_states)
+
+    def predict_links(
+        self, adj_pred: torch.Tensor, threshold: float = 0.5
+    ) -> torch.Tensor:
+        """Convert predicted probabilities to binary adjacency matrix."""
+        return (adj_pred > threshold).float()
+
+
+class ResidualBlock(nn.Module):
+    """Residual block for the link predictor."""
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.conv1 = nn.Linear(in_channels, out_channels)
+        self.conv2 = nn.Linear(out_channels, out_channels)
+        self.norm1 = nn.LayerNorm(out_channels)
+        self.norm2 = nn.LayerNorm(out_channels)
+        self.dropout = nn.Dropout(0.1)
+
+        if in_channels != out_channels:
+            self.shortcut = nn.Linear(in_channels, out_channels)
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+
+        out = self.conv1(x)
+        out = torch.relu(self.norm1(out))
+        out = self.dropout(out)
+
+        out = self.conv2(out)
+        out = self.norm2(out)
+        out = self.dropout(out)
+
+        return torch.relu(out + identity)

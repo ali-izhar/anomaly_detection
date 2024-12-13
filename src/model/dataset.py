@@ -252,10 +252,12 @@ class DynamicGraphDataset:
         return adjacency
 
     def get_temporal_signal(
-        self, sequence_idx: int, window_size: Optional[int] = None
+        self,
+        sequence_idx: int,
+        window_size: Optional[int] = None,
+        include_metadata: bool = True,
     ) -> DynamicGraphTemporalSignalBatch:
         """Create a DynamicGraphTemporalSignalBatch for a specific sequence."""
-        # Use config window size if not specified
         window_size = window_size or self.temporal_config["window_size"]
 
         # Check minimum sequence length
@@ -271,7 +273,29 @@ class DynamicGraphDataset:
         targets = []
         batch_indices = []
 
-        for t in range(self.sequence_length - window_size):
+        sequence_length = self.sequence_length - window_size
+
+        # Add metadata as additional features if requested
+        additional_features = {}
+        if include_metadata:
+            meta = self.metadata[sequence_idx]
+            # Repeat metadata for each timestep
+            additional_features.update(
+                {
+                    "change_points": [
+                        np.array(meta["change_points"]) for _ in range(sequence_length)
+                    ],
+                    "graph_type": [
+                        np.array([ord(c) for c in meta["graph_type"]])
+                        for _ in range(sequence_length)
+                    ],
+                    "params": [
+                        np.array(meta["params"]) for _ in range(sequence_length)
+                    ],
+                }
+            )
+
+        for t in range(sequence_length):
             # Get edges
             curr_adj = self.adjacency_matrices[sequence_idx, t]
             edge_index, edge_weight = self._get_edges_from_adjacency(curr_adj)
@@ -305,6 +329,7 @@ class DynamicGraphDataset:
             targets=targets,
             batch_indices=batch_indices,
             batches=batch_indices,
+            **additional_features,
         )
 
     def get_batch_temporal_signal(
@@ -457,6 +482,74 @@ class DynamicGraphDataset:
     def get_test_metrics(self) -> List[str]:
         """Get configured test metrics."""
         return self.config["testing"]["metrics"]
+
+    def get_sequence_window(self, sequence_idx: int, start: int, end: int):
+        """Get a specific window of the temporal sequence."""
+        signal = self.get_temporal_signal(sequence_idx)
+        return signal[start:end]  # Use slice functionality
+
+    def get_sequence_slice(
+        self, sequence_idx: int, start: int, end: Optional[int] = None
+    ) -> DynamicGraphTemporalSignalBatch:
+        """Get a specific slice of the temporal sequence."""
+        signal = self.get_temporal_signal(sequence_idx)
+        return signal[start:end]
+
+    def get_temporal_batch(
+        self,
+        sequence_idx: int,
+        temporal_periods: int,
+        stride: int = 1,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Create batched temporal windows from a sequence.
+
+        Args:
+            sequence_idx: Index of the sequence to use
+            temporal_periods: Number of timesteps in each window
+            stride: Step size between windows
+
+        Returns:
+            x: Features tensor (batch_size, num_nodes, num_features, temporal_periods)
+            edge_index: Edge indices for each batch
+            edge_weight: Edge weights for each batch
+            y: Target adjacency matrices
+        """
+        # Get sequence data
+        features = self.feature_sequences[sequence_idx]
+        adj_matrices = self.adjacency_matrices[sequence_idx]
+
+        # Calculate number of possible windows
+        num_windows = (len(features) - temporal_periods - 1) // stride + 1
+
+        # Initialize tensors
+        x = torch.zeros(
+            num_windows, self.num_nodes, self.num_features, temporal_periods
+        )
+        y = torch.zeros(num_windows, self.num_nodes, self.num_nodes)
+        edge_indices = []
+        edge_weights = []
+
+        # Create temporal windows
+        for i in range(num_windows):
+            start_idx = i * stride
+            end_idx = start_idx + temporal_periods
+
+            # Get features for this window
+            window_features = features[start_idx:end_idx]
+            x[i, :, :, :] = torch.FloatTensor(window_features.transpose(1, 0))
+
+            # Get target adjacency (next timestep after window)
+            y[i] = torch.FloatTensor(adj_matrices[end_idx])
+
+            # Get edges for last timestep in window
+            edge_index, edge_weight = self._get_edges_from_adjacency(
+                adj_matrices[end_idx - 1]
+            )
+            edge_indices.append(edge_index)
+            edge_weights.append(edge_weight)
+
+        return x, edge_indices, edge_weights, y
 
 
 if __name__ == "__main__":
