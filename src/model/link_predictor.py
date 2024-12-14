@@ -387,7 +387,7 @@ class DynamicLinkPredictor(nn.Module):
         if adj_logits.shape != (batch_size, self.num_nodes, self.num_nodes):
             logger.warning(f"Unexpected output shape: {adj_logits.shape}")
             adj_logits = adj_logits.view(batch_size, self.num_nodes, self.num_nodes)
-        
+
         return adj_logits, None
 
     def predict_links(

@@ -61,18 +61,24 @@ class ModelEvaluator:
                 # Ensure data is on the correct device
                 x = torch.as_tensor(x, device=self.device)
                 y = torch.as_tensor(y, device=self.device)
-                
+
                 # Handle edge data
                 if isinstance(edge_indices, list):
-                    edge_indices = [ei.clone().detach().to(self.device) for ei in edge_indices]
+                    edge_indices = [
+                        ei.clone().detach().to(self.device) for ei in edge_indices
+                    ]
                     current_edge_index = edge_indices[-1]  # Use last timestep's edges
                 else:
                     edge_indices = edge_indices.to(self.device)
                     current_edge_index = edge_indices
-                    
+
                 if isinstance(edge_weights, list):
-                    edge_weights = [ew.clone().detach().to(self.device) for ew in edge_weights]
-                    current_edge_weight = edge_weights[-1]  # Use last timestep's weights
+                    edge_weights = [
+                        ew.clone().detach().to(self.device) for ew in edge_weights
+                    ]
+                    current_edge_weight = edge_weights[
+                        -1
+                    ]  # Use last timestep's weights
                 else:
                     edge_weights = edge_weights.to(self.device)
                     current_edge_weight = edge_weights
@@ -80,12 +86,14 @@ class ModelEvaluator:
                 # Get predictions
                 try:
                     pred, _ = self.model(x, current_edge_index, current_edge_weight)
-                    
+
                     # Ensure pred and y have the same shape
                     if pred.shape != y.shape:
-                        logger.warning(f"Shape mismatch - pred: {pred.shape}, target: {y.shape}")
+                        logger.warning(
+                            f"Shape mismatch - pred: {pred.shape}, target: {y.shape}"
+                        )
                         pred = pred.view(y.shape)
-                    
+
                     # Calculate loss using binary cross entropy
                     loss = F.binary_cross_entropy_with_logits(pred, y)
                     total_loss += loss.item()
@@ -95,14 +103,16 @@ class ModelEvaluator:
                     pred_probs = torch.sigmoid(pred)
                     all_preds.append(pred_probs)
                     all_targets.append(y)
-                    
+
                 except Exception as e:
                     logger.error(f"Error during prediction: {str(e)}")
                     continue
 
         # Check if we have any valid predictions
         if not all_preds:
-            logger.warning(f"No valid predictions were generated during {phase} evaluation")
+            logger.warning(
+                f"No valid predictions were generated during {phase} evaluation"
+            )
             return {
                 "loss": float("inf"),
                 "auc": 0.0,
@@ -139,24 +149,36 @@ class ModelEvaluator:
         try:
             # Calculate binary predictions
             pred_binary = (all_preds > 0.5).float()
-            
+
             # Calculate metrics
-            metrics_dict.update({
-                "accuracy": (pred_binary == all_targets).float().mean().item(),
-                "precision": precision_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
-                "recall": recall_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
-                "f1": f1_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
-                "auc": roc_auc_score(all_targets.numpy().ravel(), all_preds.numpy().ravel())
-            })
+            metrics_dict.update(
+                {
+                    "accuracy": (pred_binary == all_targets).float().mean().item(),
+                    "precision": precision_score(
+                        all_targets.numpy().ravel(), pred_binary.numpy().ravel()
+                    ),
+                    "recall": recall_score(
+                        all_targets.numpy().ravel(), pred_binary.numpy().ravel()
+                    ),
+                    "f1": f1_score(
+                        all_targets.numpy().ravel(), pred_binary.numpy().ravel()
+                    ),
+                    "auc": roc_auc_score(
+                        all_targets.numpy().ravel(), all_preds.numpy().ravel()
+                    ),
+                }
+            )
         except Exception as e:
             logger.error(f"Error calculating metrics: {str(e)}")
-            metrics_dict.update({
-                "accuracy": 0.0,
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
-                "auc": 0.0
-            })
+            metrics_dict.update(
+                {
+                    "accuracy": 0.0,
+                    "precision": 0.0,
+                    "recall": 0.0,
+                    "f1": 0.0,
+                    "auc": 0.0,
+                }
+            )
 
         return metrics_dict
 

@@ -7,6 +7,7 @@ from torch_geometric_temporal.nn.attention import STConv
 
 logger = logging.getLogger(__name__)
 
+
 class DynamicGraphPredictor(nn.Module):
     """
     Spatio-Temporal Graph Convolutional Network for link prediction.
@@ -114,5 +115,5 @@ class DynamicGraphPredictor(nn.Module):
         if adj_pred.shape != (batch_size, self.num_nodes, self.num_nodes):
             logger.warning(f"Unexpected output shape: {adj_pred.shape}")
             adj_pred = adj_pred.view(batch_size, self.num_nodes, self.num_nodes)
-        
+
         return adj_pred
