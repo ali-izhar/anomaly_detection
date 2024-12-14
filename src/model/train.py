@@ -362,7 +362,7 @@ def train_model(
                 optimizer.zero_grad()
 
                 # Use mixed precision training
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     adj_pred, _ = model(batch_x, batch_edge_index, batch_edge_weight)
                     loss = criterion(adj_pred, batch_y)
 
@@ -402,15 +402,27 @@ def train_model(
         )
 
         # Validation
-        val_metrics = evaluator.evaluate_predictions(
-            val_data,
-            phase="val",
-            metrics=config["metrics"]["validation"],
-            visualize=(epoch % config["visualization"]["plot_interval"] == 0),
-        )
-
-        val_loss = val_metrics["loss"]
-        val_auc = val_metrics["auc"]
+        model.eval()  # Set model to evaluation mode
+        logger.info("Starting validation...")
+        
+        try:
+            val_metrics = evaluator.evaluate_predictions(
+                val_data,
+                phase="val",
+                metrics=config["metrics"]["validation"],
+                visualize=(epoch % config["visualization"]["plot_interval"] == 0),
+            )
+            
+            val_loss = val_metrics["loss"]
+            val_auc = val_metrics.get("auc", 0.0)
+            
+            logger.info(f"Validation metrics: {val_metrics}")
+            
+        except Exception as e:
+            logger.error(f"Error during validation: {str(e)}")
+            val_loss = float("inf")
+            val_auc = 0.0
+            val_metrics = {"loss": val_loss, "auc": val_auc}
 
         # Log validation results
         logger.info(f"Validation - Loss: {val_loss:.4f}, AUC: {val_auc:.4f}")
@@ -467,6 +479,10 @@ def train_model(
         if device == "cuda":
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
+
+        # Add this near the validation section in train_model
+        logger.debug(f"Validation data shape: x={val_data[0][0].shape}, y={val_data[0][3].shape}")
+        logger.debug(f"Number of validation sequences: {len(val_data)}")
 
     # Final evaluation
     logger.info("Performing final evaluation...")

@@ -222,7 +222,7 @@ class DynamicLinkPredictor(nn.Module):
 
         # Regularization
         self.dropout = nn.Dropout(dropout)
-        self.feature_dropout = nn.Dropout2d(0.1)  # Structural dropout
+        self.feature_dropout = nn.Dropout1d(0.1)  # Structural dropout
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -383,6 +383,11 @@ class DynamicLinkPredictor(nn.Module):
             f"Final adjacency shape: {adj_logits.shape}, dtype: {adj_logits.dtype}"
         )
 
+        # Add shape check before returning
+        if adj_logits.shape != (batch_size, self.num_nodes, self.num_nodes):
+            logger.warning(f"Unexpected output shape: {adj_logits.shape}")
+            adj_logits = adj_logits.view(batch_size, self.num_nodes, self.num_nodes)
+        
         return adj_logits, None
 
     def predict_links(

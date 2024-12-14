@@ -23,8 +23,8 @@ training:
 # Data parameters
 data:
     variant: "node_level"
-    total_sequences: 150  # Total number of sequences to use
-    sequences_per_type: 50  # Used only for balanced strategy
+    total_sequences: 60  # Total number of sequences to use
+    sequences_per_type: 20  # Used only for balanced strategy
     graph_types: ["BA", "ER", "NW"]
     selection_strategy: "balanced"  # balanced, proportional, random, change_points, difficulty
     selection_params:

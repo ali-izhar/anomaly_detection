@@ -41,118 +41,124 @@ class ModelEvaluator:
     def evaluate_predictions(
         self,
         data,
-        phase: str = "test",
-        metrics: Optional[List[str]] = None,
-        visualize: int = -1,  # -1 for no viz, n for first n predictions
-    ) -> Dict:
-        """Evaluate model predictions and compute metrics."""
+        phase="val",
+        metrics=None,
+        visualize=False,
+    ):
+        """Evaluate model predictions."""
         self.model.eval()
         all_preds = []
         all_targets = []
-        sequence_losses = []
+        total_loss = 0
+        batch_count = 0
 
-        logger.info(f"\nEvaluating {phase} phase:")
+        # Convert single sequence to list for consistent handling
+        if not isinstance(data, list):
+            data = [data]
 
         with torch.no_grad():
-            if isinstance(data, tuple):
-                x, edge_indices, edge_weights, y = data
-                num_batches = (len(x) + 32 - 1) // 32  # Using default batch size of 32
+            for x, edge_indices, edge_weights, y in data:
+                # Ensure data is on the correct device
+                x = torch.as_tensor(x, device=self.device)
+                y = torch.as_tensor(y, device=self.device)
+                
+                # Handle edge data
+                if isinstance(edge_indices, list):
+                    edge_indices = [ei.clone().detach().to(self.device) for ei in edge_indices]
+                    current_edge_index = edge_indices[-1]  # Use last timestep's edges
+                else:
+                    edge_indices = edge_indices.to(self.device)
+                    current_edge_index = edge_indices
+                    
+                if isinstance(edge_weights, list):
+                    edge_weights = [ew.clone().detach().to(self.device) for ew in edge_weights]
+                    current_edge_weight = edge_weights[-1]  # Use last timestep's weights
+                else:
+                    edge_weights = edge_weights.to(self.device)
+                    current_edge_weight = edge_weights
 
-                seq_pbar = tqdm(
-                    range(num_batches),
-                    desc=f"Sequence evaluation",
-                    leave=False,
-                )
+                # Get predictions
+                try:
+                    pred, _ = self.model(x, current_edge_index, current_edge_weight)
+                    
+                    # Ensure pred and y have the same shape
+                    if pred.shape != y.shape:
+                        logger.warning(f"Shape mismatch - pred: {pred.shape}, target: {y.shape}")
+                        pred = pred.view(y.shape)
+                    
+                    # Calculate loss using binary cross entropy
+                    loss = F.binary_cross_entropy_with_logits(pred, y)
+                    total_loss += loss.item()
+                    batch_count += 1
 
-                for b in seq_pbar:
-                    start_idx = b * 32
-                    end_idx = min((b + 1) * 32, len(x))
+                    # Apply sigmoid to get probabilities
+                    pred_probs = torch.sigmoid(pred)
+                    all_preds.append(pred_probs)
+                    all_targets.append(y)
+                    
+                except Exception as e:
+                    logger.error(f"Error during prediction: {str(e)}")
+                    continue
 
-                    # Get batch data
-                    batch_x = x[start_idx:end_idx].to(self.model.device)
-                    batch_y = y[start_idx:end_idx].to(self.model.device)
-                    batch_edge_index = edge_indices[end_idx - 1].to(self.model.device)
-                    batch_edge_weight = edge_weights[end_idx - 1].to(self.model.device)
+        # Check if we have any valid predictions
+        if not all_preds:
+            logger.warning(f"No valid predictions were generated during {phase} evaluation")
+            return {
+                "loss": float("inf"),
+                "auc": 0.0,
+                "accuracy": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+            }
 
-                    # Get predictions
-                    probs, _ = self.model(batch_x, batch_edge_index, batch_edge_weight)
+        # Concatenate predictions and targets
+        try:
+            all_preds = torch.cat(all_preds, dim=0)
+            all_targets = torch.cat(all_targets, dim=0)
+        except Exception as e:
+            logger.error(f"Error concatenating predictions: {str(e)}")
+            return {
+                "loss": float("inf") if batch_count == 0 else total_loss / batch_count,
+                "auc": 0.0,
+                "accuracy": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+            }
 
-                    # Compute loss
-                    loss = F.binary_cross_entropy_with_logits(probs, batch_y)
-                    sequence_losses.append(loss.item())
+        # Move tensors to CPU for metric calculation
+        all_preds = all_preds.cpu()
+        all_targets = all_targets.cpu()
 
-                    # Store predictions and targets
-                    all_preds.append(torch.sigmoid(probs))
-                    all_targets.append(batch_y)
+        # Calculate metrics
+        metrics_dict = {
+            "loss": total_loss / batch_count if batch_count > 0 else float("inf")
+        }
 
-                    # Visualize if requested
-                    if visualize >= 0 and b < visualize:
-                        self.visualize_prediction(
-                            batch_y[0],
-                            probs[0],
-                            b,
-                            phase,
-                            edge_index=batch_edge_index,
-                            edge_weight=batch_edge_weight,
-                        )
+        try:
+            # Calculate binary predictions
+            pred_binary = (all_preds > 0.5).float()
+            
+            # Calculate metrics
+            metrics_dict.update({
+                "accuracy": (pred_binary == all_targets).float().mean().item(),
+                "precision": precision_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
+                "recall": recall_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
+                "f1": f1_score(all_targets.numpy().ravel(), pred_binary.numpy().ravel()),
+                "auc": roc_auc_score(all_targets.numpy().ravel(), all_preds.numpy().ravel())
+            })
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {str(e)}")
+            metrics_dict.update({
+                "accuracy": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+                "auc": 0.0
+            })
 
-                    # Update progress bar with stats
-                    pred_edges = (torch.sigmoid(probs) > 0.5).float().mean().item()
-                    true_edges = batch_y.float().mean().item()
-                    seq_pbar.set_postfix(
-                        {
-                            "loss": f"{loss.item():.4f}",
-                            "pred_density": f"{pred_edges:.3f}",
-                            "true_density": f"{true_edges:.3f}",
-                        }
-                    )
-
-            else:
-                # Handle dataset case
-                for seq_idx, seq_data in enumerate(
-                    tqdm(data, desc=f"Evaluating {phase}")
-                ):
-                    # ... (rest of dataset evaluation code)
-                    pass
-
-        # Compute metrics
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-
-        results = self.compute_metrics(all_preds, all_targets, sequence_losses)
-
-        # Log detailed results
-        logger.info("\nEvaluation Results:")
-        for metric, value in results.items():
-            if metric != "confusion_matrix":
-                logger.info(f"{metric}: {value:.4f}")
-
-        if "confusion_matrix" in results:
-            cm = results["confusion_matrix"]
-            logger.info("\nConfusion Matrix:")
-            logger.info(f"TN: {cm[0,0]}, FP: {cm[0,1]}")
-            logger.info(f"FN: {cm[1,0]}, TP: {cm[1,1]}")
-
-            # Calculate additional statistics
-            total = cm.sum()
-            accuracy = (cm[0, 0] + cm[1, 1]) / total
-            precision = (
-                cm[1, 1] / (cm[1, 1] + cm[0, 1]) if (cm[1, 1] + cm[0, 1]) > 0 else 0
-            )
-            recall = (
-                cm[1, 1] / (cm[1, 1] + cm[1, 0]) if (cm[1, 1] + cm[1, 0]) > 0 else 0
-            )
-
-            logger.info("\nDetailed Statistics:")
-            logger.info(f"Total Edges: {total}")
-            logger.info(f"Accuracy: {accuracy:.4f}")
-            logger.info(f"Precision: {precision:.4f}")
-            logger.info(f"Recall: {recall:.4f}")
-            logger.info(
-                f"F1 Score: {2 * precision * recall / (precision + recall):.4f}"
-            )
-
-        return results
+        return metrics_dict
 
     def visualize_prediction(
         self, y_true, y_pred, index, phase, edge_index=None, edge_weight=None
