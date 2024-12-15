@@ -11,7 +11,8 @@ import gc
 import GPUtil
 
 from dataset import DynamicGraphDataset
-from small.train import train_model
+from small.train import train_model as train_small
+from medium.train import train_model as train_medium
 from utils.logger import setup_logging
 
 logger = setup_logging()
@@ -24,12 +25,10 @@ def print_gpu_utilization():
         logger.info(f'GPU {gpu.id} - Memory Used: {gpu.memoryUsed/gpu.memoryTotal*100:.1f}% ({gpu.memoryUsed}MB/{gpu.memoryTotal}MB)')
 
 
-def setup_model_config(dataset) -> dict:
-    """Setup model configuration based on dataset properties."""
-    return {
+def setup_model_config(dataset, model_type: str = "small") -> dict:
+    """Setup model configuration based on dataset properties and model type."""
+    base_config = {
         "in_channels": dataset.num_features,
-        "hidden_channels": 32,
-        "out_channels": 32,
         "num_nodes": dataset.num_nodes,
         "window_size": dataset.config["processing"]["temporal_window"],
         "dropout": 0.2,
@@ -38,12 +37,30 @@ def setup_model_config(dataset) -> dict:
         "patience": 5,
         "batch_size": 128,
     }
+    
+    if model_type == "small":
+        base_config.update({
+            "hidden_channels": 32,
+            "out_channels": 32,
+        })
+    elif model_type == "medium":
+        base_config.update({
+            "hidden_channels": 64,
+            "out_channels": 64,
+            "num_heads": 4,
+            "num_layers": 2,
+            "weight_decay": 1e-4,
+            "scheduler_t0": 5,
+            "scheduler_t_mult": 2,
+        })
+    
+    return base_config
 
 
-def create_experiment_dir(base_dir: str = "experiments") -> Path:
+def create_experiment_dir(base_dir: str = "experiments", model_type: str = "small") -> Path:
     """Create a directory for the current experiment."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    exp_dir = Path(base_dir) / timestamp
+    exp_dir = Path(base_dir) / model_type / timestamp
     exp_dir.mkdir(parents=True, exist_ok=True)
     return exp_dir
 
@@ -91,28 +108,16 @@ def main(args):
         persistent_workers=True,
     )
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=dataset.config["training"]["num_workers"],
-        collate_fn=dataset._collate_fn,
-        pin_memory=True,
-        persistent_workers=True,
-    )
-
     # Setup model configuration
-    model_config = setup_model_config(dataset)
-    model_config.update(
-        {
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "learning_rate": args.learning_rate,
-        }
-    )
+    model_config = setup_model_config(dataset, args.model_type)
+    model_config.update({
+        "batch_size": args.batch_size,
+        "epochs": args.epochs,
+        "learning_rate": args.learning_rate,
+    })
 
     # Create experiment directory
-    exp_dir = create_experiment_dir(args.exp_dir)
+    exp_dir = create_experiment_dir(args.exp_dir, args.model_type)
     logger.info(f"Experiment directory: {exp_dir}")
 
     # Save configurations
@@ -120,11 +125,14 @@ def main(args):
         yaml.dump(model_config, f)
 
     # Train model
-    logger.info("Starting training...")
+    logger.info(f"Starting training for {args.model_type} model...")
     logger.info("GPU Memory Usage before training:")
     print_gpu_utilization()
     
-    model = train_model(train_loader, val_loader, model_config)
+    if args.model_type == "small":
+        model = train_small(train_loader, val_loader, model_config)
+    else:  # medium
+        model = train_medium(train_loader, val_loader, model_config)
 
     logger.info("GPU Memory Usage after training:")
     print_gpu_utilization()
@@ -142,9 +150,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Train STGCN model on dynamic graph data"
-    )
+    parser = argparse.ArgumentParser(description="Train model on dynamic graph data")
 
     # Dataset parameters
     parser.add_argument(
@@ -165,9 +171,19 @@ if __name__ == "__main__":
         help="Specific graph type to use (optional)",
     )
 
+    # Model parameters
+    parser.add_argument(
+        "--model-type",
+        "-m",
+        type=str,
+        default="small",
+        choices=["small", "medium"],
+        help="Type of model to train"
+    )
+
     # Training parameters
     parser.add_argument(
-        "--batch-size", type=int, default=512, help="Batch size for training"
+        "--batch-size", type=int, default=128, help="Batch size for training"
     )
     parser.add_argument(
         "--epochs", type=int, default=10, help="Number of epochs to train"
