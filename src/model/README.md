@@ -40,16 +40,15 @@ The dataset uses a sliding window approach for temporal processing:
 
 Example of temporal window:
 
-```text
-Input window [t_0, t_1, t_2, ..., t_9] -> Predict t_{10}
-Slide by stride=1:
+**Input window** $[t_0, t_1, t_2, ..., t_9] \rightarrow \text{Predict } t_{10}$
 
-[t_1, t_2, t_3, ..., t_{10}] -> Predict t_{11}
-[t_2, t_3, t_4, ..., t_{11}] -> Predict t_{12}
-[t_3, t_4, t_5, ..., t_{12}] -> Predict t_{13}
-...
-[t_{189}, t_{190}, t_{191}, ..., t_{199}] -> Predict t_{200}
-```
+**Slide by stride = 1:**
+
+$$[t_1, t_2, t_3, ..., t_{10}] \rightarrow \text{Predict } t_{11}$$
+$$[t_2, t_3, t_4, ..., t_{11}] \rightarrow \text{Predict } t_{12}$$
+$$[t_3, t_4, t_5, ..., t_{12}] \rightarrow \text{Predict } t_{13}$$
+$$...$$
+$$[t_{189}, t_{190}, t_{191}, ..., t_{199}] \rightarrow \text{Predict } t_{200}$$
 
 ## Data Format
 
