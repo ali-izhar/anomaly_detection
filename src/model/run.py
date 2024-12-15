@@ -7,12 +7,21 @@ import yaml
 import argparse
 from datetime import datetime
 from torch.utils.data import DataLoader
+import gc
+import GPUtil
 
 from dataset import DynamicGraphDataset
 from small.train import train_model
 from utils.logger import setup_logging
 
 logger = setup_logging()
+
+
+def print_gpu_utilization():
+    """Print GPU utilization stats."""
+    gpus = GPUtil.getGPUs()
+    for gpu in gpus:
+        logger.info(f'GPU {gpu.id} - Memory Used: {gpu.memoryUsed/gpu.memoryTotal*100:.1f}% ({gpu.memoryUsed}MB/{gpu.memoryTotal}MB)')
 
 
 def setup_model_config(dataset) -> dict:
@@ -25,9 +34,9 @@ def setup_model_config(dataset) -> dict:
         "window_size": dataset.config["processing"]["temporal_window"],
         "dropout": 0.2,
         "learning_rate": 0.001,
-        "epochs": 100,
-        "patience": 10,
-        "batch_size": 32,
+        "epochs": 10,
+        "patience": 5,
+        "batch_size": 128,
     }
 
 
@@ -40,6 +49,14 @@ def create_experiment_dir(base_dir: str = "experiments") -> Path:
 
 
 def main(args):
+    # Clear GPU memory before starting
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    logger.info("Initial GPU Memory Usage:")
+    print_gpu_utilization()
+
     # Load dataset
     logger.info("Loading dataset...")
     dataset = DynamicGraphDataset(
@@ -49,7 +66,7 @@ def main(args):
     # Create train/val/test splits
     train_idx, val_idx, test_idx = dataset.get_train_val_test_split(seed=args.seed)
 
-    # Create data loaders
+    # Create data loaders with pin_memory=True for faster GPU transfer
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
@@ -60,6 +77,8 @@ def main(args):
         shuffle=True,
         num_workers=dataset.config["training"]["num_workers"],
         collate_fn=dataset._collate_fn,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     val_loader = DataLoader(
@@ -68,6 +87,8 @@ def main(args):
         shuffle=False,
         num_workers=dataset.config["training"]["num_workers"],
         collate_fn=dataset._collate_fn,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     test_loader = DataLoader(
@@ -76,6 +97,8 @@ def main(args):
         shuffle=False,
         num_workers=dataset.config["training"]["num_workers"],
         collate_fn=dataset._collate_fn,
+        pin_memory=True,
+        persistent_workers=True,
     )
 
     # Setup model configuration
@@ -98,7 +121,13 @@ def main(args):
 
     # Train model
     logger.info("Starting training...")
+    logger.info("GPU Memory Usage before training:")
+    print_gpu_utilization()
+    
     model = train_model(train_loader, val_loader, model_config)
+
+    logger.info("GPU Memory Usage after training:")
+    print_gpu_utilization()
 
     # Save final model
     torch.save(
@@ -138,10 +167,10 @@ if __name__ == "__main__":
 
     # Training parameters
     parser.add_argument(
-        "--batch-size", type=int, default=32, help="Batch size for training"
+        "--batch-size", type=int, default=512, help="Batch size for training"
     )
     parser.add_argument(
-        "--epochs", type=int, default=100, help="Number of epochs to train"
+        "--epochs", type=int, default=10, help="Number of epochs to train"
     )
     parser.add_argument(
         "--learning-rate", type=float, default=0.001, help="Learning rate for optimizer"
@@ -164,5 +193,8 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
+        # Set cuda to be deterministic for reproducibility
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     main(args)
