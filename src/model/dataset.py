@@ -1,654 +1,341 @@
 # src/model/dataset.py
 
-"""
-Dynamic Graph Dataset Loader
-
-This module provides a PyTorch dataset class for loading and processing different variants
-of the synthetic graph sequence datasets (node-level, global, or combined features).
-"""
+"""Dynamic Graph Dataset Loader for temporal graph sequences with different feature variants."""
 
 import h5py
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict
-import logging
+from typing import Optional, Tuple, List, Dict, Union
 import yaml
+import logging
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-
-from torch_geometric_temporal.signal import (
-    DynamicGraphTemporalSignalBatch,
-    temporal_signal_split,
-)
+from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
 
 
-class DynamicGraphDataset:
-    """A dataset class for handling dynamic graph data with temporal features.
-    Supports loading different dataset variants (node-level, global, combined)."""
-
-    VARIANTS = ["node_level", "global", "combined"]
+class DynamicGraphDataset(Dataset):
+    """Dataset class for dynamic graph sequences."""
 
     def __init__(
         self,
-        variant: str = "combined",
+        variant: str = "node_level",
         data_dir: str = "datasets",
         graph_type: Optional[str] = None,
         config_path: Optional[str] = None,
     ):
-        """Initialize the dataset."""
-        if config_path is None:
-            config_path = Path(__file__).parent / "configs/dataset_config.yaml"
+        """Initialize dataset.
 
-        with open(config_path, "r") as f:
+        Args:
+            variant: Feature type ("node_level", "global", "combined")
+            data_dir: Dataset directory path
+            graph_type: Specific graph type to load (BA, ER, or NW)
+            config_path: Path to config file
+        """
+        super().__init__()
+
+        if config_path is None:
+            config_path = Path(__file__).parent / "dataset_config.yaml"
+
+        with open(config_path) as f:
+            logger.debug(f"Loading DynamicGraphDataset config from {config_path}")
             self.config = yaml.safe_load(f)
 
+        # Validate inputs
         if variant not in self.config["data"]["variants"]:
             raise ValueError(
                 f"variant must be one of {self.config['data']['variants']}"
             )
+        if graph_type and graph_type not in self.config["graph"]["types"]:
+            raise ValueError(
+                f"graph_type must be one of {self.config['graph']['types']}"
+            )
 
+        # Store parameters
         self.variant = variant
         self.data_dir = Path(data_dir) / variant
         self.graph_type = graph_type
 
-        # Load variant-specific settings
-        self.feature_config = self.config["features"][variant]
-        self.temporal_config = self.config["temporal"]
-        self.processing_config = self.config["processing"]
-        self.graph_config = self.config["graph"]
-
-        # First load the data to get dimensions
+        # Load data
         self._load_data()
-
-        # Then validate graph settings after dimensions are known
-        if self.graph_config["num_nodes"] != self.num_nodes:
-            logger.warning(
-                f"Dataset nodes ({self.num_nodes}) differs from config ({self.graph_config['num_nodes']})"
-            )
-
-        # Validate graph types
-        if graph_type and graph_type not in self.graph_config["types"]:
-            raise ValueError(f"graph_type must be one of {self.graph_config['types']}")
-
         self._validate_data()
-        self._setup_logging()
-
-    def _setup_logging(self):
-        """Configure logging based on config."""
-        log_config = self.config["logging"]
-        log_level = getattr(logging, log_config["level"].upper())
-        logger.setLevel(log_level)
-
-        if not logger.handlers:
-            # Add file handler
-            log_dir = Path(log_config["save_dir"])
-            log_dir.mkdir(exist_ok=True)
-            fh = logging.FileHandler(log_dir / "dataset.log")
-            fh.setLevel(log_level)
-            logger.addHandler(fh)
+        self._create_temporal_samples()
 
     def _load_data(self):
-        """Load the dataset from HDF5 file."""
+        """Load dataset from HDF5 file."""
         dataset_path = self.data_dir / "dataset.h5"
         if not dataset_path.exists():
             raise FileNotFoundError(f"Dataset not found at {dataset_path}")
 
-        self.data = h5py.File(dataset_path, "r")
+        # Load data using context manager to ensure file is closed
+        with h5py.File(dataset_path, "r") as data:
+            graph_types = (
+                [self.graph_type] if self.graph_type else self.config["graph"]["types"]
+            )
 
-        # Load data for specified graph type or all types
-        self.graph_types = [self.graph_type] if self.graph_type else ["BA", "ER", "NW"]
+            # Initialize data structures
+            self.adjacency_matrices = []
+            self.feature_sequences = []
+            self.metadata = []
 
-        # Initialize data structures
-        self.adjacency_matrices = []
-        self.feature_sequences = []
-        self.metadata = []
+            # Load sequences for each graph type
+            for gtype in graph_types:
+                if gtype not in data:
+                    logger.warning(f"Graph type {gtype} not found in dataset")
+                    continue
 
-        # Load data for each graph type
-        for gtype in self.graph_types:
-            if gtype not in self.data:
-                logger.warning(f"Graph type {gtype} not found in dataset")
-                continue
+                group = data[gtype]
+                sequences = group["sequences"]
 
-            group = self.data[gtype]
-            sequences = group["sequences"]
+                for seq_idx in range(len(sequences)):
+                    seq = sequences[f"seq_{seq_idx}"]
+                    # Convert to numpy arrays immediately
+                    self.adjacency_matrices.append(np.array(seq["adjacency"]))
+                    self.feature_sequences.append(np.array(seq["features"]))
 
-            # Load all sequences for this graph type
-            for seq_idx in range(len(sequences)):
-                seq = sequences[f"seq_{seq_idx}"]
-                self.adjacency_matrices.append(seq["adjacency"][:])
-                self.feature_sequences.append(seq["features"][:])
+                    self.metadata.append(
+                        {
+                            "graph_type": gtype,
+                            "change_points": np.array(
+                                group["change_points"][f"seq_{seq_idx}"]
+                            ).tolist(),
+                            "params": eval(group["params"][f"seq_{seq_idx}"][()]),
+                        }
+                    )
 
-                # Create metadata
-                meta = {
-                    "graph_type": gtype,
-                    "change_points": group["change_points"][f"seq_{seq_idx}"][
-                        :
-                    ].tolist(),
-                    "params": eval(group["params"][f"seq_{seq_idx}"][()]),
-                }
-                self.metadata.append(meta)
-
-        # Convert to numpy arrays
+        # Convert to arrays and set dimensions
         self.adjacency_matrices = np.array(self.adjacency_matrices)
         self.feature_sequences = np.array(self.feature_sequences)
 
-        # Set dimensions
         self.num_sequences = len(self.metadata)
         if self.num_sequences > 0:
             self.sequence_length = self.adjacency_matrices.shape[1]
             self.num_nodes = self.adjacency_matrices.shape[2]
             self.num_features = self.feature_sequences.shape[-1]
 
-        # Process features and adjacency matrices
-        for i in range(len(self.feature_sequences)):
-            self.feature_sequences[i] = self._process_features(
-                self.feature_sequences[i]
-            )
-            for j in range(len(self.adjacency_matrices[i])):
-                self.adjacency_matrices[i][j] = self._process_adjacency(
-                    self.adjacency_matrices[i][j]
+        # Normalize features if enabled
+        if self.config["processing"]["normalize_features"]:
+            for i in range(len(self.feature_sequences)):
+                self.feature_sequences[i] = self._normalize_features(
+                    self.feature_sequences[i]
                 )
 
+        logger.debug(
+            f"Loaded {self.num_sequences} sequences for {self.variant} variant and {graph_types} graph types"
+        )
+
     def _validate_data(self):
-        """Validate data dimensions and formats based on variant."""
+        """Validate data dimensions."""
         if self.num_sequences == 0:
             raise ValueError("No sequences loaded")
 
-        # Check adjacency matrix dimensions
-        assert (
-            len(self.adjacency_matrices.shape) == 4
-        ), "Adjacency matrices should be 4D"
-        assert (
-            self.adjacency_matrices.shape[2] == self.adjacency_matrices.shape[3]
-        ), "Adjacency matrices should be square"
-
-        # Check feature dimensions based on variant
-        if self.variant == "node_level":
-            assert (
-                self.feature_sequences.shape[-1] == 6
-            ), "Node-level features should have 6 features per node"
-            assert len(self.feature_sequences.shape) == 4, "Node features should be 4D"
-        elif self.variant == "global":
-            expected_size = self.num_nodes * self.num_nodes + 6
-            assert (
-                self.feature_sequences.shape[-1] == expected_size
-            ), f"Global features should have size {expected_size}"
-            assert (
-                len(self.feature_sequences.shape) == 3
-            ), "Global features should be 3D"
-        else:  # combined
-            expected_size = self.num_nodes + 6
-            assert (
-                self.feature_sequences.shape[-1] == expected_size
-            ), f"Combined features should have size {expected_size}"
-            assert (
-                len(self.feature_sequences.shape) == 4
-            ), "Combined features should be 4D"
-
-        # Add validation for minimum sequence length from config
-        if self.sequence_length < self.temporal_config["min_sequence_length"]:
+        # Validate dimensions based on variant
+        expected_dim = self.config["features"][self.variant]["dimension"]
+        if self.feature_sequences.shape[-1] != expected_dim:
             raise ValueError(
-                f"Sequence length {self.sequence_length} is less than configured minimum "
-                f"{self.temporal_config['min_sequence_length']}"
+                f"Expected feature dimension {expected_dim}, got {self.feature_sequences.shape[-1]}"
             )
 
-        # Validate change points based on config
-        for meta in self.metadata:
-            changes = meta["change_points"]
-            if len(changes) > self.graph_config["change_point"]["max_changes"]:
-                logger.warning(
-                    f"Sequence has {len(changes)} changes, exceeding configured maximum "
-                    f"of {self.graph_config['change_point']['max_changes']}"
+    def _create_temporal_samples(self):
+        """Create temporal windows for sampling."""
+        window = self.config["processing"]["temporal_window"]
+        stride = self.config["processing"]["stride"]
+
+        self.temporal_samples = []
+        for seq_idx in range(self.num_sequences):
+            for start_idx in range(0, self.sequence_length - window, stride):
+                self.temporal_samples.append(
+                    {
+                        "sequence_idx": seq_idx,
+                        "start_idx": start_idx,
+                        "end_idx": start_idx + window,
+                    }
                 )
 
-            # Check minimum distance between change points
-            min_dist = self.graph_config["change_point"]["min_distance"]
-            for i in range(1, len(changes)):
-                if changes[i] - changes[i - 1] < min_dist:
-                    logger.warning(
-                        f"Change points distance {changes[i] - changes[i-1]} is less than "
-                        f"configured minimum {min_dist}"
-                    )
+    def __len__(self) -> int:
+        return len(self.temporal_samples)
 
-    def _get_edges_from_adjacency(
-        self, adj_matrix: np.ndarray
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Convert adjacency matrix to edge indices and weights."""
-        edges = np.where(adj_matrix > 0)
-        edge_index = torch.LongTensor(np.vstack((edges[0], edges[1])))
-        edge_weight = torch.FloatTensor(adj_matrix[edges])
-        return edge_index, edge_weight
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get a temporal sample."""
+        sample = self.temporal_samples[idx]
+        seq_idx = sample["sequence_idx"]
+        start_idx = sample["start_idx"]
+        end_idx = sample["end_idx"]
 
-    def _process_features(self, features: np.ndarray) -> np.ndarray:
-        """Process features according to config settings."""
-        if self.processing_config["normalize_features"]:
-            # Normalize features to [0,1] range
-            feature_min = features.min(axis=0, keepdims=True)
-            feature_max = features.max(axis=0, keepdims=True)
-            features = (features - feature_min) / (feature_max - feature_min + 1e-8)
+        # Get window of data
+        features = self.feature_sequences[seq_idx, start_idx:end_idx]
+        adj_matrices = self.adjacency_matrices[seq_idx, start_idx:end_idx]
+        target = self.adjacency_matrices[seq_idx, end_idx]
 
-        return features
-
-    def _process_adjacency(self, adjacency: np.ndarray) -> np.ndarray:
-        """Process adjacency matrix according to config settings."""
-        # Add undirected graph handling here
-        if self.processing_config.get("undirected", True):
-            # Make adjacency matrix symmetric for undirected graphs
-            adjacency = (adjacency + adjacency.T) / 2
-
-        if self.processing_config["normalize_adjacency"]:
-            # Symmetric normalization: D^(-1/2) A D^(-1/2)
-            degree = np.sum(adjacency, axis=-1)
-            degree_sqrt_inv = 1.0 / (np.sqrt(degree) + 1e-8)
-            adjacency = degree_sqrt_inv[:, None] * adjacency * degree_sqrt_inv[None, :]
-
-        if self.processing_config["add_self_loops"]:
-            # Add self-loops: A + I
-            adjacency = adjacency + np.eye(adjacency.shape[0])
-
-        return adjacency
-
-    def get_temporal_signal(
-        self,
-        sequence_idx: int,
-        window_size: Optional[int] = None,
-        include_metadata: bool = True,
-    ) -> DynamicGraphTemporalSignalBatch:
-        """Create a DynamicGraphTemporalSignalBatch for a specific sequence."""
-        window_size = window_size or self.temporal_config["window_size"]
-
-        # Check minimum sequence length
-        if self.sequence_length < self.temporal_config["min_sequence_length"]:
-            raise ValueError(
-                f"Sequence length {self.sequence_length} is less than minimum "
-                f"required length {self.temporal_config['min_sequence_length']}"
-            )
-
+        # Get edge indices and weights
         edge_indices = []
         edge_weights = []
-        features = []
-        targets = []
-        batch_indices = []
+        for adj in adj_matrices:
+            edges = np.where(adj > 0)
+            edge_indices.append(torch.LongTensor(np.vstack((edges[0], edges[1]))))
+            edge_weights.append(torch.FloatTensor(adj[edges]))
 
-        sequence_length = self.sequence_length - window_size
-
-        # Add metadata as additional features if requested
-        additional_features = {}
-        if include_metadata:
-            meta = self.metadata[sequence_idx]
-            # Repeat metadata for each timestep
-            additional_features.update(
-                {
-                    "change_points": [
-                        np.array(meta["change_points"]) for _ in range(sequence_length)
-                    ],
-                    "graph_type": [
-                        np.array([ord(c) for c in meta["graph_type"]])
-                        for _ in range(sequence_length)
-                    ],
-                    "params": [
-                        np.array(meta["params"]) for _ in range(sequence_length)
-                    ],
-                }
-            )
-
-        for t in range(sequence_length):
-            # Get edges
-            curr_adj = self.adjacency_matrices[sequence_idx, t]
-            edge_index, edge_weight = self._get_edges_from_adjacency(curr_adj)
-
-            # Convert to numpy for consistency
-            edge_indices.append(edge_index.numpy())
-            edge_weights.append(edge_weight.numpy())
-
-            # Add batch indices for this timestep
-            batch_idx = np.zeros(
-                self.num_nodes, dtype=np.int64
-            )  # All nodes belong to batch 0
-            batch_indices.append(batch_idx)
-
-            # Rest of the feature processing remains the same
-            curr_features = self.feature_sequences[sequence_idx, t]
-            if self.variant == "global":
-                adj_size = self.num_nodes * self.num_nodes
-                global_features = curr_features[adj_size:]
-                node_features = np.tile(global_features, (self.num_nodes, 1))
-                features.append(node_features)
-            else:
-                features.append(curr_features)
-
-            targets.append(self.adjacency_matrices[sequence_idx, t + 1])
-
-        return DynamicGraphTemporalSignalBatch(
-            edge_indices=edge_indices,
-            edge_weights=edge_weights,
-            features=features,
-            targets=targets,
-            batch_indices=batch_indices,
-            batches=batch_indices,
-            **additional_features,
-        )
-
-    def get_batch_temporal_signal(
-        self, sequence_indices: List[int], window_size: Optional[int] = None
-    ) -> DynamicGraphTemporalSignalBatch:
-        """Create a batched temporal signal from multiple sequences."""
-        window_size = window_size or self.temporal_config["window_size"]
-
-        edge_indices = []
-        edge_weights = []
-        features = []
-        targets = []
-        batch_indices = []
-
-        for t in range(self.sequence_length - window_size):
-            batch_edge_indices = []
-            batch_edge_weights = []
-            batch_features = []
-            batch_targets = []
-            batch_idx = []
-
-            node_offset = 0
-            for batch_id, seq_idx in enumerate(sequence_indices):
-                # Get edges and offset them based on batch position
-                curr_adj = self.adjacency_matrices[seq_idx, t]
-                edge_index, edge_weight = self._get_edges_from_adjacency(curr_adj)
-                edge_index = edge_index.numpy()
-                edge_index[0] += node_offset  # Offset source nodes
-                edge_index[1] += node_offset  # Offset target nodes
-
-                batch_edge_indices.append(edge_index)
-                batch_edge_weights.append(edge_weight.numpy())
-
-                # Process features
-                curr_features = self.feature_sequences[seq_idx, t]
-                if self.variant == "global":
-                    adj_size = self.num_nodes * self.num_nodes
-                    global_features = curr_features[adj_size:]
-                    node_features = np.tile(global_features, (self.num_nodes, 1))
-                    batch_features.append(node_features)
-                else:
-                    batch_features.append(curr_features)
-
-                # Add targets
-                batch_targets.append(self.adjacency_matrices[seq_idx, t + 1])
-
-                # Add batch indices for this sequence
-                batch_idx.append(np.full(self.num_nodes, batch_id, dtype=np.int64))
-
-                node_offset += self.num_nodes
-
-            # Concatenate all batch data for this timestep
-            edge_indices.append(np.concatenate(batch_edge_indices, axis=1))
-            edge_weights.append(np.concatenate(batch_edge_weights))
-            features.append(np.concatenate(batch_features))
-            targets.append(np.concatenate(batch_targets))
-            batch_indices.append(np.concatenate(batch_idx))
-
-        return DynamicGraphTemporalSignalBatch(
-            edge_indices=edge_indices,
-            edge_weights=edge_weights,
-            features=features,
-            targets=targets,
-            batch_indices=batch_indices,
-            batches=batch_indices,
-        )
-
-    def get_train_test_split(
-        self, train_ratio: Optional[float] = None, sequence_idx: Optional[int] = None
-    ) -> Tuple[DynamicGraphTemporalSignalBatch, DynamicGraphTemporalSignalBatch]:
-        """Get train/test split for a sequence."""
-        train_ratio = train_ratio or self.temporal_config["train_ratio"]
-
-        if sequence_idx is None:
-            sequence_idx = np.random.randint(0, self.num_sequences)
-
-        temporal_signal = self.get_temporal_signal(sequence_idx)
-        train_dataset, test_dataset = temporal_signal_split(
-            temporal_signal, train_ratio
-        )
-
-        return train_dataset, test_dataset
-
-    def get_graph_type_indices(self, graph_type: str) -> np.ndarray:
-        """Get indices of sequences of a specific graph type."""
-        return np.array(
-            [
-                i
-                for i, meta in enumerate(self.metadata)
-                if meta["graph_type"] == graph_type
-            ]
-        )
-
-    def get_change_points(self, sequence_idx: int) -> List[int]:
-        """Get change points for a specific sequence."""
-        return self.metadata[sequence_idx]["change_points"]
-
-    def get_sequence_metadata(self, sequence_idx: int) -> Dict:
-        """Get full metadata for a specific sequence."""
-        return self.metadata[sequence_idx]
-
-    def get_train_val_test_split(self, sequence_idx: Optional[int] = None) -> Tuple[
-        DynamicGraphTemporalSignalBatch,
-        DynamicGraphTemporalSignalBatch,
-        DynamicGraphTemporalSignalBatch,
-    ]:
-        """Get train/validation/test split for a sequence."""
-        train_ratio = self.temporal_config["train_ratio"]
-        val_ratio = self.temporal_config["validation_ratio"]
-
-        if sequence_idx is None:
-            sequence_idx = np.random.randint(0, self.num_sequences)
-
-        temporal_signal = self.get_temporal_signal(sequence_idx)
-
-        # First split into train and test
-        train_val_data, test_data = temporal_signal_split(temporal_signal, train_ratio)
-
-        # Then split train into train and validation
-        val_ratio_adjusted = val_ratio / train_ratio
-        train_data, val_data = temporal_signal_split(
-            train_val_data, 1 - val_ratio_adjusted
-        )
-
-        return train_data, val_data, test_data
+        return {
+            "features": torch.FloatTensor(features),
+            "edge_indices": edge_indices,
+            "edge_weights": edge_weights,
+            "target": torch.FloatTensor(target),
+            "metadata": self.metadata[seq_idx],
+        }
 
     def get_dataloader(
-        self,
-        sequence_indices: List[int],
-        shuffle: Optional[bool] = None,
-        batch_size: Optional[int] = None,
+        self, batch_size: Optional[int] = None, shuffle: bool = True
     ) -> DataLoader:
-        """Create a DataLoader with configured settings."""
-        shuffle = shuffle if shuffle is not None else self.config["training"]["shuffle"]
-        batch_size = batch_size or self.config["training"]["batch_size"]
+        """Create a DataLoader."""
+        if batch_size is None:
+            batch_size = self.config["training"]["batch_size"]
 
         return DataLoader(
-            sequence_indices,
+            self,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=self.config["training"]["num_workers"],
-            pin_memory=self.config["training"]["pin_memory"],
-            prefetch_factor=self.config["training"]["prefetch_factor"],
+            collate_fn=self._collate_fn,
+            persistent_workers=True,
         )
 
-    def get_validation_metrics(self) -> List[str]:
-        """Get configured validation metrics."""
-        return self.config["validation"]["metrics"]
+    def _collate_fn(
+        self, batch: List[Dict]
+    ) -> Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+        """Collate batch of samples."""
+        return {
+            "features": torch.stack([item["features"] for item in batch]),
+            "edge_indices": [item["edge_indices"] for item in batch],
+            "edge_weights": [item["edge_weights"] for item in batch],
+            "targets": torch.stack([item["target"] for item in batch]),
+            "metadata": [item["metadata"] for item in batch],
+        }
 
-    def get_test_metrics(self) -> List[str]:
-        """Get configured test metrics."""
-        return self.config["testing"]["metrics"]
+    def get_train_val_test_split(
+        self, seed: Optional[int] = None
+    ) -> Tuple[List[int], List[int], List[int]]:
+        """Get dataset split indices."""
+        if seed is not None:
+            np.random.seed(seed)
 
-    def get_sequence_window(self, sequence_idx: int, start: int, end: int):
-        """Get a specific window of the temporal sequence."""
-        signal = self.get_temporal_signal(sequence_idx)
-        return signal[start:end]  # Use slice functionality
+        indices = np.random.permutation(len(self))
+        train_size = int(self.config["training"]["train_ratio"] * len(self))
+        val_size = int(self.config["training"]["val_ratio"] * len(self))
 
-    def get_sequence_slice(
-        self, sequence_idx: int, start: int, end: Optional[int] = None
-    ) -> DynamicGraphTemporalSignalBatch:
-        """Get a specific slice of the temporal sequence."""
-        signal = self.get_temporal_signal(sequence_idx)
-        return signal[start:end]
-
-    def get_temporal_batch(
-        self,
-        sequence_idx: int,
-        temporal_periods: int,
-        stride: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Create batched temporal windows from a sequence.
-
-        Args:
-            sequence_idx: Index of the sequence to use
-            temporal_periods: Number of timesteps in each window
-            stride: Step size between windows
-
-        Returns:
-            x: Features tensor (batch_size, num_nodes, num_features, temporal_periods)
-            edge_index: Edge indices for each batch
-            edge_weight: Edge weights for each batch
-            y: Target adjacency matrices
-        """
-        # Get sequence data
-        features = self.feature_sequences[
-            sequence_idx
-        ]  # (timesteps, num_nodes, num_features)
-        adj_matrices = self.adjacency_matrices[
-            sequence_idx
-        ]  # (timesteps, num_nodes, num_nodes)
-
-        # Calculate number of possible windows
-        num_windows = (len(features) - temporal_periods - 1) // stride + 1
-
-        # Initialize tensors
-        x = torch.zeros(
-            num_windows,  # batch dimension
-            self.num_nodes,  # number of nodes
-            self.num_features,  # number of features per node
-            temporal_periods,  # number of timesteps in window
+        return (
+            indices[:train_size],
+            indices[train_size : train_size + val_size],
+            indices[train_size + val_size :],
         )
-        y = torch.zeros(num_windows, self.num_nodes, self.num_nodes)
-        edge_indices = []
-        edge_weights = []
 
-        # Create temporal windows
-        for i in range(num_windows):
-            start_idx = i * stride
-            end_idx = start_idx + temporal_periods
+    def _normalize_features(self, features: np.ndarray) -> np.ndarray:
+        """Normalize features to [0,1] range."""
+        feature_min = features.min(axis=0, keepdims=True)
+        feature_max = features.max(axis=0, keepdims=True)
+        return (features - feature_min) / (feature_max - feature_min + 1e-8)
 
-            # Get features for this window
-            window_features = features[
-                start_idx:end_idx
-            ]  # (temporal_periods, num_nodes, num_features)
 
-            # Rearrange dimensions to match required shape
-            # From (temporal_periods, num_nodes, num_features) to (num_nodes, num_features, temporal_periods)
-            x[i] = torch.FloatTensor(np.transpose(window_features, (1, 2, 0)))
+def test_dataset(variant: str = "node_level", graph_type: Optional[str] = None):
+    """Test dataset functionality."""
+    logger.info(
+        f"Testing {variant} dataset" + (f" for {graph_type}" if graph_type else "")
+    )
 
-            # Get target adjacency (next timestep after window)
-            y[i] = torch.FloatTensor(adj_matrices[end_idx])
+    dataset = DynamicGraphDataset(variant=variant, graph_type=graph_type)
 
-            # Get edges for last timestep in window
-            edge_index, edge_weight = self._get_edges_from_adjacency(
-                adj_matrices[end_idx - 1]
-            )
-            edge_indices.append(edge_index)
-            edge_weights.append(edge_weight)
+    # Print dataset info
+    print("\nDataset Summary:")
+    print(f"Total samples: {len(dataset)}")
+    print(f"Number of sequences: {dataset.num_sequences}")
+    print(f"Sequence length: {dataset.sequence_length}")
+    print(f"Number of nodes: {dataset.num_nodes}")
+    print(f"Feature dimension: {dataset.num_features}")
 
-        # Add shape validation
-        assert x.shape == (
-            num_windows,
-            self.num_nodes,
-            self.num_features,
-            temporal_periods,
-        ), f"Expected shape {(num_windows, self.num_nodes, self.num_features, temporal_periods)}, got {x.shape}"
+    # Get a sample
+    print("\nSample from dataset:")
+    sample = dataset[0]
+    for key, value in sample.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key} shape: {value.shape}")
+        elif isinstance(value, list):
+            print(f"{key} length: {len(value)}")
+            if value:  # If list is not empty
+                if isinstance(value[0], torch.Tensor):
+                    print(f"  First element shape: {value[0].shape}")
+        else:
+            print(f"{key} type: {type(value)}")
 
-        # Log shapes for debugging
-        logger.debug(f"Features shape: {x.shape}")
-        logger.debug(f"Target shape: {y.shape}")
-        logger.debug(f"Number of edge indices: {len(edge_indices)}")
+    # Test dataloader
+    print("\nTesting DataLoader:")
+    dataloader = dataset.get_dataloader(batch_size=4)
+    batch = next(iter(dataloader))
+    print("\nBatch contents:")
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key} shape: {value.shape}")
+        elif isinstance(value, list):
+            print(f"{key} length: {len(value)}")
+            if value and isinstance(value[0], list):
+                print(f"  First sequence length: {len(value[0])}")
+                if value[0]:  # If inner list is not empty
+                    print(f"  First element shape: {value[0][0].shape}")
 
-        return x, edge_indices, edge_weights, y
+    # Test train/val/test split
+    print("\nTesting train/val/test split:")
+    train_idx, val_idx, test_idx = dataset.get_train_val_test_split(seed=42)
+    print(f"Train samples: {len(train_idx)}")
+    print(f"Val samples: {len(val_idx)}")
+    print(f"Test samples: {len(test_idx)}")
+
+    # Test graph type distribution
+    print("\nGraph type distribution:")
+    type_counts = {}
+    for meta in dataset.metadata:
+        gtype = meta["graph_type"]
+        type_counts[gtype] = type_counts.get(gtype, 0) + 1
+    for gtype, count in type_counts.items():
+        print(f"{gtype}: {count} sequences")
+
+    # Test feature statistics
+    print("\nFeature statistics:")
+    features = dataset.feature_sequences
+    print(f"Min: {features.min():.4f}")
+    print(f"Max: {features.max():.4f}")
+    print(f"Mean: {features.mean():.4f}")
+    print(f"Std: {features.std():.4f}")
+
+    # Test edge statistics
+    print("\nEdge statistics:")
+    adj = dataset.adjacency_matrices
+    edge_density = adj.sum() / (
+        adj.shape[0] * adj.shape[1] * adj.shape[2] * adj.shape[3]
+    )
+    print(f"Average edge density: {edge_density:.4f}")
+    print(f"Total edges: {int(adj.sum())}")
 
 
 if __name__ == "__main__":
-    # Example usage
-    for variant in ["node_level", "global", "combined"]:
-        print(f"\n{'='*50}")
-        print(f"Testing {variant} dataset:")
-        print(f"{'='*50}")
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # Test each variant
+    # variants = ["node_level", "global", "combined"]
+    variants = ["node_level"]
+    for variant in variants:
         try:
-            dataset = DynamicGraphDataset(variant=variant)
-
-            print(f"\nDataset Summary:")
-            print(f"Variant: {dataset.variant}")
-            print(f"Number of sequences: {dataset.num_sequences}")
-            print(f"Sequence length: {dataset.sequence_length}")
-            print(f"Number of nodes: {dataset.num_nodes}")
-            print(f"Feature dimension: {dataset.num_features}")
-
-            # Inspect first sequence
-            if dataset.num_sequences > 0:
-                print("\nFirst Sequence Inspection:")
-                print(f"Features shape: {dataset.feature_sequences[0].shape}")
-                print(f"Adjacency shape: {dataset.adjacency_matrices[0].shape}")
-
-                # Inspect first timestep
-                print("\nFirst Timestep Statistics:")
-                features = dataset.feature_sequences[
-                    0, 0
-                ]  # First sequence, first timestep
-                adjacency = dataset.adjacency_matrices[
-                    0, 0
-                ]  # First sequence, first timestep
-
-                print("\nFeatures:")
-                print(f"Shape: {features.shape}")
-                print(f"Range: [{features.min():.3f}, {features.max():.3f}]")
-                print(f"Mean: {features.mean():.3f}")
-                print(f"Std: {features.std():.3f}")
-                if variant == "global":
-                    print("First few global features:", features[:5])
-                else:
-                    print("First node features:", features[0])
-
-                print("\nAdjacency Matrix:")
-                print(f"Shape: {adjacency.shape}")
-                print(f"Range: [{adjacency.min():.3f}, {adjacency.max():.3f}]")
-                print(f"Mean: {adjacency.mean():.3f}")
-                print(f"Std: {adjacency.std():.3f}")
-                print(f"Number of edges: {(adjacency > 0).sum()}")
-                print(
-                    f"Sparsity: {(adjacency > 0).sum() / (adjacency.shape[0] * adjacency.shape[1]):.3f}"
-                )
-
-            # Test loading specific graph types
-            print("\nGraph Type Statistics:")
-            for graph_type in ["BA", "ER", "NW"]:
-                indices = dataset.get_graph_type_indices(graph_type)
-                print(f"\n{graph_type}:")
-                print(f"Number of sequences: {len(indices)}")
-
-                if len(indices) > 0:
-                    idx = indices[0]
-                    change_points = dataset.get_change_points(idx)
-                    print(f"First sequence change points: {change_points}")
-
-                    # Test train/test split
-                    train_data, test_data = dataset.get_train_test_split(
-                        sequence_idx=idx
-                    )
-                    print(f"Train snapshots: {len(train_data.features)}")
-                    print(f"Test snapshots: {len(test_data.features)}")
-
+            print("\n" + "=" * 50)
+            test_dataset(variant)
         except Exception as e:
-            print(f"Error loading {variant} dataset: {str(e)}")
-            import traceback
+            print(f"Error testing {variant} dataset: {str(e)}")
 
-            traceback.print_exc()
+    # Test specific graph type
+    print("\n" + "=" * 50)
+    print("Testing BA graph type specifically:")
+    try:
+        test_dataset("node_level", graph_type="BA")
+    except Exception as e:
+        print(f"Error testing BA graph type: {str(e)}")

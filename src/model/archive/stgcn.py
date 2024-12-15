@@ -1,5 +1,3 @@
-# src/model/stgcn.py
-
 import logging
 import torch
 import torch.nn as nn
@@ -10,8 +8,7 @@ logger = logging.getLogger(__name__)
 
 class DynamicGraphPredictor(nn.Module):
     """
-    Spatio-Temporal Graph Convolutional Network for link prediction.
-    Note: DynamicLinkPredictor is recommended over this model for link prediction.
+    Enhanced Spatio-Temporal Graph Convolutional Network for link prediction.
     """
 
     def __init__(
@@ -32,7 +29,7 @@ class DynamicGraphPredictor(nn.Module):
         # Input projection
         self.input_proj = nn.Linear(num_features, hidden_channels)
 
-        # ST-Conv blocks
+        # ST-Conv blocks with residual connections and normalization
         self.st_blocks = nn.ModuleList(
             [
                 STConv(
@@ -47,7 +44,10 @@ class DynamicGraphPredictor(nn.Module):
             ]
         )
 
-        # Layer normalization layers
+        self.residual_connections = nn.ModuleList(
+            [nn.Linear(hidden_channels, hidden_channels) for _ in range(num_layers)]
+        )
+
         self.layer_norms = nn.ModuleList(
             [nn.LayerNorm(hidden_channels) for _ in range(num_layers)]
         )
@@ -61,7 +61,6 @@ class DynamicGraphPredictor(nn.Module):
             nn.LayerNorm(hidden_channels // 2),
             nn.Dropout(dropout),
             nn.Linear(hidden_channels // 2, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x, edge_index, edge_weight=None):
@@ -78,15 +77,18 @@ class DynamicGraphPredictor(nn.Module):
         """
         batch_size = x.size(0)
 
-        # Project input
+        # Project input features
         x = self.input_proj(x)
 
-        # Process through ST-Conv blocks with residual connections
-        for block, norm in zip(self.st_blocks, self.layer_norms):
+        # Process through ST-Conv blocks
+        for block, residual, norm in zip(
+            self.st_blocks, self.residual_connections, self.layer_norms
+        ):
+            x_residual = residual(x)  # Residual connection
             x_new = block(x, edge_index, edge_weight)
             x_new = norm(x_new)
             x_new = self.dropout(x_new)
-            x = x + x_new
+            x = x_residual + x_new  # Add residual
 
         # Generate all possible node pairs
         row, col = torch.cartesian_prod(
@@ -101,7 +103,7 @@ class DynamicGraphPredictor(nn.Module):
         # Get final node embeddings
         node_embeddings = x[:, -1]  # Take last timestep
 
-        # Get node pair features
+        # Compute node pair features
         row_h = node_embeddings[torch.arange(batch_size).unsqueeze(1), batch_row]
         col_h = node_embeddings[torch.arange(batch_size).unsqueeze(1), batch_col]
         pair_features = torch.cat([row_h, col_h], dim=-1)
