@@ -156,8 +156,17 @@ class DynamicGraphDataset(Dataset):
     def __len__(self) -> int:
         return len(self.temporal_samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a temporal sample."""
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor], torch.Tensor, Dict]:
+        """Get a temporal sample.
+        
+        Returns:
+            Tuple containing:
+            - features: Node features tensor
+            - edge_indices: List of edge index tensors
+            - edge_weights: List of edge weight tensors
+            - target: Target adjacency matrix
+            - metadata: Sequence metadata
+        """
         sample = self.temporal_samples[idx]
         seq_idx = sample["sequence_idx"]
         start_idx = sample["start_idx"]
@@ -176,13 +185,14 @@ class DynamicGraphDataset(Dataset):
             edge_indices.append(torch.LongTensor(np.vstack((edges[0], edges[1]))))
             edge_weights.append(torch.FloatTensor(adj[edges]))
 
-        return {
-            "features": torch.FloatTensor(features),
-            "edge_indices": edge_indices,
-            "edge_weights": edge_weights,
-            "target": torch.FloatTensor(target),
-            "metadata": self.metadata[seq_idx],
-        }
+        # Return as tuple instead of dict
+        return (
+            torch.FloatTensor(features),
+            edge_indices,
+            edge_weights,
+            torch.FloatTensor(target),
+            self.metadata[seq_idx]
+        )
 
     def get_dataloader(
         self, batch_size: Optional[int] = None, shuffle: bool = True
@@ -200,16 +210,21 @@ class DynamicGraphDataset(Dataset):
             persistent_workers=True,
         )
 
-    def _collate_fn(
-        self, batch: List[Dict]
-    ) -> Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
-        """Collate batch of samples."""
+    def _collate_fn(self, batch: List[Tuple]) -> Dict[str, Union[torch.Tensor, List, List[List]]]:
+        """Collate batch of samples.
+        
+        Args:
+            batch: List of tuples from __getitem__
+            
+        Returns:
+            Dictionary with batched data
+        """
         return {
-            "features": torch.stack([item["features"] for item in batch]),
-            "edge_indices": [item["edge_indices"] for item in batch],
-            "edge_weights": [item["edge_weights"] for item in batch],
-            "targets": torch.stack([item["target"] for item in batch]),
-            "metadata": [item["metadata"] for item in batch],
+            'features': torch.stack([item[0] for item in batch]),
+            'edge_indices': [item[1] for item in batch],
+            'edge_weights': [item[2] for item in batch],
+            'targets': torch.stack([item[3] for item in batch]),
+            'metadata': [item[4] for item in batch]
         }
 
     def get_train_val_test_split(

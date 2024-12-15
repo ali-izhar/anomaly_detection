@@ -189,3 +189,10 @@ visualizations*/
 # model checkpoints
 checkpoints*/
 *.pth
+
+# logs
+logs*/
+
+# experiments
+experiments*/
+

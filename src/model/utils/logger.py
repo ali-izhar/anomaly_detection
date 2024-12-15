@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 
-def setup_logging(config: Dict[str, Any]) -> logging.Logger:
+def setup_logging(config: Dict[str, Any] = None) -> logging.Logger:
     """
     Set up logging configuration with different levels for console and file.
 
@@ -19,6 +19,16 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
             - console_format: Format for console output
             - file_format: Format for file output
     """
+    if config is None:
+        config = {
+            "dir": "logs",
+            "level": "DEBUG",
+            "console_level": "INFO",
+            "file_level": "DEBUG",
+            "console_format": "%(asctime)s - %(levelname)s - %(message)s",
+            "file_format": "%(asctime)s - %(levelname)s - %(message)s",
+        }
+
     log_dir = Path(config["dir"])
     log_dir.mkdir(exist_ok=True)
 
