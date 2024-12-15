@@ -1,4 +1,6 @@
-# Dynamic Graph Dataset
+<i>This file contains the documentation for (1) Dataset and (2) Model architectures.</i>
+
+# 1. Dynamic Graph Dataset
 
 The dataset contains sequences of evolving graphs with the following characteristics:
 
@@ -153,3 +155,6 @@ Typical dataset statistics:
 - Edge indices use sparse COO format for memory efficiency
 - Temporal windows create overlapping samples for better temporal pattern learning
 - Batch processing is optimized for GPU training
+
+
+# 2. Graph Neural Network (GNN) Models
