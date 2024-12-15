@@ -13,10 +13,10 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     total_loss = 0
 
     for batch in tqdm(train_loader, desc="Training"):
-        features = batch['features'].to(device)
-        edge_indices = [[e.to(device) for e in seq] for seq in batch['edge_indices']]
-        edge_weights = [[w.to(device) for w in seq] for seq in batch['edge_weights']]
-        targets = batch['targets'].to(device)
+        features = batch["features"].to(device)
+        edge_indices = [[e.to(device) for e in seq] for seq in batch["edge_indices"]]
+        edge_weights = [[w.to(device) for w in seq] for seq in batch["edge_weights"]]
+        targets = batch["targets"].to(device)
 
         # Use the first timestep's graph structure
         edge_index = edge_indices[0][0]  # Take first batch, first timestep
@@ -41,10 +41,14 @@ def validate(model, val_loader, criterion, device):
 
     with torch.no_grad():
         for batch in val_loader:
-            features = batch['features'].to(device)
-            edge_indices = [[e.to(device) for e in seq] for seq in batch['edge_indices']]
-            edge_weights = [[w.to(device) for w in seq] for seq in batch['edge_weights']]
-            targets = batch['targets'].to(device)
+            features = batch["features"].to(device)
+            edge_indices = [
+                [e.to(device) for e in seq] for seq in batch["edge_indices"]
+            ]
+            edge_weights = [
+                [w.to(device) for w in seq] for seq in batch["edge_weights"]
+            ]
+            targets = batch["targets"].to(device)
 
             edge_index = edge_indices[0][0]
             edge_weight = edge_weights[0][0]
@@ -57,23 +61,17 @@ def validate(model, val_loader, criterion, device):
     return total_loss / len(val_loader)
 
 
-def train_model(train_loader, val_loader, config):
+def train_model(train_loader, val_loader, model_config, training_config):
     """Main training function."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Initialize model
-    model = SmallSTGCN(
-        in_channels=config["in_channels"],
-        hidden_channels=config["hidden_channels"],
-        num_nodes=config["num_nodes"],
-        window_size=config["window_size"],
-        dropout=config["dropout"],
-    ).to(device)
+    model = SmallSTGCN(**model_config).to(device)
 
     # Setup training
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
+    optimizer = optim.Adam(model.parameters(), lr=training_config["learning_rate"])
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5
     )
@@ -84,21 +82,21 @@ def train_model(train_loader, val_loader, config):
     # Add custom logging for learning rate changes
     def log_lr(optimizer):
         for param_group in optimizer.param_groups:
-            current_lr = param_group['lr']
+            current_lr = param_group["lr"]
             print(f"Learning rate changed to: {current_lr:.6f}")
 
     # Training loop
-    for epoch in range(config["epochs"]):
+    for epoch in range(training_config["epochs"]):
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
         val_loss = validate(model, val_loader, criterion, device)
 
-        print(f"Epoch {epoch+1}/{config['epochs']}")
+        print(f"Epoch {epoch+1}/{training_config['epochs']}")
         print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
         # Learning rate scheduling
-        old_lr = optimizer.param_groups[0]['lr']
+        old_lr = optimizer.param_groups[0]["lr"]
         scheduler.step(val_loss)
-        if old_lr != optimizer.param_groups[0]['lr']:
+        if old_lr != optimizer.param_groups[0]["lr"]:
             log_lr(optimizer)
 
         # Early stopping
@@ -109,7 +107,7 @@ def train_model(train_loader, val_loader, config):
             torch.save(model.state_dict(), "best_model.pth")
         else:
             early_stopping_counter += 1
-            if early_stopping_counter >= config["patience"]:
+            if early_stopping_counter >= training_config["patience"]:
                 print("Early stopping triggered")
                 break
 

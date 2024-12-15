@@ -9,6 +9,7 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 import gc
 import GPUtil
+from torchinfo import summary
 
 from dataset import DynamicGraphDataset
 from small.train import train_model as train_small
@@ -22,42 +23,55 @@ def print_gpu_utilization():
     """Print GPU utilization stats."""
     gpus = GPUtil.getGPUs()
     for gpu in gpus:
-        logger.info(f'GPU {gpu.id} - Memory Used: {gpu.memoryUsed/gpu.memoryTotal*100:.1f}% ({gpu.memoryUsed}MB/{gpu.memoryTotal}MB)')
+        logger.info(
+            f"GPU {gpu.id} - Memory Used: {gpu.memoryUsed/gpu.memoryTotal*100:.1f}% ({gpu.memoryUsed}MB/{gpu.memoryTotal}MB)"
+        )
 
 
 def setup_model_config(dataset, model_type: str = "small") -> dict:
     """Setup model configuration based on dataset properties and model type."""
-    base_config = {
+    # Model-specific parameters
+    model_config = {
         "in_channels": dataset.num_features,
         "num_nodes": dataset.num_nodes,
         "window_size": dataset.config["processing"]["temporal_window"],
         "dropout": 0.2,
+    }
+
+    if model_type == "small":
+        model_config.update(
+            {
+                "hidden_channels": 32,
+                "out_channels": 32,
+            }
+        )
+    elif model_type == "medium":
+        model_config.update(
+            {
+                "hidden_channels": 64,
+                "out_channels": 64,
+                "num_heads": 4,
+                "num_layers": 2,
+            }
+        )
+
+    # Training parameters (separate from model parameters)
+    training_config = {
         "learning_rate": 0.001,
         "epochs": 10,
         "patience": 5,
         "batch_size": 128,
+        "weight_decay": 1e-4,
+        "scheduler_t0": 5,
+        "scheduler_t_mult": 2,
     }
-    
-    if model_type == "small":
-        base_config.update({
-            "hidden_channels": 32,
-            "out_channels": 32,
-        })
-    elif model_type == "medium":
-        base_config.update({
-            "hidden_channels": 64,
-            "out_channels": 64,
-            "num_heads": 4,
-            "num_layers": 2,
-            "weight_decay": 1e-4,
-            "scheduler_t0": 5,
-            "scheduler_t_mult": 2,
-        })
-    
-    return base_config
+
+    return model_config, training_config
 
 
-def create_experiment_dir(base_dir: str = "experiments", model_type: str = "small") -> Path:
+def create_experiment_dir(
+    base_dir: str = "experiments", model_type: str = "small"
+) -> Path:
     """Create a directory for the current experiment."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     exp_dir = Path(base_dir) / model_type / timestamp
@@ -65,12 +79,57 @@ def create_experiment_dir(base_dir: str = "experiments", model_type: str = "smal
     return exp_dir
 
 
+def get_model_summary(model, model_config):
+    """Get model summary string using torchinfo."""
+    try:
+        # Create sample inputs
+        batch_size = 2
+        sample_features = torch.randn(
+            batch_size,
+            model_config["window_size"],
+            model_config["num_nodes"],
+            model_config["in_channels"],
+        )
+        sample_edge_index = torch.randint(0, model_config["num_nodes"], (2, 100))
+
+        # Get model summary with more detailed configuration
+        model_summary = summary(
+            model=model,
+            input_size=[sample_features.shape, sample_edge_index.shape],
+            input_data=None,  # Don't pass actual data
+            batch_dim=0,
+            col_names=["input_size", "output_size", "num_params"],
+            col_width=20,
+            row_settings=["var_names"],
+            device=torch.device("cpu"),  # Keep on CPU for summary
+            mode="eval",
+            verbose=0,
+        )
+        return str(model_summary)
+    except Exception as e:
+        # Fallback to manual parameter counting
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        summary_str = (
+            f"Failed to generate detailed summary: {str(e)}\n\n"
+            f"Model Structure:\n{str(model)}\n\n"
+            f"Parameter Summary:\n"
+            f"Total parameters: {total_params:,}\n"
+            f"Trainable parameters: {trainable_params:,}\n"
+            f"Input shape: [batch_size, {model_config['window_size']}, "
+            f"{model_config['num_nodes']}, {model_config['in_channels']}]\n"
+            f"Edge index shape: [2, num_edges]"
+        )
+        return summary_str
+
+
 def main(args):
     # Clear GPU memory before starting
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         gc.collect()
-    
+
     logger.info("Initial GPU Memory Usage:")
     print_gpu_utilization()
 
@@ -82,6 +141,20 @@ def main(args):
 
     # Create train/val/test splits
     train_idx, val_idx, test_idx = dataset.get_train_val_test_split(seed=args.seed)
+
+    # Log dataset split information
+    logger.info(f"Total samples: {len(dataset)}")
+    logger.info(f"Training samples: {len(train_idx)}")
+    logger.info(f"Validation samples: {len(val_idx)}")
+    logger.info(f"Test samples: {len(test_idx)}")
+
+    # Calculate and log number of batches
+    num_training_batches = len(train_idx) // args.batch_size + (
+        1 if len(train_idx) % args.batch_size != 0 else 0
+    )
+    logger.info(
+        f"Number of training batches: {num_training_batches} (training_samples={len(train_idx)} / batch_size={args.batch_size})"
+    )
 
     # Create data loaders with pin_memory=True for faster GPU transfer
     train_dataset = Subset(dataset, train_idx)
@@ -108,31 +181,66 @@ def main(args):
         persistent_workers=True,
     )
 
-    # Setup model configuration
-    model_config = setup_model_config(dataset, args.model_type)
-    model_config.update({
-        "batch_size": args.batch_size,
-        "epochs": args.epochs,
-        "learning_rate": args.learning_rate,
-    })
+    # Setup model and training configurations
+    model_config, training_config = setup_model_config(dataset, args.model_type)
+
+    # Update training config with command line arguments
+    training_config.update(
+        {
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "learning_rate": args.learning_rate,
+        }
+    )
 
     # Create experiment directory
     exp_dir = create_experiment_dir(args.exp_dir, args.model_type)
     logger.info(f"Experiment directory: {exp_dir}")
 
-    # Save configurations
-    with open(exp_dir / "model_config.yaml", "w") as f:
-        yaml.dump(model_config, f)
+    # Initialize model based on type
+    logger.info(f"\nInitializing {args.model_type} model...")
+    if args.model_type == "small":
+        from small.model_s import SmallSTGCN
+
+        model = SmallSTGCN(**model_config)
+    else:  # medium
+        from medium.model_m import MediumASTGCN
+
+        model = MediumASTGCN(**model_config)
+
+    # Get model summary
+    summary_str = get_model_summary(model, model_config)
+
+    # Save model architecture and configurations
+    with open(exp_dir / "model_architecture.txt", "w") as f:
+        f.write("Model Configuration:\n")
+        f.write(yaml.dump(model_config))
+        f.write("\nModel Architecture:\n")
+        f.write(str(model))
+        f.write("\n\nModel Summary:\n")
+        f.write(summary_str)
+
+    # Log only the model structure
+    logger.info("\nModel Architecture:")
+    logger.info(str(model))
+    logger.info("\nParameter Summary:")
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Total parameters: {total_params:,}")
+    logger.info(f"Trainable parameters: {trainable_params:,}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
 
     # Train model
     logger.info(f"Starting training for {args.model_type} model...")
     logger.info("GPU Memory Usage before training:")
     print_gpu_utilization()
-    
+
     if args.model_type == "small":
-        model = train_small(train_loader, val_loader, model_config)
+        model = train_small(train_loader, val_loader, model_config, training_config)
     else:  # medium
-        model = train_medium(train_loader, val_loader, model_config)
+        model = train_medium(train_loader, val_loader, model_config, training_config)
 
     logger.info("GPU Memory Usage after training:")
     print_gpu_utilization()
@@ -141,7 +249,7 @@ def main(args):
     torch.save(
         {
             "model_state_dict": model.state_dict(),
-            "config": model_config,
+            "config": training_config,
         },
         exp_dir / "final_model.pth",
     )
@@ -178,7 +286,7 @@ if __name__ == "__main__":
         type=str,
         default="small",
         choices=["small", "medium"],
-        help="Type of model to train"
+        help="Type of model to train",
     )
 
     # Training parameters

@@ -81,7 +81,7 @@ class SmallSTGCN(nn.Module):
 
         # Reshape for fully connected layers
         x = x.reshape(batch_size, -1)  # Flatten all dimensions except batch
-        
+
         # Apply final layers
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
