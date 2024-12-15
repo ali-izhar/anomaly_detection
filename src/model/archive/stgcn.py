@@ -1,7 +1,7 @@
 import logging
 import torch
 import torch.nn as nn
-from torch_geometric_temporal.nn.attention import STConv
+from torch_geometric_temporal.attention import STConv
 
 logger = logging.getLogger(__name__)
 

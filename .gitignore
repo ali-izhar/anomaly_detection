@@ -189,10 +189,3 @@ visualizations*/
 # model checkpoints
 checkpoints*/
 *.pth
-
-
-# misc.
-synthetic_data1/
-synthetic_data2/
-
-torch_geometric_temporal*/

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import TransformerConv, GCNConv
-from torch_geometric_temporal.nn.recurrent import GConvGRU
+from torch_geometric_temporal.recurrent import GConvGRU
 
 logger = logging.getLogger(__name__)
 
