@@ -63,6 +63,7 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
                 "spatial_heads": 4,
                 "temporal_heads": 4,
                 "num_layers": 3,
+                "l1_lambda": 0.01,
             }
         )
 

@@ -17,14 +17,13 @@ from .model_l import LargeGMAN
 class WeightedFocalLoss(nn.Module):
     """Weighted focal loss with class imbalance handling."""
 
-    def __init__(self, alpha=0.25, gamma=2.0, reduction="mean"):
-        super(WeightedFocalLoss, self).__init__()
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super().__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
 
     def forward(self, pred, target):
-        # Calculate class weights based on batch statistics
+        # Calculate class weights dynamically
         pos_weight = (target == 0).float().sum() / (target == 1).float().sum()
 
         # Binary cross entropy
@@ -34,15 +33,10 @@ class WeightedFocalLoss(nn.Module):
         pt = torch.exp(-bce)
         focal_term = (1 - pt) ** self.gamma
 
-        # Apply class weights
-        alpha_t = self.alpha * target + (1 - self.alpha) * (1 - target)
-        weighted_focal_term = alpha_t * focal_term * pos_weight
+        # Weight positive examples more heavily
+        weights = target * pos_weight + (1 - target)
 
-        loss = weighted_focal_term * bce
-
-        if self.reduction == "mean":
-            return loss.mean()
-        return loss
+        return (weights * focal_term * bce).mean()
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=None):
@@ -68,6 +62,10 @@ def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=Non
             optimizer.zero_grad()
             output = model(features, edge_index, edge_weight)
             loss = criterion(output, targets)
+
+            # Add regularization loss if available
+            if hasattr(model, "regularization_loss"):
+                loss += model.regularization_loss
 
             loss.backward()
 
