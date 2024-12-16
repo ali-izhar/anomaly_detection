@@ -58,11 +58,11 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
     else:  # large
         model_config.update(
             {
-                "hidden_channels": 128,
-                "out_channels": 128,
-                "spatial_heads": 4,
-                "temporal_heads": 4,
-                "num_layers": 3,
+                "hidden_channels": 256,
+                "out_channels": 256,
+                "spatial_heads": 8,
+                "temporal_heads": 8,
+                "num_layers": 4,
                 "l1_lambda": 0.01,
             }
         )
@@ -70,7 +70,7 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
     # Training parameters (separate from model parameters)
     training_config = {
         "learning_rate": 0.001,
-        "epochs": 10,
+        "epochs": 15,
         "patience": 5,
         "batch_size": 128,
         "weight_decay": 1e-4,
@@ -87,7 +87,9 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
     elif model_type == "large":
         training_config.update(
             {
-                "weight_decay": 5e-4,  # Stronger regularization for larger model
+                "batch_size": 512,
+                "weight_decay": 5e-4,
+                "learning_rate": 0.0005,
             }
         )
 
@@ -164,6 +166,9 @@ def main(args):
         variant=args.variant, data_dir=args.data_dir, graph_type=args.graph_type
     )
 
+    # Setup model and training configurations first
+    model_config, training_config = setup_model_config(dataset, args.model_type)
+
     # Create train/val/test splits
     train_idx, val_idx, test_idx = dataset.get_train_val_test_split(seed=args.seed)
 
@@ -173,22 +178,25 @@ def main(args):
     logger.info(f"Validation samples: {len(val_idx)}")
     logger.info(f"Test samples: {len(test_idx)}")
 
+    # Use batch_size from training_config instead of args
+    batch_size = training_config['batch_size']
+    
     # Calculate and log number of batches
-    num_training_batches = len(train_idx) // args.batch_size + (
-        1 if len(train_idx) % args.batch_size != 0 else 0
+    num_training_batches = len(train_idx) // batch_size + (
+        1 if len(train_idx) % batch_size != 0 else 0
     )
     logger.info(
-        f"Number of training batches: {num_training_batches} (training_samples={len(train_idx)} / batch_size={args.batch_size})"
+        f"Number of training batches: {num_training_batches} (training_samples={len(train_idx)} / batch_size={batch_size})"
     )
 
-    # Create data loaders with pin_memory=True for faster GPU transfer
+    # Create data loaders with configuration batch size
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,  # Use config value
         shuffle=True,
         num_workers=dataset.config["training"]["num_workers"],
         collate_fn=dataset._collate_fn,
@@ -198,24 +206,12 @@ def main(args):
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,  # Use config value
         shuffle=False,
         num_workers=dataset.config["training"]["num_workers"],
         collate_fn=dataset._collate_fn,
         pin_memory=True,
         persistent_workers=True,
-    )
-
-    # Setup model and training configurations
-    model_config, training_config = setup_model_config(dataset, args.model_type)
-
-    # Update training config with command line arguments
-    training_config.update(
-        {
-            "batch_size": args.batch_size,
-            "epochs": args.epochs,
-            "learning_rate": args.learning_rate,
-        }
     )
 
     # Create experiment directory
@@ -310,7 +306,6 @@ if __name__ == "__main__":
         help="Specific graph type to use (optional)",
     )
 
-    # Model parameters
     parser.add_argument(
         "--model-type",
         "-m",
@@ -320,15 +315,24 @@ if __name__ == "__main__":
         help="Type of model to train",
     )
 
-    # Training parameters
+    # Training parameters - note these are fallback values
     parser.add_argument(
-        "--batch-size", type=int, default=128, help="Batch size for training"
+        "--batch-size", 
+        type=int, 
+        default=None,
+        help="Override batch size from config"
     )
     parser.add_argument(
-        "--epochs", type=int, default=10, help="Number of epochs to train"
+        "--epochs", 
+        type=int, 
+        default=None,
+        help="Override number of epochs from config"
     )
     parser.add_argument(
-        "--learning-rate", type=float, default=0.001, help="Learning rate for optimizer"
+        "--learning-rate", 
+        type=float, 
+        default=None,
+        help="Override learning rate from config"
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
