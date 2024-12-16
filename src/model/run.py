@@ -14,6 +14,7 @@ from torchinfo import summary
 from dataset import DynamicGraphDataset
 from small.train import train_model as train_small
 from medium.train import train_model as train_medium
+from large.train import train_model as train_large
 from utils.logger import setup_logging
 
 logger = setup_logging()
@@ -54,6 +55,16 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
                 "num_layers": 2,
             }
         )
+    else:  # large
+        model_config.update(
+            {
+                "hidden_channels": 128,
+                "out_channels": 128,
+                "spatial_heads": 4,
+                "temporal_heads": 4,
+                "num_layers": 3,
+            }
+        )
 
     # Training parameters (separate from model parameters)
     training_config = {
@@ -62,9 +73,22 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
         "patience": 5,
         "batch_size": 128,
         "weight_decay": 1e-4,
-        "scheduler_t0": 5,
-        "scheduler_t_mult": 2,
     }
+
+    # Model-specific training parameters
+    if model_type == "medium":
+        training_config.update(
+            {
+                "scheduler_t0": 5,
+                "scheduler_t_mult": 2,
+            }
+        )
+    elif model_type == "large":
+        training_config.update(
+            {
+                "weight_decay": 5e-4,  # Stronger regularization for larger model
+            }
+        )
 
     return model_config, training_config
 
@@ -203,10 +227,14 @@ def main(args):
         from small.model_s import SmallSTGCN
 
         model = SmallSTGCN(**model_config)
-    else:  # medium
+    elif args.model_type == "medium":
         from medium.model_m import MediumASTGCN
 
         model = MediumASTGCN(**model_config)
+    else:  # large
+        from large.model_l import LargeGMAN
+
+        model = LargeGMAN(**model_config)
 
     # Get model summary
     summary_str = get_model_summary(model, model_config)
@@ -239,8 +267,10 @@ def main(args):
 
     if args.model_type == "small":
         model = train_small(train_loader, val_loader, model_config, training_config)
-    else:  # medium
+    elif args.model_type == "medium":
         model = train_medium(train_loader, val_loader, model_config, training_config)
+    else:  # large
+        model = train_large(train_loader, val_loader, model_config, training_config)
 
     logger.info("GPU Memory Usage after training:")
     print_gpu_utilization()
@@ -285,7 +315,7 @@ if __name__ == "__main__":
         "-m",
         type=str,
         default="small",
-        choices=["small", "medium"],
+        choices=["small", "medium", "large"],
         help="Type of model to train",
     )
 
