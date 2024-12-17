@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 import gc
 import GPUtil
 from torchinfo import summary
+import os
 
 from dataset import DynamicGraphDataset
 from small.train import train_model as train_small
@@ -31,67 +32,71 @@ def print_gpu_utilization():
 
 def setup_model_config(dataset, model_type: str = "small") -> dict:
     """Setup model configuration based on dataset properties and model type."""
-    # Model-specific parameters
-    model_config = {
+    base_config = {
         "in_channels": dataset.num_features,
         "num_nodes": dataset.num_nodes,
         "window_size": dataset.config["processing"]["temporal_window"],
-        "dropout": 0.2,
+    }
+    
+    # Model configurations
+    model_configs = {
+        "small": {
+            "hidden_channels": 32,
+            "out_channels": 32,
+            "dropout": 0.1,
+        },
+        "medium": {
+            "hidden_channels": 64,
+            "out_channels": 64,
+            "num_heads": 4,
+            "num_layers": 2,
+            "dropout": 0.2,
+        },
+        "large": {
+            "hidden_channels": 256,
+            "out_channels": 256,
+            "spatial_heads": 8,
+            "temporal_heads": 8,
+            "num_layers": 3,
+            "dropout": 0.2,
+            "l1_lambda": 0.005,
+        }
+    }
+    
+    # Training configurations
+    training_configs = {
+        "small": {
+            "batch_size": 128,
+            "learning_rate": 0.001,
+            "epochs": 15,
+            "patience": 5,
+            "weight_decay": 1e-4,
+        },
+        "medium": {
+            "batch_size": 64,
+            "learning_rate": 0.002,
+            "epochs": 30,
+            "patience": 10,
+            "weight_decay": 1e-6,
+            "scheduler_t0": 5,
+            "scheduler_t_mult": 2,
+        },
+        "large": {
+            "batch_size": 128,
+            "learning_rate": 0.0003,
+            "epochs": 5,
+            "patience": 10,
+            "weight_decay": 1e-4,
+            "early_stopping_metric": "f1_score",
+            "threshold": 0.3,
+            "gradient_clip": 0.5,
+            "warmup_epochs": 2,
+        }
     }
 
-    if model_type == "small":
-        model_config.update(
-            {
-                "hidden_channels": 32,
-                "out_channels": 32,
-            }
-        )
-    elif model_type == "medium":
-        model_config.update(
-            {
-                "hidden_channels": 64,
-                "out_channels": 64,
-                "num_heads": 4,
-                "num_layers": 2,
-            }
-        )
-    else:  # large
-        model_config.update(
-            {
-                "hidden_channels": 256,
-                "out_channels": 256,
-                "spatial_heads": 8,
-                "temporal_heads": 8,
-                "num_layers": 4,
-                "l1_lambda": 0.01,
-            }
-        )
-
-    # Training parameters (separate from model parameters)
-    training_config = {
-        "learning_rate": 0.001,
-        "epochs": 15,
-        "patience": 5,
-        "batch_size": 128,
-        "weight_decay": 1e-4,
-    }
-
-    # Model-specific training parameters
-    if model_type == "medium":
-        training_config.update(
-            {
-                "scheduler_t0": 5,
-                "scheduler_t_mult": 2,
-            }
-        )
-    elif model_type == "large":
-        training_config.update(
-            {
-                "batch_size": 512,
-                "weight_decay": 5e-4,
-                "learning_rate": 0.0005,
-            }
-        )
+    # Merge base config with model-specific config
+    model_config = {**base_config, **model_configs[model_type]}
+    training_config = training_configs[model_type]
 
     return model_config, training_config
 
@@ -152,11 +157,20 @@ def get_model_summary(model, model_config):
 
 
 def main(args):
-    # Clear GPU memory before starting
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gc.collect()
-
+    # Memory optimization settings
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    # Set memory allocation settings
+    torch.cuda.set_per_process_memory_fraction(0.95)
+    torch.backends.cudnn.benchmark = True
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
+    
+    # Enable deterministic training for reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True)
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    
     logger.info("Initial GPU Memory Usage:")
     print_gpu_utilization()
 
