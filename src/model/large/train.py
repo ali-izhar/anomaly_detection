@@ -14,29 +14,52 @@ from sklearn.metrics import (
 from .model_l import LargeGMAN
 
 
-class WeightedFocalLoss(nn.Module):
-    """Weighted focal loss with class imbalance handling."""
-
-    def __init__(self, alpha=0.25, gamma=2.0):
+class StructureAwareLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, beta=1.2):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
-
+        self.beta = beta
+        
     def forward(self, pred, target):
-        # Calculate class weights dynamically
-        pos_weight = (target == 0).float().sum() / (target == 1).float().sum()
-
-        # Binary cross entropy
-        bce = F.binary_cross_entropy(pred, target, reduction="none")
-
-        # Focal term
-        pt = torch.exp(-bce)
-        focal_term = (1 - pt) ** self.gamma
-
-        # Weight positive examples more heavily
-        weights = target * pos_weight + (1 - target)
-
-        return (weights * focal_term * bce).mean()
+        # Dynamic weighting based on graph structure
+        degree = target.sum(dim=-1, keepdim=True)
+        importance_weight = (degree / degree.mean()).clamp(0.5, 2.0)
+        
+        # More aggressive class balancing
+        neg_pos_ratio = (target == 0).float().sum() / (target == 1).float().sum()
+        pos_weight = torch.tensor(neg_pos_ratio, device=pred.device).clamp(1.0, 20.0)
+        
+        # BCE loss with class weights and label smoothing
+        smooth_target = torch.where(
+            target > 0.5,
+            target * 0.9 + 0.05,  # Positive smoothing
+            target * 0.1          # Negative smoothing
+        )
+        
+        bce = F.binary_cross_entropy_with_logits(
+            pred, smooth_target, 
+            pos_weight=pos_weight * torch.ones_like(target).to(pred.device),
+            reduction='none'
+        )
+        
+        # Stronger weighting for positive examples
+        weights = torch.where(target > 0.5, 
+                            importance_weight * 3.0,  # Increased positive weight
+                            importance_weight)
+        
+        # Focal term with dynamic gamma
+        pred_probs = torch.sigmoid(pred)
+        pt = pred_probs * target + (1 - pred_probs) * (1 - target)
+        focal_term = (1 - pt) ** (self.gamma * (1 + target))  # Increase gamma for positives
+        
+        loss = weights * focal_term * bce
+        
+        # Add symmetry and sparsity constraints
+        sym_loss = torch.abs(pred_probs - pred_probs.transpose(-2, -1)).mean()
+        sparse_loss = torch.abs(pred_probs).mean()
+        
+        return loss.mean() + 0.1 * sym_loss + 0.01 * sparse_loss
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=None):
@@ -45,6 +68,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=Non
     total_loss = 0
     all_preds = []
     all_targets = []
+    scaler = torch.cuda.amp.GradScaler()
 
     with tqdm(train_loader, desc="Training") as pbar:
         for batch in pbar:
@@ -60,19 +84,24 @@ def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=Non
             targets = batch["targets"].to(device)
 
             optimizer.zero_grad()
-            output = model(features, edge_index, edge_weight)
-            loss = criterion(output, targets)
+            
+            # Use AMP
+            with torch.cuda.amp.autocast():
+                output = model(features, edge_index, edge_weight)
+                loss = criterion(output, targets)
+                if hasattr(model, "regularization_loss"):
+                    loss += 0.1 * model.regularization_loss  # Reduced weight
 
-            # Add regularization loss if available
-            if hasattr(model, "regularization_loss"):
-                loss += model.regularization_loss
-
-            loss.backward()
-
+            # Scale gradients
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            
+            scaler.step(optimizer)
+            scaler.update()
 
-            optimizer.step()
             if scheduler is not None:
                 scheduler.step()
 
@@ -126,64 +155,66 @@ def validate(model, val_loader, criterion, device):
     return metrics
 
 
-def calculate_metrics(predictions, targets):
+def calculate_metrics(predictions, targets, threshold=0.4):
     """Calculate various metrics for evaluation."""
-    pred_binary = (predictions > 0.5).astype(float)
-
-    # Basic metrics
+    # Apply sigmoid to get probabilities
+    pred_probs = torch.sigmoid(torch.tensor(predictions)).numpy()
+    
+    # Use lower threshold for better recall
+    pred_binary = (pred_probs > threshold).astype(float)
+    
+    # Calculate metrics
     f1 = f1_score(targets.flatten(), pred_binary.flatten())
-
-    # Try to calculate AUC, handle potential errors
-    try:
-        auc = roc_auc_score(targets.flatten(), predictions.flatten())
-    except ValueError:
-        auc = 0.0
-
-    # Calculate average precision
-    ap = average_precision_score(targets.flatten(), predictions.flatten())
-
-    # Calculate precision at different thresholds
-    precision, recall, _ = precision_recall_curve(
-        targets.flatten(), predictions.flatten()
-    )
-
+    auc = roc_auc_score(targets.flatten(), pred_probs.flatten())
+    avg_precision = average_precision_score(targets.flatten(), pred_probs.flatten())
+    
+    # Calculate precision and recall at different thresholds
+    precisions, recalls, _ = precision_recall_curve(targets.flatten(), pred_probs.flatten())
+    
     return {
         "f1_score": f1,
         "auc_score": auc,
-        "avg_precision": ap,
-        "max_precision": np.max(precision),
-        "max_recall": np.max(recall),
+        "avg_precision": avg_precision,
+        "max_precision": np.max(precisions),
+        "max_recall": np.max(recalls),
     }
 
 
 def train_model(train_loader, val_loader, model_config, training_config):
     """Main training function."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
+    
+    # Enable cudnn benchmarking for faster training
+    torch.backends.cudnn.benchmark = True
+    
     # Initialize model
     model = LargeGMAN(**model_config).to(device)
-
-    # Setup training
-    criterion = WeightedFocalLoss(alpha=0.25, gamma=2.0)
+    
+    # Use mixed precision training
+    scaler = torch.amp.GradScaler('cuda')
+    
+    # Reduced gradient accumulation for more frequent updates
+    grad_accum_steps = 1
+    
+    criterion = StructureAwareLoss()
     optimizer = optim.AdamW(
         model.parameters(),
         lr=training_config["learning_rate"],
-        weight_decay=training_config.get("weight_decay", 1e-4),
+        weight_decay=training_config["weight_decay"]
     )
-
-    # One Cycle learning rate scheduler
-    steps_per_epoch = len(train_loader)
+    
+    # Use OneCycleLR instead
+    total_steps = len(train_loader) * training_config["epochs"]
     scheduler = OneCycleLR(
         optimizer,
         max_lr=training_config["learning_rate"],
-        epochs=training_config["epochs"],
-        steps_per_epoch=steps_per_epoch,
-        pct_start=0.3,  # Warm-up for 30% of training
-        div_factor=25.0,  # Initial lr = max_lr/25
-        final_div_factor=1e4,  # Final lr = max_lr/10000
+        total_steps=total_steps,
+        pct_start=0.2,  # 20% of training for warmup
+        div_factor=25.0,
+        final_div_factor=1e4,
+        anneal_strategy='cos'
     )
-
+    
     best_val_metrics = {"loss": float("inf"), "f1_score": 0, "auc_score": 0}
     early_stopping_counter = 0
 
