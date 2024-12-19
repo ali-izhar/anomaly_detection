@@ -156,9 +156,13 @@ class DynamicGraphDataset(Dataset):
     def __len__(self) -> int:
         return len(self.temporal_samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor], torch.Tensor, Dict]:
+    def __getitem__(
+        self, idx: int
+    ) -> Tuple[
+        torch.Tensor, List[torch.Tensor], List[torch.Tensor], torch.Tensor, Dict
+    ]:
         """Get a temporal sample.
-        
+
         Returns:
             Tuple containing:
             - features: Node features tensor
@@ -191,7 +195,7 @@ class DynamicGraphDataset(Dataset):
             edge_indices,
             edge_weights,
             torch.FloatTensor(target),
-            self.metadata[seq_idx]
+            self.metadata[seq_idx],
         )
 
     def get_dataloader(
@@ -210,21 +214,23 @@ class DynamicGraphDataset(Dataset):
             persistent_workers=True,
         )
 
-    def _collate_fn(self, batch: List[Tuple]) -> Dict[str, Union[torch.Tensor, List, List[List]]]:
+    def _collate_fn(
+        self, batch: List[Tuple]
+    ) -> Dict[str, Union[torch.Tensor, List, List[List]]]:
         """Collate batch of samples.
-        
+
         Args:
             batch: List of tuples from __getitem__
-            
+
         Returns:
             Dictionary with batched data
         """
         return {
-            'features': torch.stack([item[0] for item in batch]),
-            'edge_indices': [item[1] for item in batch],
-            'edge_weights': [item[2] for item in batch],
-            'targets': torch.stack([item[3] for item in batch]),
-            'metadata': [item[4] for item in batch]
+            "features": torch.stack([item[0] for item in batch]),
+            "edge_indices": [item[1] for item in batch],
+            "edge_weights": [item[2] for item in batch],
+            "targets": torch.stack([item[3] for item in batch]),
+            "metadata": [item[4] for item in batch],
         }
 
     def get_train_val_test_split(
