@@ -236,7 +236,7 @@ class SpatialAttention(nn.Module):
         key = torch.cat(torch.split(key, self._K, dim=-1), dim=0)
         value = torch.cat(torch.split(value, self._K, dim=-1), dim=0)
         attention = torch.matmul(query, key.transpose(2, 3))
-        attention /= self._d ** 0.5
+        attention /= self._d**0.5
         attention = F.softmax(attention, dim=-1)
         X = torch.matmul(attention, value)
         X = torch.cat(torch.split(X, batch_size, dim=0), dim=-1)
@@ -301,7 +301,7 @@ class TemporalAttention(nn.Module):
         key = key.permute(0, 2, 3, 1)
         value = value.permute(0, 2, 1, 3)
         attention = torch.matmul(query, key)
-        attention /= self._d ** 0.5
+        attention /= self._d**0.5
         if self._mask:
             batch_size = X.shape[0]
             num_step = X.shape[1]
@@ -311,7 +311,7 @@ class TemporalAttention(nn.Module):
             mask = torch.unsqueeze(torch.unsqueeze(mask, dim=0), dim=0)
             mask = mask.repeat(self._K * batch_size, num_nodes, 1, 1)
             mask = mask.to(torch.bool)
-            condition = torch.FloatTensor([-(2 ** 15) + 1]).to(X.device)
+            condition = torch.FloatTensor([-(2**15) + 1]).to(X.device)
             attention = torch.where(mask, attention, condition)
         attention = F.softmax(attention, dim=-1)
         X = torch.matmul(attention, value)
@@ -467,7 +467,7 @@ class TransformAttention(nn.Module):
         key = key.permute(0, 2, 3, 1)
         value = value.permute(0, 2, 1, 3)
         attention = torch.matmul(query, key)
-        attention /= self._d ** 0.5
+        attention /= self._d**0.5
         attention = F.softmax(attention, dim=-1)
         X = torch.matmul(attention, value)
         X = X.permute(0, 2, 1, 3)

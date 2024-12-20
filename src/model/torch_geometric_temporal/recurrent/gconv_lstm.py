@@ -232,7 +232,9 @@ class GConvLSTM(torch.nn.Module):
         C = self._set_cell_state(X, C)
         I = self._calculate_input_gate(X, edge_index, edge_weight, H, C, lambda_max)
         F = self._calculate_forget_gate(X, edge_index, edge_weight, H, C, lambda_max)
-        C = self._calculate_cell_state(X, edge_index, edge_weight, H, C, I, F, lambda_max)
+        C = self._calculate_cell_state(
+            X, edge_index, edge_weight, H, C, I, F, lambda_max
+        )
         O = self._calculate_output_gate(X, edge_index, edge_weight, H, C, lambda_max)
         H = self._calculate_hidden_state(O, C)
         return H, C

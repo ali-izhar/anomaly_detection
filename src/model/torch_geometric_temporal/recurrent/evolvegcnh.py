@@ -46,10 +46,12 @@ class EvolveGCNH(torch.nn.Module):
         self.normalize = normalize
         self.add_self_loops = add_self_loops
         self.weight = None
-        self.initial_weight = torch.nn.Parameter(torch.Tensor(1, in_channels, in_channels))
+        self.initial_weight = torch.nn.Parameter(
+            torch.Tensor(1, in_channels, in_channels)
+        )
         self._create_layers()
         self.reset_parameters()
-    
+
     def reset_parameters(self):
         glorot(self.initial_weight)
 
@@ -72,7 +74,7 @@ class EvolveGCNH(torch.nn.Module):
             improved=self.improved,
             cached=self.cached,
             normalize=self.normalize,
-            add_self_loops=self.add_self_loops
+            add_self_loops=self.add_self_loops,
         )
 
     def forward(

@@ -37,7 +37,7 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
         "num_nodes": dataset.num_nodes,
         "window_size": dataset.config["processing"]["temporal_window"],
     }
-    
+
     # Model configurations
     model_configs = {
         "small": {
@@ -46,11 +46,11 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
             "dropout": 0.1,
         },
         "medium": {
-            "hidden_channels": 64,
-            "out_channels": 64,
+            "hidden_channels": 128,
+            "out_channels": 128,
             "num_heads": 4,
-            "num_layers": 2,
-            "dropout": 0.2,
+            "num_layers": 3,
+            "dropout": 0.3,
         },
         "large": {
             "hidden_channels": 256,
@@ -60,9 +60,9 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
             "num_layers": 3,
             "dropout": 0.2,
             "l1_lambda": 0.005,
-        }
+        },
     }
-    
+
     # Training configurations
     training_configs = {
         "small": {
@@ -73,11 +73,11 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
             "weight_decay": 1e-4,
         },
         "medium": {
-            "batch_size": 64,
-            "learning_rate": 0.002,
-            "epochs": 30,
+            "batch_size": 128,
+            "learning_rate": 0.00005,
+            "epochs": 1, # test
             "patience": 10,
-            "weight_decay": 1e-6,
+            "weight_decay": 1e-4,
             "scheduler_t0": 5,
             "scheduler_t_mult": 2,
         },
@@ -91,7 +91,7 @@ def setup_model_config(dataset, model_type: str = "small") -> dict:
             "threshold": 0.3,
             "gradient_clip": 0.5,
             "warmup_epochs": 2,
-        }
+        },
     }
 
     # Merge base config with model-specific config
@@ -160,27 +160,34 @@ def main(args):
     # Memory optimization settings
     torch.cuda.empty_cache()
     gc.collect()
-    
+
     # Set memory allocation settings
     torch.cuda.set_per_process_memory_fraction(0.95)
     torch.backends.cudnn.benchmark = True
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
-    
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+
     # Enable deterministic training for reproducibility
     torch.backends.cudnn.deterministic = True
     torch.use_deterministic_algorithms(True)
-    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-    
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
     logger.info("Initial GPU Memory Usage:")
     print_gpu_utilization()
 
     # Load dataset
-    logger.info("Loading dataset...")
-    dataset = DynamicGraphDataset(
-        variant=args.variant, data_dir=args.data_dir, graph_type=args.graph_type
-    )
+    if args.model_type == "medium":
+        logger.info("Loading BA graph dataset...")
+        dataset = DynamicGraphDataset(
+            variant=args.variant,
+            data_dir=args.data_dir,
+            graph_type="BA",  # Force BA graphs for medium model
+        )
+    else:
+        dataset = DynamicGraphDataset(
+            variant=args.variant, data_dir=args.data_dir, graph_type=args.graph_type
+        )
 
-    # Setup model and training configurations first
+    # Setup model and training configurations
     model_config, training_config = setup_model_config(dataset, args.model_type)
 
     # Create train/val/test splits
@@ -193,8 +200,8 @@ def main(args):
     logger.info(f"Test samples: {len(test_idx)}")
 
     # Use batch_size from training_config instead of args
-    batch_size = training_config['batch_size']
-    
+    batch_size = training_config["batch_size"]
+
     # Calculate and log number of batches
     num_training_batches = len(train_idx) // batch_size + (
         1 if len(train_idx) % batch_size != 0 else 0
@@ -203,29 +210,42 @@ def main(args):
         f"Number of training batches: {num_training_batches} (training_samples={len(train_idx)} / batch_size={batch_size})"
     )
 
-    # Create data loaders with configuration batch size
+    # Create data loaders with configuration
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
     test_dataset = Subset(dataset, test_idx)
 
+    if args.model_type == "medium":
+        num_workers = min(8, os.cpu_count())  # Adjust based on system
+        persistent_workers = True
+        pin_memory = True
+        prefetch_factor = 2
+    else:
+        num_workers = dataset.config["training"]["num_workers"]
+        persistent_workers = True
+        pin_memory = True
+        prefetch_factor = None
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,  # Use config value
+        batch_size=training_config["batch_size"],
         shuffle=True,
-        num_workers=dataset.config["training"]["num_workers"],
+        num_workers=num_workers,
         collate_fn=dataset._collate_fn,
-        pin_memory=True,
-        persistent_workers=True,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,  # Use config value
+        batch_size=training_config["batch_size"],
         shuffle=False,
-        num_workers=dataset.config["training"]["num_workers"],
+        num_workers=num_workers,
         collate_fn=dataset._collate_fn,
-        pin_memory=True,
-        persistent_workers=True,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
 
     # Create experiment directory
@@ -315,9 +335,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--graph-type",
         type=str,
-        default=None,
+        default="BA",
         choices=["BA", "ER", "NW"],
-        help="Specific graph type to use (optional)",
+        help="Specific graph type to use (default: BA)",
     )
 
     parser.add_argument(
@@ -331,22 +351,16 @@ if __name__ == "__main__":
 
     # Training parameters - note these are fallback values
     parser.add_argument(
-        "--batch-size", 
-        type=int, 
-        default=None,
-        help="Override batch size from config"
+        "--batch-size", type=int, default=None, help="Override batch size from config"
     )
     parser.add_argument(
-        "--epochs", 
-        type=int, 
-        default=None,
-        help="Override number of epochs from config"
+        "--epochs", type=int, default=None, help="Override number of epochs from config"
     )
     parser.add_argument(
-        "--learning-rate", 
-        type=float, 
+        "--learning-rate",
+        type=float,
         default=None,
-        help="Override learning rate from config"
+        help="Override learning rate from config",
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
@@ -369,5 +383,9 @@ if __name__ == "__main__":
         # Set cuda to be deterministic for reproducibility
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+    # Force BA graphs for medium model
+    if args.model_type == "medium":
+        args.graph_type = "BA"
 
     main(args)

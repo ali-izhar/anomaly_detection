@@ -134,7 +134,6 @@ class STConv(nn.Module):
         edge_index: torch.LongTensor,
         edge_weight: torch.FloatTensor = None,
     ) -> torch.FloatTensor:
-
         r"""Forward pass. If edge weights are not present the forward pass
         defaults to an unweighted graph.
 

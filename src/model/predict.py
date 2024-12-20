@@ -47,32 +47,20 @@ def plot_adjacency_comparison(true_adj, pred_adj, threshold=0.5, save_path=None)
     fig, axes = plt.subplots(1, len(thresholds) + 1, figsize=(20, 5))
 
     # True adjacency
-    sns.heatmap(
-        true_adj, 
-        ax=axes[0], 
-        cmap="coolwarm", 
-        center=0.5,
-        vmin=0,
-        vmax=1
-    )
+    sns.heatmap(true_adj, ax=axes[0], cmap="coolwarm", center=0.5, vmin=0, vmax=1)
     axes[0].set_title("True Adjacency Matrix")
 
     # Predicted adjacency at different thresholds
     for i, thresh in enumerate(thresholds, 1):
         pred_adj_binary = (pred_adj > thresh).astype(float)
         sns.heatmap(
-            pred_adj_binary, 
-            ax=axes[i], 
-            cmap="coolwarm", 
-            center=0.5,
-            vmin=0,
-            vmax=1
+            pred_adj_binary, ax=axes[i], cmap="coolwarm", center=0.5, vmin=0, vmax=1
         )
         axes[i].set_title(f"Predicted (threshold={thresh})")
 
     plt.tight_layout()
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')  # Higher quality
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")  # Higher quality
     plt.close()
 
 
@@ -136,7 +124,7 @@ def evaluate_thresholds(true_labels, pred_probs, thresholds):
 def find_optimal_threshold(true_labels, pred_probs):
     """Find optimal threshold using F-beta score."""
     beta = 1.5  # Adjusted to balance precision and recall better
-    
+
     thresholds = np.linspace(0.1, 0.9, 81)
     best_score = 0
     best_threshold = 0.5
@@ -167,22 +155,24 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_type = "medium"  # or "small" or "large"
     exp_dir = Path("experiments") / model_type
-    
+
     # Create directories if they don't exist
     exp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Check for experiment runs
     runs = list(exp_dir.glob("*"))
     if not runs:
-        raise ValueError(f"No experiment runs found in {exp_dir}. Please run training first.")
-    
+        raise ValueError(
+            f"No experiment runs found in {exp_dir}. Please run training first."
+        )
+
     latest_run = sorted(runs)[-1]  # Get most recent run
     print(f"Using latest run: {latest_run}")
 
     # Load model and config
     model_path = latest_run / "best_model.pth"
     config_path = latest_run / "model_architecture.txt"
-    
+
     if not model_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
     if not config_path.exists():

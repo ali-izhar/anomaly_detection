@@ -7,7 +7,12 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import OneCycleLR
 from tqdm import tqdm
 import numpy as np
-from sklearn.metrics import f1_score, roc_auc_score, average_precision_score
+from sklearn.metrics import (
+    f1_score,
+    roc_auc_score,
+    average_precision_score,
+    precision_recall_curve,
+)
 from .model_m import MediumASTGCN
 
 
@@ -15,230 +20,213 @@ class GraphStructureLoss(nn.Module):
     def __init__(self, num_nodes=30, min_edges=2, max_edges=8):
         super().__init__()
         self.num_nodes = num_nodes
+        self.target_sparsity = 0.77  # From BA graph properties
         self.min_edges = min_edges
         self.max_edges = max_edges
+
+    def forward(self, pred, target, epoch=0):
+        # Clip predictions
+        pred = torch.clamp(pred, min=-5.0, max=5.0)
         
-    def forward(self, pred, target):
-        # Very aggressive positive class weighting
-        pos_weight = ((target == 0).float().sum() / (target == 1).float().sum()).clamp(5.0, 20.0)
+        # Get predictions in probability space
+        pred_probs = torch.sigmoid(pred)
         
-        # BCE loss with strong class weights
+        # Calculate metrics
+        target_density = (target == 1).float().mean()
+        pred_density = pred_probs.mean()
+        
+        # Dynamic positive weight with proper tensor handling
+        base_weight = 5.0 * (1.0 - target_density)
+        warmup_factor = min(1.0, epoch / 5.0)
+        pos_weight = (base_weight * (1.0 - 0.5 * warmup_factor)).clone().detach().to(pred.device)
+        
+        # BCE with dynamic weighting
         bce = F.binary_cross_entropy_with_logits(
             pred, target,
-            pos_weight=pos_weight * torch.ones_like(target).to(pred.device),
+            pos_weight=pos_weight,
             reduction='none'
         )
         
-        # Get predicted probabilities
-        pred_probs = torch.sigmoid(pred)
+        # Density matching with target minimum
+        min_density = 0.15  # Minimum target density (from BA properties)
+        density_loss = F.relu(min_density - pred_density) * 50.0
         
-        # Strong penalty for uniform predictions
-        diversity_loss = -torch.std(pred_probs, dim=-1).mean()
-        
-        # Encourage target degree distribution
+        # Degree matching
         pred_degrees = pred_probs.sum(dim=-1)
         target_degrees = target.sum(dim=-1)
-        degree_loss = F.mse_loss(pred_degrees, target_degrees)
+        degree_loss = F.smooth_l1_loss(pred_degrees, target_degrees) * 5.0
         
-        # Strongly encourage some positive predictions
-        min_positive_ratio = 0.2  # At least 20% positive predictions
-        sparsity_loss = F.relu(min_positive_ratio - pred_probs.mean()) * 10.0
-        
-        # Combine losses with stronger weights on auxiliary terms
-        total_loss = bce.mean() + diversity_loss + degree_loss + sparsity_loss
+        total_loss = (
+            bce.mean() +
+            density_loss +
+            degree_loss
+        )
         
         return total_loss
 
 
 def calculate_graph_metrics(predictions, targets, num_nodes=30):
-    """Calculate graph-specific structural metrics."""
+    """Calculate graph-specific structural metrics for sparse graphs."""
     pred_adj = (predictions > 0.5).astype(float)
     true_adj = targets.astype(float)
-    
+
     metrics = {}
-    
-    # 1. Degree Statistics
-    pred_degrees = pred_adj.sum(axis=-1)  # [batch, nodes]
-    true_degrees = true_adj.sum(axis=-1)  # [batch, nodes]
-    
-    metrics.update({
-        "avg_degree_error": np.abs(pred_degrees.mean() - true_degrees.mean()),
-        "degree_std_error": np.abs(pred_degrees.std() - true_degrees.std()),
-        "max_degree_error": np.abs(pred_degrees.max() - true_degrees.max()),
-    })
-    
-    # 2. Clustering Coefficient
-    def calc_clustering(adj):
-        tri = np.matmul(np.matmul(adj, adj), adj)
-        degrees = adj.sum(axis=-1)
-        possible_tri = degrees * (degrees - 1) / 2
-        clustering = np.zeros_like(degrees)
-        mask = possible_tri > 0
-        clustering[mask] = tri[mask].diagonal() / (possible_tri[mask] * 6)
-        return clustering.mean()
-    
-    for i in range(min(10, len(pred_adj))):  # Calculate for first 10 graphs
-        metrics[f"clustering_error_{i}"] = abs(
-            calc_clustering(pred_adj[i]) - calc_clustering(true_adj[i])
+
+    # 1. Sparsity metrics
+    metrics.update(
+        {
+            "density_error": abs(pred_adj.mean() - true_adj.mean()),
+            "sparsity_ratio": (pred_adj == 0).mean() / (true_adj == 0).mean(),
+        }
+    )
+
+    # 2. Degree distribution metrics
+    pred_degrees = pred_adj.sum(axis=-1)
+    true_degrees = true_adj.sum(axis=-1)
+
+    metrics.update(
+        {
+            "degree_corr": np.corrcoef(pred_degrees.flatten(), true_degrees.flatten())[
+                0, 1
+            ],
+            "max_degree_ratio": pred_degrees.max() / (true_degrees.max() + 1e-6),
+            "min_degree_ratio": (pred_degrees.min() + 1e-6)
+            / (true_degrees.min() + 1e-6),
+        }
+    )
+
+    # 3. Scale-free property metrics
+    def power_law_fit(degrees):
+        degrees = degrees[degrees > 0]
+        if len(degrees) == 0:
+            return 0
+        log_degrees = np.log(degrees)
+        return -np.polyfit(
+            log_degrees, np.log(np.bincount(degrees.astype(int))[1:]), 1
+        )[0]
+
+    try:
+        metrics["power_law_diff"] = abs(
+            power_law_fit(pred_degrees.flatten())
+            - power_law_fit(true_degrees.flatten())
         )
-    
-    # 3. Path Length Distribution
-    def calc_path_lengths(adj):
-        dist = np.zeros_like(adj)
-        dist[adj > 0] = 1
-        dist[adj == 0] = float('inf')
-        np.fill_diagonal(dist, 0)
-        
-        for k in range(num_nodes):
-            dist = np.minimum(
-                dist,
-                dist[:, np.newaxis, k] + dist[k, np.newaxis, :]
-            )
-        
-        finite_mask = dist != float('inf')
-        if finite_mask.sum() > 0:
-            return dist[finite_mask].mean()
-        return 0
-    
-    metrics["path_length_error"] = np.mean([
-        abs(calc_path_lengths(pred_adj[i]) - calc_path_lengths(true_adj[i]))
-        for i in range(min(10, len(pred_adj)))
-    ])
-    
-    # 4. Edge Distribution
-    metrics.update({
-        "edge_density_error": abs(pred_adj.mean() - true_adj.mean()),
-        "edge_variance_error": abs(pred_adj.var() - true_adj.var()),
-    })
-    
+    except:
+        metrics["power_law_diff"] = float("inf")
+
+    # 4. Precision-Recall metrics for sparse data
+    precision, recall, _ = precision_recall_curve(
+        true_adj.flatten(), predictions.flatten()
+    )
+    metrics["auprc"] = average_precision_score(
+        true_adj.flatten(), predictions.flatten()
+    )
+
     return metrics
 
 
-def calculate_metrics(predictions, targets, threshold=0.5):
-    """Calculate all metrics for evaluation."""
-    pred_binary = (predictions > threshold).astype(float)
-    
-    # Basic metrics
-    basic_metrics = {
-        "f1_score": f1_score(targets.flatten(), pred_binary.flatten()),
-        "auc_score": roc_auc_score(targets.flatten(), predictions.flatten()),
-        "avg_precision": average_precision_score(targets.flatten(), predictions.flatten()),
-    }
-    
-    # Graph structure metrics
-    graph_metrics = calculate_graph_metrics(predictions, targets)
-    
-    # Combine metrics
-    return {**basic_metrics, **graph_metrics}
-
-
-def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=None):
-    """Train the model for one epoch."""
+def train_epoch(model, train_loader, criterion, optimizer, device, scheduler=None, epoch=0):
+    """Train the model for one epoch with focus on sparse predictions."""
     model.train()
     scaler = torch.amp.GradScaler('cuda')
     
-    total_loss = 0
+    total_loss = 0.0
     all_preds = []
     all_targets = []
     
     with tqdm(train_loader, desc="Training") as pbar:
         for batch in pbar:
+            optimizer.zero_grad(set_to_none=True)
+            
             features = batch["features"].to(device)
             edge_index = batch["edge_indices"][0][0].to(device)
             edge_weight = batch["edge_weights"][0][0].to(device) if batch["edge_weights"] else None
             targets = batch["targets"].to(device)
-            
-            with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+
+            with torch.amp.autocast(device_type='cuda'):
                 output = model(features, edge_index, edge_weight)
-                loss = criterion(output, targets)
-            
-            # Use gradient scaling
+                loss = criterion(output, targets, epoch)
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             scaler.step(optimizer)
             scaler.update()
             
-            optimizer.zero_grad()
-            
             if scheduler is not None:
                 scheduler.step()
-            
-            # Store predictions and targets
-            pred_probs = torch.sigmoid(output)
-            all_preds.append(pred_probs.detach().cpu().numpy())
-            all_targets.append(targets.cpu().numpy())
-            
+
             total_loss += loss.item()
-            
-            # Update progress bar with more metrics
-            current_metrics = calculate_metrics(
-                pred_probs.detach().cpu().numpy(),
-                targets.cpu().numpy()
-            )
+
+            # Store predictions and targets for metrics
             with torch.no_grad():
+                pred_probs = torch.sigmoid(output)
+                all_preds.append(pred_probs.cpu().numpy())
+                all_targets.append(targets.cpu().numpy())
+                
+                # Calculate running metrics for progress bar
                 pos_ratio = (pred_probs > 0.5).float().mean()
-                max_prob = pred_probs.max()
-                min_prob = pred_probs.min()
-            
+                max_prob = pred_probs.max().item()
+                min_prob = pred_probs.min().item()
+                sparsity = (targets == 0).float().mean()
+
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
-                "f1": f"{current_metrics['f1_score']:.4f}",
                 "pos_ratio": f"{pos_ratio.item():.3f}",
-                "prob_range": f"[{min_prob.item():.2f}, {max_prob.item():.2f}]"
+                "prob_range": f"[{min_prob:.2f}, {max_prob:.2f}]",
+                "target_sparsity": f"{sparsity.item():.3f}"
             })
-    
-    # Calculate metrics
+
+    # Calculate final metrics
     all_preds = np.concatenate(all_preds, axis=0)
     all_targets = np.concatenate(all_targets, axis=0)
-    metrics = calculate_metrics(all_preds, all_targets)
-    metrics["loss"] = total_loss / len(train_loader)
-    
+    metrics = calculate_graph_metrics(all_preds, all_targets)
+    metrics["loss"] = total_loss / len(train_loader)  # Average loss over batches
+
     return metrics
 
 
 def train_model(train_loader, val_loader, model_config, training_config):
-    """Main training function."""
+    """Main training function with sparse graph specific configurations."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Initialize model
+
     model = MediumASTGCN(**model_config).to(device)
-    
-    # Loss and optimizer
+
     criterion = GraphStructureLoss(
-        num_nodes=model_config["num_nodes"],
-        min_edges=2,  # From BA config
-        max_edges=8   # From BA config
+        num_nodes=model_config["num_nodes"], min_edges=2, max_edges=8
     )
-    
+
     optimizer = optim.AdamW(
         model.parameters(),
         lr=training_config["learning_rate"],
         weight_decay=training_config["weight_decay"],
-        betas=(0.9, 0.999)
+        betas=(0.9, 0.999),
     )
-    
-    # Learning rate scheduler
-    total_steps = len(train_loader) * training_config["epochs"]
+
+    # Cosine schedule with warm-up
     scheduler = OneCycleLR(
         optimizer,
         max_lr=training_config["learning_rate"],
-        total_steps=total_steps,
-        pct_start=0.3,  # Warm up for 30% of training
+        total_steps=len(train_loader) * training_config["epochs"],
+        pct_start=0.1,  # Shorter warm-up for sparse data
         div_factor=25,
         final_div_factor=1000,
-        anneal_strategy='cos'
+        anneal_strategy="cos",
     )
-    
-    best_val_metrics = {"loss": float("inf"), "f1_score": 0}
+
+    best_val_metrics = {
+        "loss": float("inf"),
+        "auprc": 0,  # Using AUPRC instead of F1 for sparse data
+    }
+
     early_stopping_counter = 0
-    
+
     for epoch in range(training_config["epochs"]):
-        # Train
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, scheduler)
+        train_metrics = train_epoch(
+            model, train_loader, criterion, optimizer, device, scheduler, epoch
+        )
         val_metrics = validate(model, val_loader, criterion, device)
-        
-        # Print metrics
+
         print(f"\nEpoch {epoch+1}/{training_config['epochs']}")
         print("Training Metrics:")
         for k, v in train_metrics.items():
@@ -246,57 +234,60 @@ def train_model(train_loader, val_loader, model_config, training_config):
         print("\nValidation Metrics:")
         for k, v in val_metrics.items():
             print(f"{k}: {v:.4f}")
-        
-        # Early stopping check
-        if val_metrics["f1_score"] > best_val_metrics["f1_score"]:
+
+        # Early stopping based on AUPRC
+        if val_metrics["auprc"] > best_val_metrics["auprc"]:
             best_val_metrics = val_metrics
             early_stopping_counter = 0
-            # Save best model
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "best_val_metrics": best_val_metrics,
-            }, "best_model.pth")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "best_val_metrics": best_val_metrics,
+                },
+                "best_model.pth",
+            )
         else:
             early_stopping_counter += 1
             if early_stopping_counter >= training_config["patience"]:
                 print("\nEarly stopping triggered!")
                 break
-    
+
     return model
 
 
 def validate(model, val_loader, criterion, device):
-    """Validate the model."""
+    """Validate with focus on sparse graph metrics."""
     model.eval()
     total_loss = 0
     all_preds = []
     all_targets = []
-    
+
     with torch.no_grad():
         for batch in val_loader:
             features = batch["features"].to(device)
             edge_index = batch["edge_indices"][0][0].to(device)
-            edge_weight = batch["edge_weights"][0][0].to(device) if batch["edge_weights"] else None
+            edge_weight = (
+                batch["edge_weights"][0][0].to(device)
+                if batch["edge_weights"]
+                else None
+            )
             targets = batch["targets"].to(device)
-            
-            # Forward pass
+
             output = model(features, edge_index, edge_weight)
             loss = criterion(output, targets)
-            
-            # Store predictions and targets
+
             pred_probs = torch.sigmoid(output)
             all_preds.append(pred_probs.cpu().numpy())
             all_targets.append(targets.cpu().numpy())
-            
+
             total_loss += loss.item()
-    
-    # Calculate metrics
+
     all_preds = np.concatenate(all_preds, axis=0)
     all_targets = np.concatenate(all_targets, axis=0)
-    metrics = calculate_metrics(all_preds, all_targets)
+    metrics = calculate_graph_metrics(all_preds, all_targets)
     metrics["loss"] = total_loss / len(val_loader)
-    
+
     return metrics

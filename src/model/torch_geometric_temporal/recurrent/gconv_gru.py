@@ -130,7 +130,9 @@ class GConvGRU(torch.nn.Module):
 
     def _calculate_candidate_state(self, X, edge_index, edge_weight, H, R, lambda_max):
         H_tilde = self.conv_x_h(X, edge_index, edge_weight, lambda_max=lambda_max)
-        H_tilde = H_tilde + self.conv_h_h(H * R, edge_index, edge_weight, lambda_max=lambda_max)
+        H_tilde = H_tilde + self.conv_h_h(
+            H * R, edge_index, edge_weight, lambda_max=lambda_max
+        )
         H_tilde = torch.tanh(H_tilde)
         return H_tilde
 
@@ -165,6 +167,8 @@ class GConvGRU(torch.nn.Module):
         H = self._set_hidden_state(X, H)
         Z = self._calculate_update_gate(X, edge_index, edge_weight, H, lambda_max)
         R = self._calculate_reset_gate(X, edge_index, edge_weight, H, lambda_max)
-        H_tilde = self._calculate_candidate_state(X, edge_index, edge_weight, H, R, lambda_max)
+        H_tilde = self._calculate_candidate_state(
+            X, edge_index, edge_weight, H, R, lambda_max
+        )
         H = self._calculate_hidden_state(Z, H, H_tilde)
         return H

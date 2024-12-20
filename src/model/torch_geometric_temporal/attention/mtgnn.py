@@ -340,7 +340,7 @@ class MTGNNLayer(nn.Module):
             rf_size_j = int(
                 rf_size_i
                 + (kernel_size - 1)
-                * (dilation_exponential ** j - 1)
+                * (dilation_exponential**j - 1)
                 / (dilation_exponential - 1)
             )
         else:
@@ -624,7 +624,7 @@ class MTGNN(nn.Module):
             self._receptive_field = int(
                 1
                 + (kernel_size - 1)
-                * (dilation_exponential ** layers - 1)
+                * (dilation_exponential**layers - 1)
                 / (dilation_exponential - 1)
             )
         else:
