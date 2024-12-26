@@ -17,7 +17,6 @@ import seaborn as sns
 
 from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from experiments.threshold import CustomThresholdModel
-from src.graph.features import adjacency_to_graph
 
 
 class MartingaleVisualizer:
@@ -122,7 +121,7 @@ class MartingaleVisualizer:
         gs_top = gs[0].subgridspec(1, 5, wspace=0.15)
         for i, t in enumerate(time_points):
             ax = fig.add_subplot(gs_top[0, i])
-            G = adjacency_to_graph(self.graphs[t])
+            G = nx.from_numpy_array(self.graphs[t])
 
             degrees = dict(G.degree())
             node_sizes = [
@@ -213,7 +212,7 @@ class MartingaleVisualizer:
         """Plot graph structure evolution."""
         for i, t in enumerate(time_points):
             ax = fig.add_subplot(gs[0, i])
-            G = adjacency_to_graph(self.graphs[t])
+            G = nx.from_numpy_array(self.graphs[t])
 
             degrees = dict(G.degree())
             node_sizes = [

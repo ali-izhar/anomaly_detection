@@ -1,3 +1,5 @@
+# src/utils/visualize_graphs.py
+
 """
 Graph Visualization Module
 
@@ -14,10 +16,9 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from src.graph.features import (
+from ..graph.features import (
     extract_centralities,
     compute_embeddings,
-    adjacency_to_graph,
     compute_laplacian,
 )
 
@@ -44,7 +45,7 @@ class GraphMetrics:
         path_metrics = defaultdict(list)
 
         for adj_matrix in graphs:
-            G = adjacency_to_graph(adj_matrix)
+            G = nx.from_numpy_array(adj_matrix)
             degrees = [d for n, d in G.degree()]
 
             # Basic metrics
@@ -119,12 +120,12 @@ class GraphVisualizer:
     def _create_graph_evolution_plot(self, fig: plt.Figure, gs: plt.GridSpec) -> None:
         """Create plot showing graph structure evolution at change points."""
         time_points = [0] + self.change_points
-        G_first = adjacency_to_graph(self.graphs[0])
+        G_first = nx.from_numpy_array(self.graphs[0])
         pos = nx.spring_layout(G_first, k=1, iterations=50)
 
         for i, t in enumerate(time_points):
             ax = fig.add_subplot(gs[0, i])
-            G = adjacency_to_graph(self.graphs[t])
+            G = nx.from_numpy_array(self.graphs[t])
 
             degrees = dict(G.degree())
             node_sizes = [
