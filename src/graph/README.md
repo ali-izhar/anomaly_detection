@@ -1,316 +1,259 @@
-# Graph Generators
+# Graph Generators and Feature Extraction
 
-Understanding different graph models is crucial for simulating and analyzing complex networks. Below are detailed, intuitive explanations of various graph generators, including their mathematical foundations and how they are implemented in the `graph` module of our project.
+This module provides functionality for generating dynamic graph sequences and computing graph features for anomaly detection. Built on top of [NetworkX](https://networkx.org/), it supports multiple graph models and feature extraction methods.
 
----
+## Graph Models
 
-## Barabási-Albert (BA) Model
+### Barabási-Albert (BA)
+- **Description**: Scale-free networks following preferential attachment
+- **Parameters**:
+  - `n`: Number of nodes
+  - `initial_edges`: Number of edges each new node creates ($m$ parameter)
+  - `pref_exp`: Preferential attachment exponent ($\alpha$ parameter)
+- **Properties**: Power-law degree distribution $P(k) \sim k^{-\alpha}$
+- **NetworkX Implementation**: [`barabasi_albert_graph`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html)
 
-The **Barabási-Albert (BA) model** is a mechanism for generating **scale-free networks** using a process known as **preferential attachment**. Scale-free networks are characterized by a power-law degree distribution, meaning that a few nodes (hubs) have a high degree, while most nodes have a low degree. This model captures the essence of many real-world networks, such as social networks, the World Wide Web, and biological systems.
+### Erdős-Rényi (ER)
+- **Description**: Random graphs with fixed edge probability
+- **Parameters**:
+  - `n`: Number of nodes
+  - `initial_prob`: Edge probability ($p$ parameter)
+- **Properties**: Poisson degree distribution
+- **NetworkX Implementation**: [`erdos_renyi_graph`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.random_graphs.erdos_renyi_graph.html)
 
-### Preferential Attachment
+### Stochastic Block Model (SBM)
+- **Description**: Random graphs with community structure
+- **Parameters**:
+  - `n`: Number of nodes
+  - `num_blocks`: Number of communities
+  - `initial_intra_prob`: Edge probability within communities
+  - `initial_inter_prob`: Edge probability between communities
+- **Properties**: Modular structure with dense intra-community and sparse inter-community connections
+- **NetworkX Implementation**: [`stochastic_block_model`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.community.stochastic_block_model.html)
 
-The core idea behind the BA model is **"the rich get richer"**:
+## Feature Extraction
 
-- Nodes with higher degrees have a higher probability of attracting new connections.
-- This creates hubs that become increasingly connected over time.
+### Centrality Measures
+- **Degree Centrality**: Fraction of nodes a node is connected to
+  ```python
+  nx.degree_centrality(G)
+  ```
+- **Betweenness Centrality**: Fraction of shortest paths passing through a node
+  ```python
+  nx.betweenness_centrality(G)
+  ```
+- **Eigenvector Centrality**: Node importance based on neighbor importance
+  ```python
+  nx.eigenvector_centrality(G)
+  ```
 
-### How the BA Model Works
+### Graph Embeddings
+- **SVD Embeddings**: Singular value decomposition of adjacency matrix
+  - Parameters: `n_components`, `use_sparse`
+  - Implementation: `sknetwork.embedding.SVD`
+  - Properties: Preserves global graph structure
 
-1. **Initialization**:
+### Graph Statistics
+- **Density**: Ratio of actual to possible edges
+  ```python
+  nx.density(G)
+  ```
+- **Average Degree**: Mean number of edges per node
+  ```python
+  np.mean([d for _, d in G.degree()])
+  ```
+- **Clustering Coefficient**: Fraction of closed triangles
+  ```python
+  nx.average_clustering(G)
+  ```
+- **Diameter**: Maximum shortest path length
+  ```python
+  nx.diameter(G)
+  ```
 
-   - Start with a small connected network of $m_0$ nodes.
-   - These nodes can be connected in any arbitrary way.
+## Testing Framework
 
-2. **Growth Process**:
+### Graph Generation Tests (`TestGraphGeneration`)
+1. **Model-Specific Tests**:
+   - `test_ba_generation`: Verifies scale-free properties
+   - `test_er_generation`: Checks edge probability distribution
+   - `test_sbm_generation`: Validates community structure
 
-   - At each time step, add a new node with $m \leq m_0$ edges.
-   - The new node connects to $m$ existing nodes.
+2. **Change Point Tests**:
+   - `test_change_points`: Ensures valid segment lengths and ordering
+   - Parameters: `min_segment`, `min_changes`, `max_changes`
 
-3. **Preferential Attachment Rule**:
+### Feature Extraction Tests (`TestFeatureExtraction`)
+1. **Centrality Tests**:
+   - Verifies value ranges [0,1]
+   - Checks computation for multiple measures
 
-   - The probability $\Pi(k_i)$ that the new node connects to an existing node $i$ depends on the degree $k_i$ of node $i$:
+2. **Embedding Tests**:
+   - Validates orthogonality
+   - Checks dimensionality reduction
 
-     $$\Pi(k_i) = \frac{k_i}{\sum_j k_j}$$
+3. **Graph Statistics Tests**:
+   - Verifies basic properties (density, clustering)
+   - Ensures valid ranges for metrics
 
-   - Nodes with higher degrees are more likely to receive new connections.
+### Performance Tests (`TestPerformance`)
+- Tests for large graphs (1000+ nodes)
+- Benchmarks parallel computation
+- Validates sparse matrix operations
 
-### Mathematical Foundation
+## Usage
 
-- **Degree Distribution**:
+### Graph Generation
+```python
+generator = GraphGenerator()
+generator.register_model("BA", nx.barabasi_albert_graph, BAParams)
 
-  - The network develops a **power-law degree distribution**:
+sequence = generator.generate_sequence(
+    model="BA",
+    params=BAParams(n=100, initial_edges=3),
+    seed=42
+)
+```
 
-    $$P(k) \sim k^{-\gamma}$$
+### Feature Extraction
+```python
+# Compute centralities
+centralities = extract_centralities(
+    graphs,
+    measures=["degree", "betweenness"],
+    batch_size=10,
+    n_jobs=-1
+)
 
-- **Power-Law Behavior**:
+# Generate embeddings
+embeddings = compute_embeddings(
+    graphs,
+    method="svd",
+    n_components=10,
+    use_sparse=True
+)
+```
 
-  - Indicates that there is no characteristic degree in the network.
-  - A small number of nodes (hubs) dominate the connectivity.
+### Example
+```python
+(venv) PS D:\github\research\anomaly_detection\src\graph> python -m unittest .\main.py
+INFO:features:Computing 2 centralities for 10 graphs
+INFO:features:Centrality computation complete
+.INFO:features:Computing SVD embeddings with 5 components
+INFO:features:Successfully computed embeddings for 10 graphs
+.INFO:features:Computing statistics for 10 graphs
+INFO:features:Statistics computation complete
+..INFO:features:Computing SVD embeddings with 5 components
+INFO:features:Successfully computed embeddings for 10 graphs
+.INFO:graph_generator:Registered model: BA
+INFO:graph_generator:Registered model: ER
+INFO:graph_generator:Registered model: SBM
+INFO:graph_generator:Generated 1 change points at: [83]
+INFO:graph_generator:Successfully generated sequence with 100 graphs
+.INFO:graph_generator:Registered model: BA
+INFO:graph_generator:Registered model: ER
+INFO:graph_generator:Registered model: SBM
+INFO:graph_generator:Generated 1 change points at: [36]
+INFO:graph_generator:Successfully generated sequence with 100 graphs
+INFO:main:Change points: [36]
+INFO:main:Segment lengths: [36, 64]
+INFO:main:Sequence length: 100, Min segment: 10
+INFO:main:Min changes: 1, Max changes: 3
+.INFO:graph_generator:Registered model: BA
+INFO:graph_generator:Registered model: ER
+INFO:graph_generator:Registered model: SBM
+INFO:graph_generator:Generated 1 change points at: [41]
+INFO:graph_generator:Successfully generated sequence with 100 graphs
+.INFO:graph_generator:Registered model: BA
+INFO:graph_generator:Registered model: ER
+INFO:graph_generator:Registered model: SBM
+INFO:graph_generator:Generated 3 change points at: [40, 51, 77]
+INFO:graph_generator:Successfully generated sequence with 100 graphs
+.INFO:features:Computing 1 centralities for 5 graphs
+INFO:features:Centrality computation complete
+INFO:main:Centrality computation took 0.08 seconds
+.INFO:features:Computing SVD embeddings with 10 components
+INFO:features:Successfully computed embeddings for 5 graphs
+INFO:main:Embedding computation took 0.18 seconds
+.
+----------------------------------------------------------------------
+Ran 11 tests in 1.792s
 
-### Visual Illustration
+OK
+```
 
-Imagine building a network step by step:
+#### Test Output Explanation
 
-1. **Starting Network**:
-
-   ```lua
-   Node 1 --- Node 2
+1. **Feature Extraction Tests**:
    ```
-
-2. **Adding a New Node (Node 3)**:
-
-   - Node 3 connects to Node 1 or Node 2.
-   - Since both have the same degree, the choice is random.
-
-3. **Further Growth**:
-
-   - As more nodes are added, nodes with higher degrees become more attractive.
-
-4. **Example Graph after Several Iterations**:
-
-   ```lua
-            Node 4
-            /
-      Node 1 --- Node 2 --- Node 3
-            \
-            Node 5
+   INFO:features:Computing 2 centralities for 10 graphs
+   INFO:features:Centrality computation complete
    ```
+   - Testing centrality computation on 10 test graphs
+   - Computing degree and betweenness centralities
+
+2. **Embedding Tests**:
+   ```
+   INFO:features:Computing SVD embeddings with 5 components
+   INFO:features:Successfully computed embeddings for 10 graphs
+   ```
+   - Testing SVD embedding generation
+   - Reducing to 5 dimensions for each graph
+
+3. **Graph Statistics Tests**:
+   ```
+   INFO:features:Computing statistics for 10 graphs
+   INFO:features:Statistics computation complete
+   ```
+   - Computing density, clustering, and diameter metrics
+   - Validating basic graph properties
+
+4. **Model Registration**:
+   ```
+   INFO:graph_generator:Registered model: BA
+   INFO:graph_generator:Registered model: ER
+   INFO:graph_generator:Registered model: SBM
+   ```
+   - Registering three graph models with their parameters
+   - Setting up generator functions for each model
+
+5. **Change Point Generation**:
+   ```
+   INFO:graph_generator:Generated 1 change points at: [83]
+   INFO:graph_generator:Successfully generated sequence with 100 graphs
+   ```
+   - Testing sequence generation with parameter changes
+   - Validating change point placement and sequence length
+
+6. **Segment Validation**:
+   ```
+   INFO:main:Change points: [36]
+   INFO:main:Segment lengths: [36, 64]
+   INFO:main:Sequence length: 100, Min segment: 10
+   INFO:main:Min changes: 1, Max changes: 3
+   ```
+   - Verifying segment lengths meet minimum requirements
+   - Checking change point constraints are satisfied
+
+7. **Performance Tests**:
+   ```
+   INFO:features:Computing 1 centralities for 5 graphs
+   INFO:main:Centrality computation took 0.08 seconds
+   INFO:features:Computing SVD embeddings with 10 components
+   INFO:main:Embedding computation took 0.18 seconds
+   ```
+   - Benchmarking centrality computation speed
+   - Testing embedding generation performance
+   - Validating computation times are within bounds
+
+8. **Test Summary**:
+   ```
+   Ran 11 tests in 1.792s
+   OK
+   ```
+   - All 11 test cases passed successfully
+   - Total execution time under 2 seconds
+   - No failures or errors encountered
+
+Each dot (`.`) in the output represents a successfully completed test case. The tests cover feature extraction, graph generation, change point detection, and performance benchmarks.
 
-   - Node 1 has a higher degree and thus attracts more connections.
-
-### Implementation in the `graph` Module
-
-```python
-graphs = GraphGenerator().barabasi_albert(n=100, m1=2, m2=5, set1=50, set2=50)
-```
-
-- `n`: Total number of nodes.
-- `m1` and `m2`: Number of edges to attach from a new node to existing nodes for two different graph sets.
-- `set1` and `set2`: Number of graphs to generate with `m1` and `m2`, respectively.
-
----
-
-## Barabási-Albert Internet (BA-I) Model
-
-The **Barabási-Albert Internet (BA-I) model** extends the standard BA model by incorporating features specific to the Internet's topology. It aims to create networks that more accurately represent the structure and growth dynamics of the Internet.
-
-### Key Differences from the Standard BA Model
-
-- **Initial Graph**:
-
-  - Starts with a base graph that mimics the Internet's Autonomous System (AS) level topology.
-
-- **Growth Mechanism**:
-  - New nodes connect using preferential attachment but consider the hierarchical and geographical constraints of the Internet.
-
-### How the BA-I Model Works
-
-1. **Initial Internet-Like Graph**:
-
-   - Use a function like `nx.random_internet_as_graph(n)` to generate a base graph that resembles the Internet's AS topology.
-   - Nodes represent autonomous systems, and edges represent connections between them.
-
-2. **Adding New Nodes**:
-
-   - New nodes are added one at a time.
-   - They connect to existing nodes based on preferential attachment, considering factors like node degree and possibly other attributes like latency or bandwidth.
-
-### Mathematical Considerations
-
-- **Degree Distribution**:
-
-  - Similar to the BA model but adjusted to fit the empirical data of Internet topology.
-
-- **Hierarchical Structure**:
-  - Incorporates a multi-tiered hierarchy, reflecting ISPs, regional networks, and local networks.
-
-### Visual Illustration
-
-**Simplified Internet-Like Graph**:
-
-```lua
-             [Tier 1 ISP]
-                  |
-        ---------------------
-        |         |         |
-   [ISP A]    [ISP B]    [ISP C]
-      |           |          |
-   [User 1]    [User 2]   [User 3]
-```
-
-### Implementation in the `graph` Module
-
-```python
-graphs = GraphGenerator().barabasi_albert_internet(n=100, m1=2, m2=4, set1=50, set2=50)
-```
-
-- `n`: Number of nodes in the base Internet-like graph.
-- `m1` and `m2`: Attachment parameters for two different graph sets.
-- `set1` and `set2`: Number of graphs to generate with different parameters.
-
----
-
-## Erdős-Rényi (ER) Model
-
-The **Erdős-Rényi (ER) model** is one of the foundational models for generating random graphs. It constructs a network by connecting nodes randomly, leading to a **Poisson degree distribution** in large graphs.
-
-### How the ER Model Works
-
-There are two classic formulations:
-
-- **$G(n, p)$ Model**:
-
-  - **Nodes**: Start with $n$ isolated nodes.
-  - **Edge Probability $p$**:
-    - For each possible pair of nodes, an edge is included with probability $p$.
-  - **Total Possible Edges**: $\binom{n}{2} = \frac{n(n-1)}{2}$.
-
-- **$G(n, M)$ Model**:
-
-  - **Nodes**: Start with $n$ isolated nodes.
-  - **Edges**:
-    - Exactly $M$ edges are randomly selected from all possible edges.
-
-### Mathematical Foundation
-
-- **Degree Distribution**:
-
-  - Follows a binomial distribution:
-
-    $$P(k) = \binom{n-1}{k} p^k (1-p)^{n-1-k}$$
-
-  - For large $n$ and small $p$, approximates a Poisson distribution:
-
-    $$P(k) \approx \frac{\lambda^k e^{-\lambda}}{k!}$$
-
-    where $\lambda = p(n-1)$.
-
-- **Expected Number of Edges**:
-
-  $$E[M] = p \binom{n}{2}$$
-
-### Properties
-
-- **Randomness**:
-
-  - Edges are placed independently of each other.
-
-- **Phase Transition**:
-  - A giant connected component emerges when $p$ crosses a critical threshold $p_c = \frac{\ln (n)}{n}$.
-
-### Visual Illustration
-
-- **Sparse ER Graph ($p$ small)**:
-
-  ```lua
-  Node 1     Node 2     Node 3
-
-  Node 4 --- Node 5
-  ```
-
-  - Few edges; nodes are mostly disconnected.
-
-- **Dense ER Graph ($p$ large)**:
-
-  ```lua
-   Node 1 --- Node 2 --- Node 3
-       |        |        |
-   Node 4 --- Node 5 --- Node 6
-  ```
-
-  - Many edges; the graph is likely connected.
-
-### Implementation in the `graph` Module
-
-```python
-graphs = GraphGenerator().erdos_renyi(n=100, p1=0.05, p2=0.1, set1=50, set2=50)
-```
-
-- `n`: Number of nodes.
-- `p1` and `p2`: Edge probabilities for two different graph sets.
-- `set1` and `set2`: Number of graphs to generate with `p1` and `p2`.
-
----
-
-## Newman-Watts-Strogatz (NWS) Model
-
-The **Newman-Watts-Strogatz (NWS) model** is an enhancement of the original Watts-Strogatz model for generating **small-world networks**. It combines high clustering (like regular lattices) with short average path lengths (like random graphs), capturing the small-world phenomenon observed in many real networks.
-
-### How the NWS Model Works
-
-- **Start with a Ring Lattice**:
-
-  - **Nodes**: Arrange $n$ nodes in a ring.
-  - **Local Connections**:
-    - Each node is connected to its $k$ nearest neighbors ($\frac{k}{2}$ on each side).
-
-- **Adding Random Edges (Shortcuts)**:
-
-  - **Rewiring Probability $p$**:
-    - Instead of rewiring existing edges (as in the Watts-Strogatz model), the NWS model adds new edges between randomly selected pairs of nodes.
-    - This avoids disconnected components and self-loops.
-
-### Mathematical Foundation
-
-- **Clustering Coefficient**:
-
-  - Measures the likelihood that two neighbors of a node are also neighbors.
-  - High in the initial lattice structure.
-
-- **Average Path Length**:
-  - The average number of steps along the shortest paths for all possible pairs of network nodes.
-  - Reduced significantly by the addition of random shortcuts.
-
-### Properties
-
-- **High Clustering**:
-
-  - Nodes tend to form tightly knit groups.
-
-- **Short Average Path Length**:
-  - Random shortcuts create "shortcuts" across the network, reducing the path length.
-
-### Visual Illustration
-
-- **Step 1: Ring Lattice**:
-
-  ```lua
-  Node 1 --- Node 2 --- Node 3 --- Node 4 --- Node 5 --- Node 6
-    |                                               |
-   (back to Node 1) ------------------------------|
-  ```
-
-  - Each node is connected to its immediate neighbors.
-
-- **Step 2: Adding Shortcuts**:
-
-  ```lua
-   Node 1 --- Node 2 --- Node 3 --- Node 4 --- Node 5 --- Node 6
-      |        \                              /          |
-    (back to Node 1) ------------------------------|
-  ```
-
-  - Random edges (dashed lines) are added between non-neighboring nodes.
-
-### Implementation in the `graph` Module
-
-```python
-graphs = GraphGenerator().newman_watts(n=100, k1=4, p1=0.1, k2=6, p2=0.2, set1=50, set2=50)
-```
-
-- `n`: Number of nodes.
-- `k1` and `k2`: Each node is connected to $k$ nearest neighbors for two different graph sets.
-- `p1` and `p2`: Probability of adding a new random edge for each node.
-- `set1` and `set2`: Number of graphs to generate with different parameters.
-
----
-
-## Conclusion
-
-Understanding these graph models and their implementations is essential for simulating dynamic networks and studying phenomena like change point detection. Each model provides a different lens through which we can examine network structures:
-
-- **Barabási-Albert (BA) Model**: Emphasizes preferential attachment and the emergence of hubs.
-- **Barabási-Albert Internet (BA-I) Model**: Tailors the BA model to reflect the Internet's topology.
-- **Erdős-Rényi (ER) Model**: Provides a foundation for random graphs with a binomial degree distribution.
-- **Newman-Watts-Strogatz (NWS) Model**: Captures the small-world characteristics of high clustering and short path lengths.

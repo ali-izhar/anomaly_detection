@@ -1,281 +1,314 @@
 # src/graph/graph_generator.py
 
-import logging
-import networkx as nx
-import numpy as np
-from typing import List, Callable, Dict, Optional, Any
+"""Graph Generator for Dynamic Graph Sequences.
 
-from .features import graph_to_adjacency
+This module provides a flexible framework for generating sequences of dynamic graphs
+using various NetworkX models. It supports both sparse and dense graph types with
+configurable parameters that can change over time.
+
+Key Features:
+- Generic interface for any NetworkX-compatible graph model
+- Generates sequences with controlled parameter changes
+- Maintains consistent node labeling across sequences
+- Provides metadata about changes and parameters
+"""
+
+import logging
+from typing import Dict, List, Optional, Callable, Type
+import numpy as np
+import networkx as nx
+from dataclasses import asdict
+
+from .params import BaseParams
 
 logger = logging.getLogger(__name__)
 
 
+def graph_to_adjacency(G: nx.Graph) -> np.ndarray:
+    """Convert NetworkX graph to adjacency matrix with consistent node ordering.
+
+    Args:
+        G: NetworkX graph
+
+    Returns:
+        Adjacency matrix with nodes ordered from 0 to n-1
+    """
+    # Ensure nodes are labeled 0 to n-1
+    G = nx.convert_node_labels_to_integers(G)
+    return nx.to_numpy_array(G)
+
+
 class GraphGenerator:
-    """Generates temporal graph sequences with structural changes.
-    - Barabasi-Albert (BA): P(k) ~ k^(-3)
-    - Erdos-Renyi (ER): P(edge) = p
-    - Newman-Watts (NW): Small-world networks
+    """Generator for dynamic graph sequences.
+
+    This class provides a generic interface to generate sequences of graphs with changing
+    parameters using any NetworkX-compatible model.
     """
 
-    def __init__(
-        self, graph_types: Optional[Dict[str, List[np.ndarray]]] = None
-    ) -> None:
-        """Initialize generator with storage for different graph types.
+    def __init__(self):
+        """Initialize the graph generator."""
+        self._generators: Dict[str, Dict] = {}
 
-        Args:
-            graph_types: Optional pre-initialized graph storage
-        """
-        self._graphs: Dict[str, List[np.ndarray]] = graph_types or {
-            "BA": [],
-            "BA_I": [],
-            "ER": [],
-            "NW": [],
-        }
-        logger.debug(
-            f"Initialized GraphGenerator with types: {list(self._graphs.keys())}"
-        )
-
-    @property
-    def graphs(self) -> Dict[str, List[np.ndarray]]:
-        """Get generated graph sequences by type."""
-        return self._graphs
-
-    def _generate_graphs(
+    def register_model(
         self,
-        graph_type: str,
-        n: int,
-        set1: int,
-        set2: int,
-        graph_func: Callable,
-        params1: Dict[str, Any],
-        params2: Dict[str, Any],
-    ) -> List[np.ndarray]:
-        """Generate graph sequence with parameter change.
-        Creates sequence [G1, ..., Gk] where:
-        - G1, ..., Gi use params1 (i = set1)
-        - Gi+1, ..., Gk use params2 (k = set1 + set2)
+        name: str,
+        generator_func: Callable,
+        param_class: Type[BaseParams],
+        param_mutation_func: Optional[Callable[[Dict], Dict]] = None,
+        metadata_func: Optional[Callable[[Dict], Dict]] = None,
+    ) -> None:
+        """Register a new graph model.
 
         Args:
-            graph_type: Model identifier
-            n: Number of nodes
-            set1: Length of first sequence
-            set2: Length of second sequence
-            graph_func: NetworkX generator function
-            params1: Parameters before change
-            params2: Parameters after change
+            name: Identifier for the model
+            generator_func: NetworkX-compatible graph generator function
+            param_class: Parameter class for this model type
+            param_mutation_func: Function to mutate parameters for sequence generation
+            metadata_func: Function to compute model-specific metadata
+        """
+        if name in self._generators:
+            logger.warning(f"Overwriting existing model: {name}")
+
+        self._generators[name] = {
+            "generator": generator_func,
+            "param_class": param_class,
+            "mutate": param_mutation_func or self._default_param_mutation,
+            "metadata": metadata_func or self._default_metadata,
+        }
+        logger.info(f"Registered model: {name}")
+
+    def generate_sequence(
+        self,
+        model: str,
+        params: BaseParams,
+        seed: Optional[int] = None,
+    ) -> Dict:
+        """Generate a sequence of graphs with changing parameters.
+
+        Args:
+            model: Name of the registered graph model to use
+            params: Parameters for graph generation
+            seed: Random seed for reproducibility
 
         Returns:
-            List of adjacency matrices [n x n]
-
-        Raises:
-            ValueError: For invalid parameters
-            RuntimeError: For generation failures
+            Dictionary containing:
+            - graphs: List of adjacency matrices
+            - change_points: List of indices where parameters change
+            - params: List of parameters used in each segment
+            - metadata: Additional model-specific information
         """
-        if n <= 0 or set1 < 0 or set2 < 0:
-            logger.error(f"Invalid parameters: n={n}, set1={set1}, set2={set2}")
-            raise ValueError("Node count and sequence lengths must be positive")
+        if model not in self._generators:
+            raise ValueError(
+                f"Model {model} not registered. Use register_model() first."
+            )
 
-        logger.info(
-            f"Generating {graph_type} graphs: {set1} with params1, {set2} with params2"
-        )
-        logger.debug(f"Parameters before change: {params1}")
-        logger.debug(f"Parameters after change: {params2}")
+        if not isinstance(params, self._generators[model]["param_class"]):
+            raise TypeError(
+                f"Parameters must be instance of {self._generators[model]['param_class'].__name__}"
+            )
+
+        if seed is not None:
+            np.random.seed(seed)
 
         try:
-            graphs: List[np.ndarray] = []
+            # Generate change points
+            change_points, num_changes = self._generate_change_points(params)
+            logger.info(f"Generated {num_changes} change points at: {change_points}")
 
-            # Generate first sequence
-            logger.info(f"Generating first sequence of {set1} graphs")
-            for i in range(set1):
-                logger.debug(f"Generating graph {i+1}/{set1} with params1")
-                graph = graph_func(n=n, seed=i, **params1)
-                graphs.append(graph_to_adjacency(graph))
+            # Generate parameter sets for each segment
+            param_sets = self._generate_parameter_sets(
+                model, params, num_changes, self._generators[model]["mutate"]
+            )
+            logger.debug(f"Generated parameters for {num_changes + 1} segments")
 
-            # Generate second sequence
-            logger.info(f"Generating second sequence of {set2} graphs")
-            for i in range(set1, set1 + set2):
-                logger.debug(f"Generating graph {i-set1+1}/{set2} with params2")
-                graph = graph_func(n=n, seed=i, **params2)
-                graphs.append(graph_to_adjacency(graph))
+            # Generate graph segments
+            all_graphs = []
+            metadata = []
 
-            self._graphs[graph_type] = graphs
-            logger.info(f"Successfully generated {len(graphs)} {graph_type} graphs")
-            return graphs
+            for i in range(len(change_points) + 1):
+                start = change_points[i - 1] if i > 0 else 0
+                end = change_points[i] if i < len(change_points) else params.seq_len
+                length = end - start
+
+                segment_params = param_sets[i]
+                logger.debug(f"Generating segment {i} with params: {segment_params}")
+
+                try:
+                    segment = self._generate_graph_segment(
+                        model, segment_params, length
+                    )
+                    meta = self._generators[model]["metadata"](segment_params)
+
+                    all_graphs.extend(segment)
+                    metadata.append(meta)
+                    logger.debug(f"Generated segment {i} with {len(segment)} graphs")
+                except Exception as e:
+                    msg = f"Failed to generate segment {i}"
+                    logger.error(msg, exc_info=True)
+                    raise RuntimeError(msg) from e
+
+            result = {
+                "graphs": all_graphs,
+                "change_points": change_points,
+                "parameters": param_sets,
+                "metadata": metadata,
+                "model": model,
+                "num_changes": num_changes,
+                "n": params.n,
+                "sequence_length": params.seq_len,
+            }
+
+            logger.info(
+                f"Successfully generated sequence with {len(all_graphs)} graphs"
+            )
+            return result
 
         except Exception as e:
-            logger.error(f"Failed to generate {graph_type} graphs: {str(e)}")
-            raise RuntimeError(f"Failed to generate {graph_type} graphs: {str(e)}")
+            logger.error(f"Failed to generate sequence: {str(e)}", exc_info=True)
+            raise
 
-    def barabasi_albert(
-        self, n: int, m1: int, m2: int, set1: int, set2: int
-    ) -> List[np.ndarray]:
-        """Generate Barabasi-Albert (BA) graphs with varying attachment parameter.
-        BA model: P(k) ~ k^(-3), where k is node degree
-        Changes m edges per new node: m1 -> m2 at t = set1
-
-        Args:
-            n: Number of nodes
-            m1: Initial edges per node
-            m2: Changed edges per node
-            set1: Graphs before change
-            set2: Graphs after change
-
-        Returns:
-            List of adjacency matrices
-        """
-        if not 0 < m1 < n or not 0 < m2 < n:
-            logger.error(f"Invalid edge parameters: m1={m1}, m2={m2}, n={n}")
-            raise ValueError("Edge parameters must be in range (0, n)")
-
-        logger.info(f"Generating BA graphs with n={n}, m1={m1}, m2={m2}")
-        return self._generate_graphs(
-            graph_type="BA",
-            n=n,
-            set1=set1,
-            set2=set2,
-            graph_func=nx.barabasi_albert_graph,
-            params1={"m": m1},
-            params2={"m": m2},
-        )
-
-    def barabasi_albert_internet(
+    def _generate_graph_segment(
         self,
-        n: int,
-        m1: int,
-        m2: int,
-        set1: int,
-        set2: int,
-        base_seed1: int = 1,
-        base_seed2: int = 100,
+        model: str,
+        params: Dict,
+        length: int,
     ) -> List[np.ndarray]:
-        """Generate Barabasi-Albert (BA) graphs with Internet-like initial topology.
-        Uses random AS graphs as seeds, then applies BA growth:
-        G0 -> BA(m1) -> BA(m2)
+        """Generate a sequence of graphs with fixed parameters."""
+        graphs = []
+        generator = self._generators[model]["generator"]
 
-        Args:
-            n: Number of nodes
-            m1, m2: Edge parameters
-            set1, set2: Sequence lengths
-            base_seed1, base_seed2: Seeds for initial graphs
+        for _ in range(length):
+            G = generator(**params)
+            adj_matrix = graph_to_adjacency(G)
+            graphs.append(adj_matrix)
 
-        Returns:
-            List of adjacency matrices
-        """
-        logger.info(f"Generating Internet-like BA graphs with n={n}, m1={m1}, m2={m2}")
-        logger.debug(f"Using base seeds: {base_seed1}, {base_seed2}")
+        return graphs
 
-        base1 = nx.random_internet_as_graph(n, seed=base_seed1)
-        base2 = nx.random_internet_as_graph(n, seed=base_seed2)
-        logger.debug(
-            f"Created base graphs: {base1.number_of_edges()}, {base2.number_of_edges()} edges"
-        )
-
-        return self._generate_graphs(
-            graph_type="BA_I",
-            n=n,
-            set1=set1,
-            set2=set2,
-            graph_func=nx.barabasi_albert_graph,
-            params1={"m": m1, "initial_graph": base1},
-            params2={"m": m2, "initial_graph": base2},
-        )
-
-    def erdos_renyi(
-        self, n: int, p1: float, p2: float, set1: int, set2: int
-    ) -> List[np.ndarray]:
-        """Generate Erdos-Renyi (ER) graphs with varying edge probability.
-        ER model: P(edge) = p for all node pairs
-        Changes probability: p1 -> p2 at t = set1
-
-        Args:
-            n: Number of nodes
-            p1: Initial edge probability
-            p2: Changed edge probability
-            set1, set2: Sequence lengths
-
-        Returns:
-            List of adjacency matrices
-        """
-        if not 0 <= p1 <= 1 or not 0 <= p2 <= 1:
-            logger.error(f"Invalid probabilities: p1={p1}, p2={p2}")
-            raise ValueError("Probabilities must be in [0, 1]")
-
-        logger.info(f"Generating ER graphs with n={n}, p1={p1}, p2={p2}")
-        return self._generate_graphs(
-            graph_type="ER",
-            n=n,
-            set1=set1,
-            set2=set2,
-            graph_func=nx.erdos_renyi_graph,
-            params1={"p": p1},
-            params2={"p": p2},
-        )
-
-    def newman_watts(
-        self, n: int, p1: float, p2: float, k1: int, k2: int, set1: int, set2: int
-    ) -> List[np.ndarray]:
-        """Generate Newman-Watts (NW) small-world graphs with varying parameters.
-        NW model: Ring lattice + random edges
-        Changes (k, p): (k1, p1) -> (k2, p2) at t = set1
-
-        Args:
-            n: Number of nodes
-            p1, p2: Rewiring probabilities
-            k1, k2: Initial neighbor counts
-            set1, set2: Sequence lengths
-
-        Returns:
-            List of adjacency matrices
-        """
-        if not 0 <= p1 <= 1 or not 0 <= p2 <= 1:
-            logger.error(f"Invalid probabilities: p1={p1}, p2={p2}")
-            raise ValueError("Probabilities must be in [0, 1]")
-        if k1 >= n or k2 >= n:
-            logger.error(f"Invalid k values: k1={k1}, k2={k2}, n={n}")
-            raise ValueError("k must be less than n")
-
-        logger.info(
-            f"Generating NW graphs with n={n}, k1={k1}, k2={k2}, p1={p1}, p2={p2}"
-        )
-        return self._generate_graphs(
-            graph_type="NW",
-            n=n,
-            set1=set1,
-            set2=set2,
-            graph_func=nx.newman_watts_strogatz_graph,
-            params1={"k": k1, "p": p1},
-            params2={"k": k2, "p": p2},
-        )
-
-    def register_graph_type(
+    def _generate_change_points(
         self,
-        graph_type: str,
-        graph_func: Callable,
-        params1: Dict[str, Any],
-        params2: Dict[str, Any],
-    ) -> None:
-        """Register custom graph generator with parameters.
+        params: BaseParams,
+    ) -> tuple[List[int], int]:
+        """Generate random change points for the sequence.
 
-        Args:
-            graph_type: Model identifier
-            graph_func: NetworkX-compatible generator
-            params1: Initial parameters
-            params2: Changed parameters
+        Ensures that:
+        1. Each segment is at least min_segment length
+        2. First change point is at least min_segment from start
+        3. Last change point is at least min_segment from end
+        4. Each change point is at least min_segment from its neighbors
         """
-        if graph_type in self._graphs:
-            logger.warning(f"Overwriting existing graph type: {graph_type}")
-        else:
-            logger.info(f"Registering new graph type: {graph_type}")
+        try:
+            seq_len = params.seq_len
+            min_seg = params.min_segment
 
-        logger.debug(
-            f"Parameters for {graph_type}: params1={params1}, params2={params2}"
-        )
-        self._graphs[graph_type] = []
-        setattr(
-            self,
-            graph_type.lower(),
-            lambda n, set1, set2: self._generate_graphs(
-                graph_type, n, set1, set2, graph_func, params1, params2
-            ),
-        )
-        logger.info(f"Successfully registered graph type: {graph_type}")
+            # Calculate maximum possible changes given constraints
+            max_possible_changes = (seq_len - min_seg) // min_seg - 1
+            num_changes = min(
+                np.random.randint(params.min_changes, params.max_changes + 1),
+                max_possible_changes,
+            )
+
+            if num_changes < params.min_changes:
+                msg = (
+                    f"Cannot generate {params.min_changes} changes with sequence length {seq_len} "
+                    f"and minimum segment {min_seg}. Maximum possible changes: {max_possible_changes}"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+
+            logger.debug(f"Attempting to generate {num_changes} change points")
+
+            MAX_ATTEMPTS = 100
+            for _ in range(MAX_ATTEMPTS):
+                # Available range for change points
+                available_range = seq_len - 2 * min_seg  # Leave space at start and end
+
+                # Generate candidate points
+                points = []
+                last_point = min_seg  # Start after minimum segment
+
+                for _ in range(num_changes):
+                    # Available range for this point
+                    start = last_point + min_seg
+                    end = seq_len - (num_changes - len(points)) * min_seg
+
+                    if start >= end:
+                        # Not enough space for remaining points
+                        points = []
+                        break
+
+                    point = np.random.randint(start, end)
+                    points.append(point)
+                    last_point = point
+
+                if len(points) == num_changes:
+                    # Verify minimum segment lengths
+                    points = sorted(points)
+                    segments = (
+                        [points[0]]
+                        + [points[i] - points[i - 1] for i in range(1, len(points))]
+                        + [seq_len - points[-1]]
+                    )
+
+                    if all(seg >= min_seg for seg in segments):
+                        logger.debug(f"Generated change points: {points}")
+                        return points, num_changes
+
+            msg = (
+                f"Failed to generate valid change points after {MAX_ATTEMPTS} attempts"
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        except Exception as e:
+            logger.error(f"Error in change point generation: {str(e)}", exc_info=True)
+            raise
+
+    def _generate_parameter_sets(
+        self,
+        model: str,
+        params: BaseParams,
+        num_changes: int,
+        mutation_func: Callable[[Dict], Dict],
+    ) -> List[Dict]:
+        """Generate parameter sets for each segment."""
+        param_dict = asdict(params)
+        param_sets = [param_dict]
+
+        for _ in range(num_changes):
+            new_params = mutation_func(param_dict.copy())
+            param_sets.append(new_params)
+            param_dict = new_params
+
+        return param_sets
+
+    @staticmethod
+    def _default_param_mutation(params: Dict) -> Dict:
+        """Default parameter mutation strategy.
+
+        For each parameter ending with 'min' or 'max', generates a random value
+        between those bounds for the corresponding parameter.
+        """
+        new_params = params.copy()
+
+        # Find all parameter pairs with min/max bounds
+        param_bounds = {}
+        for key in params:
+            if key.endswith("_min"):
+                base_key = key[:-4]
+                max_key = f"{base_key}_max"
+                if max_key in params:
+                    param_bounds[base_key] = (params[key], params[max_key])
+
+        # Generate new random values within bounds
+        for base_key, (min_val, max_val) in param_bounds.items():
+            if isinstance(min_val, int):
+                new_params[base_key] = np.random.randint(min_val, max_val + 1)
+            else:
+                new_params[base_key] = np.random.uniform(min_val, max_val)
+
+        return new_params
+
+    @staticmethod
+    def _default_metadata(params: Dict) -> Dict:
+        """Default metadata generation."""
+        return {"params": params.copy()}

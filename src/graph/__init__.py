@@ -3,19 +3,18 @@
 from .features import (
     extract_centralities,
     compute_embeddings,
-    graph_to_adjacency,
-    adjacency_to_graph,
+    strangeness_point,
+    compute_laplacian,
+    compute_graph_statistics,
 )
 from .graph_generator import GraphGenerator
-from .syn_data_generator import SyntheticDataGenerator, GenerationConfig
 
 
 __all__ = [
     "extract_centralities",
     "compute_embeddings",
-    "graph_to_adjacency",
-    "adjacency_to_graph",
+    "strangeness_point",
+    "compute_laplacian",
+    "compute_graph_statistics",
     "GraphGenerator",
-    "SyntheticDataGenerator",
-    "GenerationConfig",
 ]

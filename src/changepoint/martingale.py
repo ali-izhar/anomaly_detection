@@ -3,7 +3,7 @@
 import random
 import numpy as np
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from ..graph.features import strangeness_point
 
@@ -56,6 +56,7 @@ def compute_martingale(
     threshold: float,
     epsilon: float,
     reset: bool = True,
+    window_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute power martingale sequence for online change detection.
     Implements power martingale: M_n = product of (epsilon * p_i^(epsilon - 1)) for i from 1 to n
@@ -67,6 +68,7 @@ def compute_martingale(
         threshold: Detection threshold tau > 0
         epsilon: Sensitivity epsilon in (0,1), smaller values increase sensitivity
         reset: Whether to reset after detection
+        window_size: Maximum window size for memory efficiency, None for full history
 
     Returns:
         Dictionary containing:
@@ -83,7 +85,7 @@ def compute_martingale(
         raise ValueError("Threshold must be positive")
 
     logger.info(
-        f"Starting martingale computation with epsilon={epsilon}, threshold={threshold}"
+        f"Starting martingale computation with epsilon={epsilon}, threshold={threshold}, window_size={window_size}"
     )
 
     pvalues: List[float] = []
@@ -95,6 +97,10 @@ def compute_martingale(
 
     try:
         for i, point in enumerate(data):
+            # Limit window size for memory efficiency
+            if window_size and len(window) >= window_size:
+                window = window[-window_size:]
+
             # Compute strangeness and p-value
             strangeness = strangeness_point(window + [point]) if window else [0]
             saved_strangeness.append(strangeness[-1])
@@ -135,7 +141,12 @@ def compute_martingale(
 
 
 def multiview_martingale_test(
-    data: List[List[Any]], threshold: float, epsilon: float
+    data: List[List[Any]],
+    threshold: float,
+    epsilon: float,
+    batch_size: int = 1000,
+    window_size: Optional[int] = None,
+    early_stop_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Compute multivariate martingale test combining evidence across features.
     For d features, computes M_total as the sum of M_jn for each feature j at time n,
@@ -145,6 +156,9 @@ def multiview_martingale_test(
         data: List of d feature sequences [samples x features]
         threshold: Detection threshold tau > 0
         epsilon: Sensitivity epsilon in (0,1)
+        batch_size: Number of samples to process at once
+        window_size: Maximum window size for memory efficiency
+        early_stop_threshold: Stop processing if martingale sum exceeds this
 
     Returns:
         Dictionary containing:
@@ -163,7 +177,10 @@ def multiview_martingale_test(
         logger.error(f"Invalid threshold value: {threshold}")
         raise ValueError("Threshold must be positive")
 
-    logger.info(f"Starting multiview martingale test with {len(data)} features")
+    logger.info(
+        f"Starting multiview martingale test with {len(data)} features, "
+        f"batch_size={batch_size}, window_size={window_size}"
+    )
 
     num_features = len(data)
     num_samples = len(data[0])
@@ -178,35 +195,62 @@ def multiview_martingale_test(
     saved_strangeness = [[] for _ in range(num_features)]
 
     try:
-        for i in range(num_samples):
-            results = process_instant(
-                [data[j][i] for j in range(num_features)], windows, martingales, epsilon
-            )
+        # Process data in batches
+        for batch_start in range(0, num_samples, batch_size):
+            batch_end = min(batch_start + batch_size, num_samples)
+            logger.debug(f"Processing batch {batch_start}:{batch_end}")
 
-            new_martingales, new_pvalues, new_strangeness, martingale_sum, windows = (
-                results
-            )
+            for i in range(batch_start, batch_end):
+                # Limit window sizes for memory efficiency
+                if window_size:
+                    windows = [
+                        w[-window_size:] if len(w) >= window_size else w
+                        for w in windows
+                    ]
 
-            logger.debug(f"Time {i}: martingale_sum={martingale_sum}")
-
-            # Update tracking variables
-            for j in range(num_features):
-                martingales[j].append(new_martingales[j])
-                saved_martingales[j].append(new_martingales[j])
-                pvalues[j].append(new_pvalues[j])
-                saved_strangeness[j].append(new_strangeness[j])
-
-            saved_martingale_sum.append(martingale_sum)
-
-            if martingale_sum > threshold:
-                logger.info(
-                    f"Change point detected at time {i} (martingale_sum={martingale_sum})"
+                results = process_instant(
+                    [data[j][i] for j in range(num_features)],
+                    windows,
+                    martingales,
+                    epsilon,
+                    early_stop_threshold,
                 )
-                change_points.append(i)
-                windows = [[] for _ in range(num_features)]
+
+                (
+                    new_martingales,
+                    new_pvalues,
+                    new_strangeness,
+                    martingale_sum,
+                    windows,
+                ) = results
+
+                logger.debug(f"Time {i}: martingale_sum={martingale_sum}")
+
+                # Update tracking variables
                 for j in range(num_features):
-                    martingales[j][-1] = 1
-                    windows[j].append(data[j][i])
+                    martingales[j].append(new_martingales[j])
+                    saved_martingales[j].append(new_martingales[j])
+                    pvalues[j].append(new_pvalues[j])
+                    saved_strangeness[j].append(new_strangeness[j])
+
+                saved_martingale_sum.append(martingale_sum)
+
+                if martingale_sum > threshold:
+                    logger.info(
+                        f"Change point detected at time {i} (martingale_sum={martingale_sum})"
+                    )
+                    change_points.append(i)
+                    windows = [[] for _ in range(num_features)]
+                    for j in range(num_features):
+                        martingales[j][-1] = 1
+                        windows[j].append(data[j][i])
+
+                # Early stopping if threshold exceeded
+                if early_stop_threshold and martingale_sum > early_stop_threshold:
+                    logger.info(
+                        f"Early stopping at time {i} (martingale_sum={martingale_sum})"
+                    )
+                    break
 
         logger.info(
             f"Multiview test complete. Found {len(change_points)} change points"
@@ -227,6 +271,7 @@ def process_instant(
     windows: List[List[Any]],
     martingales: List[List[float]],
     epsilon: float,
+    early_stop_threshold: Optional[float] = None,
 ) -> Tuple[List[float], List[float], List[float], float, List[List[Any]]]:
     """Process a single time instant for multiview martingale computation.
     For each feature j, computes:
@@ -239,6 +284,7 @@ def process_instant(
         windows: Historical windows per feature
         martingales: Current martingale values per feature
         epsilon: Sensitivity parameter
+        early_stop_threshold: Stop processing if any martingale exceeds this
 
     Returns:
         Tuple of (new_martingales, pvalues, strangeness, martingale_sum, updated_windows)
@@ -255,6 +301,19 @@ def process_instant(
 
             # Update martingale
             new_martingale = martingales[j][-1] * epsilon * (pvalue ** (epsilon - 1))
+
+            # Early stopping check
+            if early_stop_threshold and new_martingale > early_stop_threshold:
+                logger.debug(
+                    f"Early stopping for feature {j}: martingale={new_martingale}"
+                )
+                return (
+                    new_martingales,
+                    pvalues,
+                    strangeness_values,
+                    float("inf"),
+                    windows,
+                )
 
             window.append(point)
             new_martingales.append(new_martingale)
