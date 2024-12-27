@@ -4,7 +4,7 @@ dataset:
   num_sequences: 100      # total number of graph sequences in the dataset
   seq_len: 50             # length of each graph sequence
   min_segment: 5          # minimum segment length between changes
-  min_changes: 2          # minimum number of changes allowed per graph sequence
+  min_changes: 3          # minimum number of changes allowed per graph sequence
   max_changes: 4          # maximum number of changes allowed per graph sequence
 
   # Type(s) of graphs to generate; "SBM" provides dense, community-structured graphs
@@ -17,11 +17,11 @@ dataset:
         min: 40           # minimum size of a community
         max: 50           # maximum size of a community
       edge_probabilities: 
-        intra_block: 0.45 # probability of connections within the same community
-        inter_block: 0.08 # probability of connections between different communities
+        intra_block: 0.50 # probability of connections within the same community
+        inter_block: 0.07 # probability of connections between different communities
       change_ranges:      
         intra:            
-          min: 0.30       # minimum intra-community edge probability after changes
+          min: 0.35       # minimum intra-community edge probability after changes
           max: 0.50       # maximum intra-community edge probability after changes
         inter:            
           min: 0.05       # minimum inter-community edge probability after changes
@@ -31,36 +31,44 @@ dataset:
   features:
     use_node_features: true  # enable node-specific features
     normalize: true          # normalize features for better model training
-    types:                   # types of features to extract
-      # basic topological features
+    normalization_method: "standard"  # use standard scaling for normalization
+    window_size: 3          # window size for temporal features
+    types:                   
+      # Basic topological features
       - common_neighbors
       - jaccard
       - adamic_adar
-      - preferential_attachment
       - resource_allocation
+      # Degree-based features
+      - preferential_attachment
       - degree_similarity
-      # advanced structural features
-      - katz
-      - pagerank_similarity
-      - local_clustering
+      - degree_product
+      # Path-based features
       - shortest_path
-      # features based on community structures
+      # Local clustering features
+      - clustering_coefficient
+      # Community-based features
       - community_similarity
       - block_membership
-      # temporal features for dynamic graphs
-      - link_history
-      - temporal_stability
+      - community_edge_density
+      - community_role
+      # Temporal features
+      - link_frequency
+      - link_persistence
       - cn_history
+      - cn_change_rate
+      - degree_correlation
+      - temporal_stability
 
   # Link prediction settings
   link_prediction:
-    negative_sampling_ratio: 1.0    # ratio of negative to positive samples; balanced sampling
-    edge_split_method: "community_aware"  # split edges while preserving community structure
+    negative_sampling_ratio: 1.0    # ratio of negative to positive samples
+    edge_split_method: "community_based"  # split edges while preserving community structure
     preserve_connectivity: true     # ensure the graph remains connected
-    min_positive_degree: 8          # minimum degree for positive edges to ensure reliable patterns
-    sampling_strategy: "stratified" # stratified samples across communities for better representation
-    hard_negative_mining: true      # include challenging negative examples for training
-    validation_metric: "auc"        # use AUC as the evaluation metric for validation
+    min_positive_degree: 8          # minimum degree for positive edges
+    sampling_strategy: "community_based"  # balanced sampling across communities
+    hard_negative: true            # include challenging negative examples
+    temporal_split: false          # whether to use temporal ordering for splits
 
   # Ratios for splitting the dataset into training, validation, and testing
   split_ratio:
@@ -75,3 +83,4 @@ dataset:
     compression: true               # enable compression for storage efficiency
     save_features: true             # save precomputed features in the output
     save_negative_samples: true     # save generated negative samples in the output
+    save_community_info: true       # save community labels and metrics

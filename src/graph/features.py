@@ -362,68 +362,166 @@ def compute_link_prediction_features(
     # Get all node pairs
     node_pairs = list(itertools.combinations(range(n_nodes), 2))
 
-    # Compute each requested feature
+    # Basic topological features
     if "common_neighbors" in feature_types:
-        features["common_neighbors"] = np.array(
+        cn_values = np.array(
             [len(list(nx.common_neighbors(G, u, v))) for u, v in node_pairs]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        )
+        max_cn = max(cn_values) if len(cn_values) > 0 else 1
+        features["common_neighbors"] = (cn_values / max_cn).reshape(-1, 1)
 
     if "jaccard" in feature_types:
         features["jaccard"] = np.array(
             [nx.jaccard_coefficient(G, [(u, v)]).__next__()[2] for u, v in node_pairs]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
 
     if "adamic_adar" in feature_types:
-        features["adamic_adar"] = np.array(
+        aa_values = np.array(
             [nx.adamic_adar_index(G, [(u, v)]).__next__()[2] for u, v in node_pairs]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
-
-    if "preferential_attachment" in feature_types:
-        features["preferential_attachment"] = np.array(
-            [
-                nx.preferential_attachment(G, [(u, v)]).__next__()[2]
-                for u, v in node_pairs
-            ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        )
+        max_aa = max(aa_values) if len(aa_values) > 0 else 1
+        features["adamic_adar"] = (aa_values / max_aa).reshape(-1, 1)
 
     if "resource_allocation" in feature_types:
-        features["resource_allocation"] = np.array(
+        ra_values = np.array(
             [
                 nx.resource_allocation_index(G, [(u, v)]).__next__()[2]
                 for u, v in node_pairs
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        )
+        max_ra = max(ra_values) if len(ra_values) > 0 else 1
+        features["resource_allocation"] = (ra_values / max_ra).reshape(-1, 1)
+
+    # Degree-based features
+    if "preferential_attachment" in feature_types:
+        pa_values = np.array(
+            [
+                nx.preferential_attachment(G, [(u, v)]).__next__()[2]
+                for u, v in node_pairs
+            ]
+        )
+        max_pa = max(pa_values) if len(pa_values) > 0 else 1
+        features["preferential_attachment"] = (pa_values / max_pa).reshape(-1, 1)
 
     if "degree_similarity" in feature_types:
         degrees = dict(G.degree())
+        max_degree = max(degrees.values())
         features["degree_similarity"] = np.array(
             [
-                abs(degrees[u] - degrees[v]) / max(degrees[u] + degrees[v], 1)
+                1 - abs(degrees[u] / max_degree - degrees[v] / max_degree)
                 for u, v in node_pairs
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
 
-    if "community_similarity" in feature_types and community_labels is not None:
-        features["community_similarity"] = np.array(
+    if "degree_product" in feature_types:
+        degrees = dict(G.degree())
+        max_degree = max(degrees.values())
+        features["degree_product"] = np.array(
             [
-                1.0 if community_labels[u] == community_labels[v] else 0.0
+                (degrees[u] * degrees[v]) / (max_degree * max_degree)
                 for u, v in node_pairs
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
+
+    # Path-based features
+    if "shortest_path" in feature_types:
+        G_undir = G.to_undirected()
+        path_lengths = np.array(
+            [
+                (
+                    -1
+                    if not nx.has_path(G_undir, u, v)
+                    else nx.shortest_path_length(G_undir, u, v)
+                )
+                for u, v in node_pairs
+            ]
+        )
+        # Replace -1 with max path length + 1
+        max_length = max(l for l in path_lengths if l != -1)
+        path_lengths[path_lengths == -1] = max_length + 1
+        # Normalize to [0,1] where 1 means closest
+        features["shortest_path"] = (max_length + 1 - path_lengths).reshape(-1, 1) / (
+            max_length + 1
+        )
+
+    # Local clustering features
+    if "clustering_coefficient" in feature_types:
+        clustering = nx.clustering(G)
+        features["clustering_coefficient"] = np.array(
+            [(clustering[u] + clustering[v]) / 2 for u, v in node_pairs]
+        ).reshape(-1, 1)
+
+    # Community-based features
+    if community_labels is not None:
+        if "community_similarity" in feature_types:
+            features["community_similarity"] = np.array(
+                [
+                    1.0 if community_labels[u] == community_labels[v] else 0.0
+                    for u, v in node_pairs
+                ]
+            ).reshape(-1, 1)
+
+        if "block_membership" in feature_types:
+            n_communities = len(np.unique(community_labels))
+            membership = np.zeros((len(node_pairs), n_communities * 2))
+            for i, (u, v) in enumerate(node_pairs):
+                membership[i, community_labels[u]] = 1
+                membership[i, n_communities + community_labels[v]] = 1
+            features["block_membership"] = membership
+
+        if "community_edge_density" in feature_types:
+            n_communities = len(np.unique(community_labels))
+            density_matrix = np.zeros((n_communities, n_communities))
+
+            for i in range(n_communities):
+                for j in range(i, n_communities):
+                    nodes_i = np.where(community_labels == i)[0]
+                    nodes_j = np.where(community_labels == j)[0]
+                    edges = list(nx.edge_boundary(G, nodes_i, nodes_j))
+                    max_edges = (
+                        len(nodes_i) * len(nodes_j)
+                        if i != j
+                        else len(nodes_i) * (len(nodes_i) - 1) / 2
+                    )
+                    density_matrix[i, j] = density_matrix[j, i] = (
+                        len(edges) / max_edges if max_edges > 0 else 0
+                    )
+
+            features["community_edge_density"] = np.array(
+                [
+                    density_matrix[community_labels[u], community_labels[v]]
+                    for u, v in node_pairs
+                ]
+            ).reshape(-1, 1)
+
+        if "community_role" in feature_types:
+            internal_edges = np.zeros(G.number_of_nodes())
+            external_edges = np.zeros(G.number_of_nodes())
+
+            for node in G.nodes():
+                comm = community_labels[node]
+                for neighbor in G.neighbors(node):
+                    if community_labels[neighbor] == comm:
+                        internal_edges[node] += 1
+                    else:
+                        external_edges[node] += 1
+
+            # Normalize by community size
+            for comm in range(len(np.unique(community_labels))):
+                comm_nodes = np.where(community_labels == comm)[0]
+                comm_size = len(comm_nodes)
+                if comm_size > 1:
+                    internal_edges[comm_nodes] /= comm_size - 1
+                if G.number_of_nodes() - comm_size > 0:
+                    external_edges[comm_nodes] /= G.number_of_nodes() - comm_size
+
+            features["internal_external_ratio"] = np.array(
+                [
+                    (internal_edges[u] + internal_edges[v])
+                    / (external_edges[u] + external_edges[v] + 1e-6)
+                    for u, v in node_pairs
+                ]
+            ).reshape(-1, 1)
 
     return features
 
@@ -459,15 +557,22 @@ def compute_temporal_link_features(
                 [1 if g.has_edge(u, v) else 0 for u, v in node_pairs]
             )
 
-        # Compute features using sliding windows
+        # Link frequency
         result["link_frequency"] = np.array(
             [
                 np.mean(link_history[max(0, t - window_size) : t + 1], axis=0)
                 for t in range(len(graphs))
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
+
+        # Link persistence
+        result["link_persistence"] = np.array(
+            [
+                np.sum(link_history[max(0, t - window_size) : t + 1], axis=0)
+                / window_size
+                for t in range(len(graphs))
+            ]
+        ).reshape(-1, 1)
 
         # Common neighbor history
         cn_history = np.zeros((len(graphs), n_pairs))
@@ -481,9 +586,45 @@ def compute_temporal_link_features(
                 np.mean(cn_history[max(0, t - window_size) : t + 1], axis=0)
                 for t in range(len(graphs))
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
+
+        # Rate of change in common neighbors
+        cn_change = np.zeros((len(graphs), n_pairs))
+        for t in range(1, len(graphs)):
+            cn_change[t] = cn_history[t] - cn_history[t - 1]
+
+        result["cn_change_rate"] = np.array(
+            [
+                np.mean(cn_change[max(0, t - window_size) : t + 1], axis=0)
+                for t in range(len(graphs))
+            ]
+        ).reshape(-1, 1)
+
+        # Degree correlation history
+        degree_corr = np.zeros((len(graphs), n_pairs))
+        for t, g in enumerate(graphs):
+            degrees = dict(g.degree())
+            max_degree = max(degrees.values()) if degrees else 1
+            # Only compute for valid node pairs (excluding self-loops)
+            if node_pairs is None:
+                node_pairs = [
+                    (u, v)
+                    for u in range(g.number_of_nodes())
+                    for v in range(u + 1, g.number_of_nodes())
+                ]
+            degree_corr[t] = np.array(
+                [
+                    degrees[u] * degrees[v] / (max_degree * max_degree)
+                    for u, v in node_pairs
+                ]
+            )
+
+        result["degree_correlation"] = np.array(
+            [
+                np.mean(degree_corr[max(0, t - window_size) : t + 1], axis=0)
+                for t in range(len(graphs))
+            ]
+        ).reshape(-1, 1)
 
         # Temporal stability (variance in link presence)
         result["temporal_stability"] = np.array(
@@ -491,9 +632,7 @@ def compute_temporal_link_features(
                 1 - np.var(link_history[max(0, t - window_size) : t + 1], axis=0)
                 for t in range(len(graphs))
             ]
-        ).reshape(
-            -1, 1
-        )  # Reshape to 2D
+        ).reshape(-1, 1)
 
         logger.info("Temporal feature computation complete")
         return result
@@ -559,3 +698,254 @@ def normalize_features(
             normalized[feat_name] = feat_matrix
 
     return normalized
+
+
+def compute_community_features(
+    graphs: List[np.ndarray], community_labels: np.ndarray, feature_types: List[str]
+) -> Dict[str, np.ndarray]:
+    """Compute community-based features for link prediction.
+
+    Args:
+        graphs: List of adjacency matrices
+        community_labels: Array of community labels for each node
+        feature_types: List of community feature types to compute
+
+    Returns:
+        Dictionary mapping feature names to feature matrices
+    """
+    if not graphs or community_labels is None:
+        raise ValueError("Empty graph sequence or missing community labels")
+
+    features = {}
+    n_nodes = graphs[0].shape[0]
+    node_pairs = list(itertools.combinations(range(n_nodes), 2))
+
+    if "community_similarity" in feature_types:
+        # Binary indicator of whether nodes belong to same community
+        features["community_similarity"] = np.array(
+            [
+                1.0 if community_labels[u] == community_labels[v] else 0.0
+                for u, v in node_pairs
+            ]
+        ).reshape(-1, 1)
+
+    if "block_membership" in feature_types:
+        # One-hot encoding of community membership for each node pair
+        n_communities = len(np.unique(community_labels))
+        membership = np.zeros((len(node_pairs), n_communities * 2))
+
+        for i, (u, v) in enumerate(node_pairs):
+            membership[i, community_labels[u]] = 1
+            membership[i, n_communities + community_labels[v]] = 1
+
+        features["block_membership"] = membership
+
+    return features
+
+
+def _get_positive_edges(
+    graphs: List[np.ndarray], min_degree: int = 0, preserve_connectivity: bool = True
+) -> np.ndarray:
+    """Extract positive edges from graph sequence while preserving constraints.
+
+    Args:
+        graphs: List of adjacency matrices
+        min_degree: Minimum node degree to maintain
+        preserve_connectivity: Whether to preserve graph connectivity
+
+    Returns:
+        Array of positive edge pairs
+    """
+    G = nx.from_numpy_array(graphs[0])
+    edges = list(G.edges())
+
+    # Convert edges to tuples if they aren't already
+    edges = [tuple(sorted((u, v))) for u, v in edges]
+
+    if not preserve_connectivity:
+        # If not preserving connectivity, return all edges meeting degree constraint
+        if min_degree > 0:
+            valid_edges = []
+            degrees = dict(G.degree())
+            for u, v in edges:
+                if degrees[u] > min_degree and degrees[v] > min_degree:
+                    valid_edges.append((u, v))
+            return np.array(valid_edges)
+        return np.array(edges)
+
+    # If preserving connectivity, find a spanning tree first
+    spanning_tree = list(nx.minimum_spanning_edges(G, data=False))
+    # Convert spanning tree edges to tuples and sort nodes within each edge
+    spanning_tree = [tuple(sorted((u, v))) for u, v in spanning_tree]
+
+    # Convert to sets for set difference operation
+    remaining_edges = list(set(edges) - set(spanning_tree))
+
+    # Add remaining edges that maintain minimum degree
+    if min_degree > 0:
+        degrees = dict(G.degree())
+        valid_edges = spanning_tree + [
+            (u, v)
+            for u, v in remaining_edges
+            if degrees[u] > min_degree and degrees[v] > min_degree
+        ]
+        return np.array(valid_edges)
+
+    return np.array(spanning_tree + remaining_edges)
+
+
+def _generate_negative_samples(
+    graphs: List[np.ndarray],
+    positive_edges: np.ndarray,
+    ratio: float = 1.0,
+    strategy: str = "random",
+    hard_negative: bool = False,
+    community_labels: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Generate negative samples for link prediction."""
+    G = nx.from_numpy_array(graphs[0])
+    n_nodes = G.number_of_nodes()
+    n_neg_samples = int(len(positive_edges) * ratio)
+
+    # Get all possible edges and remove existing ones
+    all_edges = set((u, v) for u, v in itertools.combinations(range(n_nodes), 2))
+    existing_edges = set(map(tuple, positive_edges))
+    candidate_edges = list(all_edges - existing_edges)
+
+    if hard_negative and strategy != "community_based":
+        # Get feature similarity for candidate edges
+        similarities = []
+        for u, v in candidate_edges:
+            # Compute similarity based on common neighbors and degrees
+            cn = len(list(nx.common_neighbors(G, u, v)))
+            degrees = dict(G.degree())
+            deg_sim = min(degrees[u], degrees[v]) / max(degrees[u], degrees[v])
+            similarities.append(cn * deg_sim)  # Combine both metrics
+
+        # Select edges with highest similarity as hard negatives
+        similarities = np.array(similarities)
+        indices = np.argsort(similarities)[-n_neg_samples:]
+        return np.array([candidate_edges[i] for i in indices])
+
+    elif strategy == "degree_based":
+        # Sample based on node degrees (prefer high-degree nodes)
+        degrees = dict(G.degree())
+        weights = [degrees[u] * degrees[v] for u, v in candidate_edges]
+        weights = np.array(weights) / sum(weights)
+        indices = np.random.choice(len(candidate_edges), n_neg_samples, p=weights)
+        return np.array([candidate_edges[i] for i in indices])
+
+    elif strategy == "community_based" and community_labels is not None:
+        # Sample from same and different communities
+        same_community = []
+        diff_community = []
+
+        for u, v in candidate_edges:
+            if community_labels[u] == community_labels[v]:
+                same_community.append((u, v))
+            else:
+                diff_community.append((u, v))
+
+        # Sample half from same community, half from different
+        n_same = n_neg_samples // 2
+        n_diff = n_neg_samples - n_same
+
+        same_indices = np.random.choice(len(same_community), n_same, replace=False)
+        diff_indices = np.random.choice(len(diff_community), n_diff, replace=False)
+
+        return np.array(
+            [
+                *[same_community[i] for i in same_indices],
+                *[diff_community[i] for i in diff_indices],
+            ]
+        )
+
+    else:
+        # Default to random sampling
+        indices = np.random.choice(len(candidate_edges), n_neg_samples, replace=False)
+        return np.array([candidate_edges[i] for i in indices])
+
+
+def _split_edges(
+    positive_edges: np.ndarray,
+    negative_edges: np.ndarray,
+    method: str = "random",
+    community_labels: Optional[np.ndarray] = None,
+) -> Dict[str, np.ndarray]:
+    """Split edges into train/val/test sets."""
+    n_pos = len(positive_edges)
+    n_neg = len(negative_edges)
+
+    if method == "temporal":
+        # Split based on temporal order
+        timestamps = range(len(positive_edges))
+        train_idx = timestamps[: int(0.7 * len(timestamps))]
+        val_idx = timestamps[int(0.7 * len(timestamps)) : int(0.85 * len(timestamps))]
+        test_idx = timestamps[int(0.85 * len(timestamps)) :]
+
+        pos_train = positive_edges[train_idx]
+        pos_val = positive_edges[val_idx]
+        pos_test = positive_edges[test_idx]
+
+        neg_train = negative_edges[train_idx]
+        neg_val = negative_edges[val_idx]
+        neg_test = negative_edges[test_idx]
+
+    elif method == "community_based" and community_labels is not None:
+        # Split while preserving community structure
+        same_comm_pos = []
+        diff_comm_pos = []
+        same_comm_neg = []
+        diff_comm_neg = []
+
+        for u, v in positive_edges:
+            if community_labels[u] == community_labels[v]:
+                same_comm_pos.append((u, v))
+            else:
+                diff_comm_pos.append((u, v))
+
+        for u, v in negative_edges:
+            if community_labels[u] == community_labels[v]:
+                same_comm_neg.append((u, v))
+            else:
+                diff_comm_neg.append((u, v))
+
+        def split_array(arr):
+            n = len(arr)
+            return (
+                arr[: int(0.7 * n)],
+                arr[int(0.7 * n) : int(0.85 * n)],
+                arr[int(0.85 * n) :],
+            )
+
+        same_pos_train, same_pos_val, same_pos_test = split_array(same_comm_pos)
+        diff_pos_train, diff_pos_val, diff_pos_test = split_array(diff_comm_pos)
+        same_neg_train, same_neg_val, same_neg_test = split_array(same_comm_neg)
+        diff_neg_train, diff_neg_val, diff_neg_test = split_array(diff_comm_neg)
+
+        pos_train = np.array(same_pos_train + diff_pos_train)
+        pos_val = np.array(same_pos_val + diff_pos_val)
+        pos_test = np.array(same_pos_test + diff_pos_test)
+
+        neg_train = np.array(same_neg_train + diff_neg_train)
+        neg_val = np.array(same_neg_val + diff_neg_val)
+        neg_test = np.array(same_neg_test + diff_neg_test)
+
+    else:
+        # Random split
+        pos_indices = np.random.permutation(n_pos)
+        neg_indices = np.random.permutation(n_neg)
+
+        pos_train = positive_edges[pos_indices[: int(0.7 * n_pos)]]
+        pos_val = positive_edges[pos_indices[int(0.7 * n_pos) : int(0.85 * n_pos)]]
+        pos_test = positive_edges[pos_indices[int(0.85 * n_pos) :]]
+
+        neg_train = negative_edges[neg_indices[: int(0.7 * n_neg)]]
+        neg_val = negative_edges[neg_indices[int(0.7 * n_neg) : int(0.85 * n_neg)]]
+        neg_test = negative_edges[neg_indices[int(0.85 * n_neg) :]]
+
+    return {
+        "train": {"positive": pos_train, "negative": neg_train},
+        "val": {"positive": pos_val, "negative": neg_val},
+        "test": {"positive": pos_test, "negative": neg_test},
+    }

@@ -1,463 +1,489 @@
-"""Dataset Inspector for Link Prediction Datasets
+"""
+Dataset Inspector for Link Prediction Data
 
-This module provides tools to analyze and visualize datasets generated for link prediction:
-- Visualize graph sequences and their changes
-- Analyze feature distributions and correlations
-- Verify change points and community structure
-- Profile dataset statistics and balance
+This script provides functionality to inspect and analyze the generated link prediction dataset:
+- Visualize graph sequences and their features
+- Analyze community structure and link prediction data
+- Plot feature distributions and correlations
+- Verify data splits and sampling strategies
 """
 
-import h5py
+import os
+import json
+import logging
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Dict, List, Tuple, Optional
-import logging
-from pathlib import Path
-import pandas as pd
-from scipy import stats
-from sklearn.feature_selection import mutual_info_regression
+from typing import Dict, List, Optional, Tuple, Union
+import h5py
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
 class DatasetInspector:
-    """Inspector for analyzing link prediction datasets"""
+    """Class for inspecting and analyzing the link prediction dataset"""
 
     def __init__(self, dataset_path: str):
-        """Initialize with path to HDF5 dataset"""
+        """Initialize with path to dataset file"""
         self.dataset_path = dataset_path
-        self.splits = ["train", "val", "test"]
+        self._load_dataset()
 
-    def load_dataset(self) -> None:
-        """Load dataset and basic statistics"""
-        with h5py.File(self.dataset_path, "r") as f:
-            self.config = self._load_config(f)
-            self.stats = self._compute_basic_stats(f)
+    def _load_dataset(self):
+        """Load dataset from HDF5 file"""
+        try:
+            self.data = h5py.File(self.dataset_path, "r")
+            logger.info(f"Successfully loaded dataset from {self.dataset_path}")
 
-    def _load_config(self, f: h5py.File) -> Dict:
-        """Load configuration from dataset"""
-        config = {}
-        config_group = f["config"]
+            # Load global metadata
+            self.num_sequences = self.data["metadata"].attrs["num_sequences"]
+            self.sequence_length = self.data["metadata"].attrs["sequence_length"]
+            self.num_nodes = self.data["metadata"].attrs["num_nodes"]
+            self.config = json.loads(self.data["metadata"].attrs["config"])
 
-        for key in config_group.attrs.keys():
-            config[key] = config_group.attrs[key]
+            logger.info(f"Dataset contains {self.num_sequences} sequences")
+            logger.info(f"Each sequence has {self.sequence_length} timesteps")
+            logger.info(f"Each graph has {self.num_nodes} nodes")
 
-        for group_name in config_group.keys():
-            config[group_name] = {}
-            group = config_group[group_name]
+        except Exception as e:
+            logger.error(f"Failed to load dataset: {str(e)}")
+            raise
 
-            for key in group.attrs.keys():
-                config[group_name][key] = group.attrs[key]
+    def plot_graph_sequence(
+        self,
+        sequence_idx: int,
+        timesteps: Optional[List[int]] = None,
+        with_communities: bool = True,
+        layout: str = "spring",
+    ) -> None:
+        """Plot graphs from a sequence at specified timesteps.
 
-            for subgroup_name in group.keys():
-                config[group_name][subgroup_name] = {}
-                subgroup = group[subgroup_name]
-                for key in subgroup.attrs.keys():
-                    config[group_name][subgroup_name][key] = subgroup.attrs[key]
+        Args:
+            sequence_idx: Index of the sequence to plot
+            timesteps: List of timesteps to plot. If None, plots evenly spaced timesteps
+            with_communities: Whether to color nodes by community
+            layout: Graph layout algorithm ('spring' or 'circular')
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
+            if timesteps is None:
+                # Select 4 evenly spaced timesteps
+                timesteps = np.linspace(0, self.sequence_length - 1, 4, dtype=int)
 
-        return config
+            fig, axes = plt.subplots(1, len(timesteps), figsize=(5 * len(timesteps), 5))
+            if len(timesteps) == 1:
+                axes = [axes]
 
-    def _compute_basic_stats(self, f: h5py.File) -> Dict:
-        """Compute basic dataset statistics"""
-        stats = {
-            "num_sequences": {},
-            "avg_nodes": {},
-            "avg_edges": {},
-            "avg_density": {},
-            "avg_changes": {},
-            "feature_dims": {},
-        }
+            # Get community labels if available
+            community_labels = None
+            if (
+                with_communities
+                and "community_labels" in self.data[f"metadata/{seq_name}"]
+            ):
+                community_labels = self.data[f"metadata/{seq_name}/community_labels"][:]
 
-        for split in self.splits:
-            if split not in f:
-                continue
+            for ax, t in zip(axes, timesteps):
+                # Load adjacency matrix
+                adj_matrix = self.data[f"sequences/{seq_name}/graph_{t}"][:]
+                G = nx.from_numpy_array(adj_matrix)
 
-            split_group = f[split]
-            sequences = list(split_group.keys())
-            stats["num_sequences"][split] = len(sequences)
+                # Set layout
+                if layout == "spring":
+                    pos = nx.spring_layout(G)
+                else:
+                    pos = nx.circular_layout(G)
 
-            nodes = []
-            edges = []
-            densities = []
-            changes = []
-
-            for seq_name in sequences:
-                seq = split_group[seq_name]
-                adj_matrices = seq["adjacency"][:]
-
-                # Compute graph statistics
-                nodes.append(adj_matrices.shape[1])
-                edges.append(np.sum(adj_matrices, axis=(1, 2)) / 2)
-                densities.append(edges[-1] / (nodes[-1] * (nodes[-1] - 1) / 2))
-
-                # Count changes
-                changes.append(len(seq["change_points"]))
-
-                # Get feature dimensions if not already recorded
-                if split not in stats["feature_dims"]:
-                    stats["feature_dims"][split] = {
-                        name: data.shape for name, data in seq["features"].items()
-                    }
-
-            stats["avg_nodes"][split] = np.mean(nodes)
-            stats["avg_edges"][split] = np.mean(edges)
-            stats["avg_density"][split] = np.mean(densities)
-            stats["avg_changes"][split] = np.mean(changes)
-
-        return stats
-
-    def plot_graph_statistics(self, split: str = "train") -> None:
-        """Plot graph statistics over time for a random sequence"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-            seq_name = np.random.choice(list(split_group.keys()))
-            seq = split_group[seq_name]
-
-            adj_matrices = seq["adjacency"][:]
-            change_points = seq["change_points"][:]
-
-            # Compute statistics over time
-            edges = np.sum(adj_matrices, axis=(1, 2)) / 2
-            density = edges / (adj_matrices.shape[1] * (adj_matrices.shape[1] - 1) / 2)
-
-            # Plot
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-
-            # Edge count
-            ax1.plot(edges, label="Edge Count")
-            ax1.set_title(f"Edge Count Over Time - {seq_name}")
-            for cp in change_points:
-                ax1.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
-            ax1.legend()
-
-            # Density
-            ax2.plot(density, label="Density")
-            ax2.set_title("Graph Density Over Time")
-            for cp in change_points:
-                ax2.axvline(x=cp, color="r", linestyle="--", alpha=0.5)
-            ax2.legend()
+                # Draw graph
+                if community_labels is not None:
+                    nx.draw_networkx_nodes(
+                        G,
+                        pos,
+                        node_color=community_labels,
+                        cmap=plt.cm.tab20,
+                        node_size=100,
+                        ax=ax,
+                    )
+                else:
+                    nx.draw_networkx_nodes(
+                        G, pos, node_color="lightblue", node_size=100, ax=ax
+                    )
+                nx.draw_networkx_edges(G, pos, alpha=0.2, ax=ax)
+                ax.set_title(f"t = {t}")
 
             plt.tight_layout()
             plt.show()
+
+        except Exception as e:
+            logger.error(f"Failed to plot graph sequence: {str(e)}")
+            raise
 
     def plot_feature_distributions(
-        self, split: str = "train", sample_size: int = 1000
+        self, sequence_idx: int, features: Optional[List[str]] = None
     ) -> None:
-        """Plot distributions of features"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-            seq_name = np.random.choice(list(split_group.keys()))
-            seq = split_group[seq_name]
+        """Plot distributions of link prediction features.
 
-            features = seq["features"]
-            feature_names = list(features.keys())
+        Args:
+            sequence_idx: Index of the sequence to analyze
+            features: List of feature names to plot. If None, plots all features
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
 
-            # Sample random indices
-            n_samples = min(sample_size, features[feature_names[0]].shape[0])
-            indices = np.random.choice(features[feature_names[0]].shape[0], n_samples)
+            # Get available features
+            if features is None:
+                features = list(self.data[f"features/{seq_name}"].keys())
 
-            # Create subplot grid
-            n_features = len(feature_names)
-            n_cols = 3
+            # Calculate grid dimensions
+            n_features = len(features)
+            n_cols = min(3, n_features)
             n_rows = (n_features + n_cols - 1) // n_cols
 
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
-            axes = axes.flatten()
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
+            if n_rows == 1 and n_cols == 1:
+                axes = np.array([[axes]])
+            elif n_rows == 1 or n_cols == 1:
+                axes = axes.reshape(-1, 1) if n_cols == 1 else axes.reshape(1, -1)
 
-            for i, feat_name in enumerate(feature_names):
-                feat_data = features[feat_name][:][indices].flatten()
+            for idx, feature in enumerate(features):
+                row, col = idx // n_cols, idx % n_cols
+                ax = axes[row, col]
 
-                # Check if feature has variance
-                if np.std(feat_data) < 1e-10:
-                    # For zero-variance features, just show the value
-                    axes[i].text(
-                        0.5,
-                        0.5,
-                        f"Constant value: {feat_data[0]:.3f}",
-                        horizontalalignment="center",
-                        verticalalignment="center",
-                        transform=axes[i].transAxes,
-                    )
-                    axes[i].set_xticks([])
-                    axes[i].set_yticks([])
-                else:
-                    try:
-                        # Try to plot with KDE
-                        sns.histplot(feat_data, kde=True, ax=axes[i])
-                    except (np.linalg.LinAlgError, ValueError):
-                        # Fallback to simple histogram if KDE fails
-                        sns.histplot(feat_data, kde=False, ax=axes[i])
+                # Load feature data
+                feature_data = self.data[f"features/{seq_name}/{feature}"][:]
 
-                axes[i].set_title(f"{feat_name} Distribution")
+                # Plot distribution
+                if feature_data.ndim > 1 and feature_data.shape[1] > 1:
+                    # For multi-dimensional features, plot mean across dimensions
+                    feature_data = np.mean(feature_data, axis=1)
+
+                sns.histplot(feature_data, ax=ax)
+                ax.set_title(feature)
+                ax.set_xlabel("Value")
+                ax.set_ylabel("Count")
 
             # Remove empty subplots
-            for i in range(n_features, len(axes)):
-                fig.delaxes(axes[i])
+            for idx in range(n_features, n_rows * n_cols):
+                row, col = idx // n_cols, idx % n_cols
+                fig.delaxes(axes[row, col])
 
             plt.tight_layout()
             plt.show()
 
-    def plot_change_point_analysis(self, split: str = "train") -> None:
-        """Analyze and visualize change points"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
+        except Exception as e:
+            logger.error(f"Failed to plot feature distributions: {str(e)}")
+            raise
 
-            # Collect change point statistics
-            segment_lengths = []
-            num_changes = []
+    def analyze_link_prediction_data(self, sequence_idx: int) -> None:
+        """Analyze link prediction data for a sequence.
 
-            for seq_name in split_group.keys():
-                seq = split_group[seq_name]
-                change_points = list(seq["change_points"][:])
-                num_changes.append(len(change_points))
+        Args:
+            sequence_idx: Index of the sequence to analyze
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
 
-                # Calculate segment lengths
-                prev_point = 0
-                for cp in change_points + [seq["adjacency"].shape[0]]:
-                    segment_lengths.append(cp - prev_point)
-                    prev_point = cp
+            # Get link prediction data
+            lp_data = self.data[f"link_prediction/{seq_name}"]
 
-            # Plot distributions
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            # Print statistics for each split
+            for split in ["train", "val", "test"]:
+                split_data = lp_data[split]
+                n_pos = len(split_data["positive"])
+                n_neg = len(split_data["negative"])
 
-            # Number of changes
-            sns.histplot(num_changes, ax=ax1)
-            ax1.set_title("Distribution of Number of Changes")
-            ax1.set_xlabel("Number of Changes")
+                print(f"\n{split.upper()} Split:")
+                print(f"Positive edges: {n_pos}")
+                print(f"Negative edges: {n_neg}")
+                print(f"Positive/Negative ratio: {n_pos/n_neg:.2f}")
 
-            # Segment lengths
-            sns.histplot(segment_lengths, ax=ax2)
-            ax2.set_title("Distribution of Segment Lengths")
-            ax2.set_xlabel("Segment Length")
+            # Analyze community-based edge distribution if available
+            if "community_labels" in self.data[f"metadata/{seq_name}"]:
+                community_labels = self.data[f"metadata/{seq_name}/community_labels"][:]
+                n_communities = len(np.unique(community_labels))
 
-            plt.tight_layout()
-            plt.show()
+                print("\nCommunity-based Edge Distribution:")
+                for split in ["train", "val", "test"]:
+                    split_data = lp_data[split]
+                    pos_edges = split_data["positive"][:]
 
-    def plot_community_structure(self, split: str = "train") -> None:
-        """Visualize community structure of a random graph"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-            seq_name = np.random.choice(list(split_group.keys()))
-            seq = split_group[seq_name]
+                    # Count intra-community and inter-community edges
+                    intra_comm = sum(
+                        community_labels[u] == community_labels[v] for u, v in pos_edges
+                    )
+                    inter_comm = len(pos_edges) - intra_comm
 
-            # Get first adjacency matrix and community labels
-            adj_matrix = seq["adjacency"][0]
-            community_labels = seq["metadata/community_labels"][:]
+                    print(f"\n{split.upper()} Split:")
+                    print(
+                        f"Intra-community edges: {intra_comm} ({intra_comm/len(pos_edges):.2%})"
+                    )
+                    print(
+                        f"Inter-community edges: {inter_comm} ({inter_comm/len(pos_edges):.2%})"
+                    )
 
-            # Create graph
+        except Exception as e:
+            logger.error(f"Failed to analyze link prediction data: {str(e)}")
+            raise
+
+    def plot_community_structure(self, sequence_idx: int, timestep: int = 0) -> None:
+        """Visualize community structure of a graph.
+
+        Args:
+            sequence_idx: Index of the sequence to analyze
+            timestep: Timestep to visualize
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
+
+            # Load graph and community labels
+            adj_matrix = self.data[f"sequences/{seq_name}/graph_{timestep}"][:]
+            community_labels = self.data[f"metadata/{seq_name}/community_labels"][:]
+
             G = nx.from_numpy_array(adj_matrix)
-
-            # Plot
-            plt.figure(figsize=(10, 10))
             pos = nx.spring_layout(G)
+
+            plt.figure(figsize=(12, 8))
+
+            # Draw nodes colored by community
             nx.draw_networkx_nodes(
-                G, pos, node_color=community_labels, cmap=plt.cm.tab20
+                G, pos, node_color=community_labels, cmap=plt.cm.tab20, node_size=100
             )
             nx.draw_networkx_edges(G, pos, alpha=0.2)
-            plt.title(f"Community Structure - {seq_name}")
+
+            # Add title with community statistics
+            n_communities = len(np.unique(community_labels))
+            plt.title(
+                f"Community Structure (t={timestep})\n"
+                f"Number of communities: {n_communities}"
+            )
+
             plt.show()
 
-    def print_dataset_summary(self) -> None:
-        """Print summary statistics of the dataset"""
-        print("\n=== Dataset Summary ===")
-        print(f"\nDataset path: {self.dataset_path}")
+            # Print community statistics
+            print("\nCommunity Statistics:")
+            for comm in range(n_communities):
+                size = np.sum(community_labels == comm)
+                print(
+                    f"Community {comm}: {size} nodes ({size/len(community_labels):.2%})"
+                )
 
-        print("\nSequence counts:")
-        for split, count in self.stats["num_sequences"].items():
-            print(f"  {split}: {count}")
+        except Exception as e:
+            logger.error(f"Failed to plot community structure: {str(e)}")
+            raise
 
-        print("\nAverage statistics per split:")
-        for split in self.splits:
-            if split in self.stats["num_sequences"]:
-                print(f"\n{split.upper()}:")
-                print(f"  Nodes: {self.stats['avg_nodes'][split]:.1f}")
-                print(f"  Edges: {self.stats['avg_edges'][split]:.1f}")
-                print(f"  Density: {self.stats['avg_density'][split]:.3f}")
-                print(f"  Changes: {self.stats['avg_changes'][split]:.1f}")
+    def plot_temporal_features(
+        self, sequence_idx: int, features: Optional[List[str]] = None
+    ) -> None:
+        """Plot temporal features over time.
 
-        print("\nFeature dimensions:")
-        for split, dims in self.stats["feature_dims"].items():
-            print(f"\n{split.upper()}:")
-            for feat, shape in dims.items():
-                print(f"  {feat}: {shape}")
+        Args:
+            sequence_idx: Index of the sequence to analyze
+            features: List of temporal features to plot. If None, plots all temporal features
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
 
-    def plot_feature_correlations(self, split: str = "train") -> None:
-        """Plot correlation matrix of features"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-            seq_name = np.random.choice(list(split_group.keys()))
-            seq = split_group[seq_name]
+            # Get temporal features
+            if features is None:
+                features = [
+                    f
+                    for f in self.data[f"features/{seq_name}"].keys()
+                    if any(f.startswith(p) for p in ["temporal_", "link_", "cn_"])
+                ]
 
-            # Get feature data
-            features = {}
-            for feat_name, feat_data in seq["features"].items():
-                features[feat_name] = feat_data[:]
+            if not features:
+                logger.warning("No temporal features found to plot")
+                return
 
-            # Create correlation matrix
-            feature_names = list(features.keys())
-            corr_matrix = np.zeros((len(feature_names), len(feature_names)))
+            # Plot features in batches to avoid memory issues
+            batch_size = 3  # Reduced batch size
+            for i in range(0, len(features), batch_size):
+                batch_features = features[i : i + batch_size]
+                n_features = len(batch_features)
 
-            for i, feat1 in enumerate(feature_names):
-                for j, feat2 in enumerate(feature_names):
-                    # Compute correlation only for features with same shape
-                    if features[feat1].shape == features[feat2].shape:
-                        corr_matrix[i, j] = np.corrcoef(
-                            features[feat1].flatten(), features[feat2].flatten()
-                        )[0, 1]
+                fig, axes = plt.subplots(n_features, 1, figsize=(10, 3 * n_features))
+                if n_features == 1:
+                    axes = [axes]
+
+                for ax, feature in zip(axes, batch_features):
+                    try:
+                        feature_data = self.data[f"features/{seq_name}/{feature}"][:]
+
+                        if feature_data.ndim > 1:
+                            # For high-dimensional data, downsample more aggressively
+                            if feature_data.shape[1] > 100:
+                                sample_size = min(100, feature_data.shape[1])
+                                sample_indices = np.linspace(
+                                    0, feature_data.shape[1] - 1, sample_size, dtype=int
+                                )
+                                feature_data = feature_data[:, sample_indices]
+
+                            # Compute statistics with reduced precision
+                            mean = np.mean(feature_data, axis=1)
+                            std = np.std(feature_data, axis=1)
+                            timesteps = np.arange(len(mean))
+
+                            # Plot with reduced number of points if sequence is long
+                            if len(timesteps) > 100:
+                                stride = len(timesteps) // 100
+                                timesteps = timesteps[::stride]
+                                mean = mean[::stride]
+                                std = std[::stride]
+
+                            # Plot mean line only first
+                            line = ax.plot(timesteps, mean, label="Mean", linewidth=1)[
+                                0
+                            ]
+                            color = line.get_color()
+
+                            # Then add fill_between with same color
+                            ax.fill_between(
+                                timesteps,
+                                mean - std,
+                                mean + std,
+                                color=color,
+                                alpha=0.1,
+                                label="±1 std",
+                            )
+                        else:
+                            # For 1D data, plot with reduced points if necessary
+                            if len(feature_data) > 100:
+                                stride = len(feature_data) // 100
+                                feature_data = feature_data[::stride]
+                                timesteps = np.arange(0, len(feature_data))
+                            else:
+                                timesteps = np.arange(len(feature_data))
+                            ax.plot(timesteps, feature_data, linewidth=1)
+
+                        ax.set_title(feature, fontsize=10)
+                        ax.set_xlabel("Timestep", fontsize=8)
+                        ax.set_ylabel("Value", fontsize=8)
+                        if feature_data.ndim > 1:
+                            ax.legend(loc="upper right", fontsize=8)
+
+                        # Set reasonable y-axis limits
+                        if feature_data.size > 0:
+                            percentiles = np.percentile(feature_data, [5, 95])
+                            margin = (percentiles[1] - percentiles[0]) * 0.1
+                            ax.set_ylim(
+                                percentiles[0] - margin, percentiles[1] + margin
+                            )
+
+                        # Reduce number of ticks
+                        ax.xaxis.set_major_locator(plt.MaxNLocator(6))
+                        ax.yaxis.set_major_locator(plt.MaxNLocator(6))
+
+                    except Exception as e:
+                        logger.error(f"Failed to plot feature {feature}: {str(e)}")
+                        ax.text(
+                            0.5,
+                            0.5,
+                            f"Failed to plot {feature}",
+                            ha="center",
+                            va="center",
+                            transform=ax.transAxes,
+                        )
+
+                plt.tight_layout()
+                plt.show()
+                plt.close("all")  # Close all figures to free memory
+
+        except Exception as e:
+            logger.error(f"Failed to plot temporal features: {str(e)}")
+            plt.close("all")  # Ensure all figures are closed in case of error
+            raise
+
+    def plot_feature_correlations(
+        self, sequence_idx: int, features: Optional[List[str]] = None
+    ) -> None:
+        """Plot correlation matrix of features.
+
+        Args:
+            sequence_idx: Index of the sequence to analyze
+            features: List of features to include. If None, uses all features
+        """
+        try:
+            seq_name = f"sequence_{sequence_idx}"
+
+            # Get features
+            if features is None:
+                features = list(self.data[f"features/{seq_name}"].keys())
+
+            # Collect and preprocess feature data
+            feature_data = []
+            valid_features = []
+            base_length = None
+
+            for feature in features:
+                try:
+                    data = self.data[f"features/{seq_name}/{feature}"][:]
+
+                    # Handle multi-dimensional features
+                    if data.ndim > 1:
+                        # For 2D data, take mean across second dimension
+                        data = np.mean(data, axis=1)
+
+                    # Ensure data is 1D
+                    data = np.ravel(data)
+
+                    # Set base length if not set
+                    if base_length is None:
+                        base_length = len(data)
+
+                    # Only include features with matching lengths
+                    if len(data) == base_length:
+                        feature_data.append(data)
+                        valid_features.append(feature)
                     else:
-                        corr_matrix[i, j] = np.nan
+                        logger.warning(
+                            f"Skipping feature '{feature}' due to shape mismatch. "
+                            f"Expected length {base_length}, got {len(data)}"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to process feature '{feature}': {str(e)}")
+
+            if not valid_features:
+                logger.warning("No valid features found for correlation analysis")
+                return
+
+            # Convert to numpy array and compute correlation matrix
+            feature_data = np.array(feature_data)
+            corr_matrix = np.corrcoef(feature_data)
 
             # Plot correlation matrix
             plt.figure(figsize=(12, 10))
+            mask = np.triu(np.ones_like(corr_matrix), k=1)  # Mask upper triangle
             sns.heatmap(
                 corr_matrix,
-                xticklabels=feature_names,
-                yticklabels=feature_names,
+                xticklabels=valid_features,
+                yticklabels=valid_features,
+                mask=mask,
                 annot=True,
+                fmt=".2f",
                 cmap="coolwarm",
+                center=0,
                 vmin=-1,
                 vmax=1,
-                center=0,
+                square=True,
             )
+
             plt.title("Feature Correlations")
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=45, ha="right")
+            plt.yticks(rotation=0)
             plt.tight_layout()
             plt.show()
+            plt.close("all")  # Close figure to free memory
 
-    def analyze_feature_importance(
-        self, split: str = "train", n_samples: int = 10000
-    ) -> None:
-        """Analyze feature importance using mutual information"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-            seq_name = np.random.choice(list(split_group.keys()))
-            seq = split_group[seq_name]
-
-            # Get feature data
-            features = {}
-            for feat_name, feat_data in seq["features"].items():
-                features[feat_name] = feat_data[:]
-
-            # Sample data points
-            feature_names = list(features.keys())
-            base_shape = features[feature_names[0]].shape[0]
-            n_samples = min(n_samples, base_shape)
-            indices = np.random.choice(base_shape, n_samples)
-
-            # Filter features with matching shape and create feature matrix
-            valid_features = []
-            feature_data = []
-
-            for feat in feature_names:
-                if features[feat].shape[0] == base_shape and feat != "link_frequency":
-                    valid_features.append(feat)
-                    feature_data.append(features[feat].flatten()[indices])
-
-            if not valid_features:
-                logger.warning("No valid features found for importance analysis")
-                return
-
-            X = np.column_stack(feature_data)
-
-            # Use link frequency as target
-            if "link_frequency" not in features:
-                logger.warning("Link frequency feature not found")
-                return
-
-            y = features["link_frequency"].flatten()[indices]
-
-            # Compute mutual information
-            mi_scores = mutual_info_regression(X, y)
-
-            # Create DataFrame with matched lengths
-            importance_df = pd.DataFrame(
-                {"Feature": valid_features, "Importance": mi_scores}
-            )
-
-            # Sort by importance
-            importance_df = importance_df.sort_values("Importance", ascending=True)
-
-            # Plot feature importance
-            plt.figure(figsize=(12, 6))
-            sns.barplot(data=importance_df, x="Importance", y="Feature")
-            plt.title("Feature Importance (Mutual Information)")
-            plt.tight_layout()
-            plt.show()
-
-    def analyze_community_structure(self, split: str = "train") -> None:
-        """Analyze community structure statistics"""
-        with h5py.File(self.dataset_path, "r") as f:
-            split_group = f[split]
-
-            community_sizes = []
-            intra_densities = []
-            inter_densities = []
-
-            for seq_name in list(split_group.keys())[:5]:  # Analyze first 5 sequences
-                seq = split_group[seq_name]
-                adj_matrix = seq["adjacency"][0]  # First timestep
-
-                try:
-                    community_labels = seq["metadata/community_labels"][:]
-                    unique_communities = np.unique(community_labels)
-
-                    # Analyze each community
-                    for comm in unique_communities:
-                        # Get community nodes
-                        comm_nodes = np.where(community_labels == comm)[0]
-                        community_sizes.append(len(comm_nodes))
-
-                        # Compute intra-community density
-                        intra_edges = adj_matrix[comm_nodes][:, comm_nodes]
-                        intra_density = np.sum(intra_edges) / (
-                            len(comm_nodes) * (len(comm_nodes) - 1)
-                        )
-                        intra_densities.append(intra_density)
-
-                        # Compute inter-community density
-                        other_nodes = np.where(community_labels != comm)[0]
-                        inter_edges = adj_matrix[comm_nodes][:, other_nodes]
-                        inter_density = np.sum(inter_edges) / (
-                            len(comm_nodes) * len(other_nodes)
-                        )
-                        inter_densities.append(inter_density)
-
-                except KeyError:
-                    logger.warning(f"Community labels not found for {seq_name}")
-                    continue
-
-            # Plot community statistics
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-
-            # Community sizes
-            sns.histplot(community_sizes, ax=ax1)
-            ax1.set_title("Distribution of Community Sizes")
-            ax1.set_xlabel("Community Size")
-
-            # Density comparison
-            data = pd.DataFrame(
-                {
-                    "Density": intra_densities + inter_densities,
-                    "Type": ["Intra-community"] * len(intra_densities)
-                    + ["Inter-community"] * len(inter_densities),
-                }
-            )
-            sns.boxplot(data=data, x="Type", y="Density", ax=ax2)
-            ax2.set_title("Community Density Comparison")
-
-            plt.tight_layout()
-            plt.show()
-
-            # Print statistics
-            print("\nCommunity Structure Statistics:")
-            print(f"Average community size: {np.mean(community_sizes):.1f}")
-            print(f"Average intra-community density: {np.mean(intra_densities):.3f}")
-            print(f"Average inter-community density: {np.mean(inter_densities):.3f}")
-            print(
-                f"Modularity ratio: {np.mean(intra_densities)/np.mean(inter_densities):.2f}"
-            )
+        except Exception as e:
+            logger.error(f"Failed to plot feature correlations: {str(e)}")
+            plt.close("all")  # Ensure figure is closed in case of error
+            raise
 
 
 def main():
@@ -465,36 +491,53 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Inspect link prediction dataset")
-    parser.add_argument("dataset_path", type=str, help="Path to HDF5 dataset file")
+    parser.add_argument(
+        "--dataset", type=str, required=True, help="Path to dataset file"
+    )
+    parser.add_argument(
+        "--sequence", type=int, default=0, help="Sequence index to analyze"
+    )
     args = parser.parse_args()
 
-    inspector = DatasetInspector(args.dataset_path)
-    inspector.load_dataset()
+    try:
+        inspector = DatasetInspector(args.dataset)
 
-    # Print dataset summary
-    inspector.print_dataset_summary()
+        # Basic dataset info
+        print("\n=== Dataset Information ===")
+        print(f"Number of sequences: {inspector.num_sequences}")
+        print(f"Sequence length: {inspector.sequence_length}")
+        print(f"Number of nodes: {inspector.num_nodes}")
 
-    print("\nGenerating visualizations...")
+        # Analyze sequence
+        print(f"\n=== Analyzing Sequence {args.sequence} ===")
 
-    # Basic visualizations
-    print("\n1. Graph Statistics")
-    inspector.plot_graph_statistics()
+        # Plot graph sequence
+        print("\nPlotting graph sequence...")
+        inspector.plot_graph_sequence(args.sequence)
 
-    print("\n2. Feature Distributions")
-    inspector.plot_feature_distributions()
+        # Plot community structure
+        print("\nPlotting community structure...")
+        inspector.plot_community_structure(args.sequence)
 
-    print("\n3. Change Point Analysis")
-    inspector.plot_change_point_analysis()
+        # Analyze link prediction data
+        print("\nAnalyzing link prediction data...")
+        inspector.analyze_link_prediction_data(args.sequence)
 
-    print("\n4. Community Structure")
-    inspector.plot_community_structure()
+        # Plot feature distributions
+        print("\nPlotting feature distributions...")
+        inspector.plot_feature_distributions(args.sequence)
 
-    print("\n5. Feature Analysis")
-    inspector.plot_feature_correlations()
-    inspector.analyze_feature_importance()
+        # Plot temporal features
+        print("\nPlotting temporal features...")
+        inspector.plot_temporal_features(args.sequence)
 
-    print("\n6. Community Analysis")
-    inspector.analyze_community_structure()
+        # Plot feature correlations
+        print("\nPlotting feature correlations...")
+        inspector.plot_feature_correlations(args.sequence)
+
+    except Exception as e:
+        logger.error(f"Dataset inspection failed: {str(e)}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

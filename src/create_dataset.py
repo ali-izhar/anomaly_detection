@@ -17,26 +17,49 @@ import yaml
 import h5py
 import numpy as np
 import networkx as nx
-from tqdm import tqdm
+import json
 
 from graph.generator import GraphGenerator
 from graph.features import (
     compute_link_prediction_features,
     compute_temporal_link_features,
     normalize_features,
+    _get_positive_edges,
+    _generate_negative_samples,
+    _split_edges,
 )
 from graph.params import SBMParams
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("dataset_generation.log"),
+        # logging.FileHandler("dataset_generation.log"),
         logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def _generate_sequence_worker(args: tuple) -> Dict:
+    """Worker function for parallel sequence generation.
+
+    Args:
+        args: Tuple containing (config, idx)
+            config: Configuration dictionary
+            idx: Sequence index (unused, but needed for pool.map)
+
+    Returns:
+        Generated sequence or None if generation failed
+    """
+    try:
+        config, _ = args
+        generator = DatasetGenerator(config)
+        return generator.generate_sequence()
+    except Exception as e:
+        logger.error(f"Failed to generate sequence: {str(e)}")
+        return None
 
 
 def generate_sbm_graph(n: int, sizes: List[int], p_in: float, p_out: float) -> nx.Graph:
@@ -75,10 +98,11 @@ class DatasetGenerator:
 
     def __init__(self, config_path: str):
         """Initialize with configuration file path"""
-        self.config = self._load_config(config_path)
+        if isinstance(config_path, str):
+            self.config = self._load_config(config_path)
+        else:
+            self.config = config_path  # For multiprocessing case
         self.graph_generator = GraphGenerator()
-
-        # Register SBM model
         self._register_sbm_model()
 
     def _register_sbm_model(self):
@@ -232,49 +256,185 @@ class DatasetGenerator:
             max_inter_prob=sbm_config["change_ranges"]["inter"]["max"],
         )
 
-    def _extract_features(
-        self, graphs: List[np.ndarray], metadata: Dict
-    ) -> Dict[str, np.ndarray]:
-        """Extract all specified features from graph sequence"""
-        features = {}
-        feature_types = self.config["features"]["types"]
+    def _extract_features(self, graphs: List[np.ndarray], metadata: Dict) -> Dict:
+        """Extract link prediction features from graph sequence.
 
-        # Extract static link prediction features
-        static_feature_types = [
-            ft
-            for ft in feature_types
-            if ft not in ["link_history", "temporal_stability", "cn_history"]
-        ]
+        Args:
+            graphs: List of adjacency matrices
+            metadata: Graph metadata including community labels
 
-        if static_feature_types:
+        Returns:
+            Dictionary of extracted features
+        """
+        try:
+            features = {}
+            # Handle both list and dict metadata formats
+            if isinstance(metadata, list):
+                # Use first metadata entry for community labels
+                community_labels = (
+                    metadata[0].get("community_labels") if metadata else None
+                )
+            else:
+                community_labels = metadata.get("community_labels")
+
+            feature_config = self.config["features"]
+            feature_types = feature_config["types"]
+
+            # Extract static link prediction features
             static_features = compute_link_prediction_features(
-                graphs,
-                feature_types=static_feature_types,
-                community_labels=(
-                    metadata.get("community_labels", None)
-                    if isinstance(metadata, dict)
-                    else None
-                ),
+                graphs=graphs,
+                feature_types=[
+                    ft for ft in feature_types if not ft.startswith("temporal_")
+                ],
+                community_labels=community_labels,
             )
             features.update(static_features)
 
-        # Extract temporal features if specified
-        temporal_feature_types = [
-            ft
-            for ft in feature_types
-            if ft in ["link_history", "temporal_stability", "cn_history"]
-        ]
-        if temporal_feature_types:
+            # Extract temporal features with configured window size
             temporal_features = compute_temporal_link_features(
-                graphs, window_size=3  # Use a reasonable default window size
+                graphs=graphs, window_size=feature_config.get("window_size", 3)
             )
             features.update(temporal_features)
 
-        # Normalize features if specified
-        if self.config["features"]["normalize"]:
-            features = normalize_features(features, method="standard")
+            # Normalize features if requested
+            if feature_config.get("normalize", True):
+                features = normalize_features(
+                    features,
+                    method=feature_config.get("normalization_method", "standard"),
+                )
 
-        return features
+            return features
+
+        except Exception as e:
+            logger.error(f"Feature extraction failed: {str(e)}")
+            raise RuntimeError(f"Feature extraction failed: {str(e)}") from e
+
+    def _generate_link_prediction_data(
+        self, graphs: List[np.ndarray], metadata: Dict
+    ) -> Dict:
+        """Generate link prediction data including train/val/test splits.
+
+        Args:
+            graphs: List of adjacency matrices
+            metadata: Graph metadata including community labels
+
+        Returns:
+            Dictionary containing edge splits and labels
+        """
+        try:
+            logger.info("Starting link prediction data generation...")
+            lp_config = self.config["link_prediction"]
+
+            # Debug metadata
+            logger.info(f"Metadata type: {type(metadata)}")
+            logger.info(f"Metadata content: {metadata}")
+
+            # Handle both list and dict metadata formats
+            if isinstance(metadata, list):
+                logger.info("Metadata is a list, using first entry")
+                # Use first metadata entry for community labels
+                community_labels = (
+                    metadata[0].get("community_labels") if metadata else None
+                )
+            else:
+                logger.info("Metadata is a dictionary")
+                community_labels = metadata.get("community_labels")
+
+            logger.info(
+                f"Community labels shape: {community_labels.shape if community_labels is not None else None}"
+            )
+
+            # Get positive edges while preserving constraints
+            logger.info("Getting positive edges...")
+            positive_edges = _get_positive_edges(
+                graphs=graphs,
+                min_degree=lp_config.get("min_positive_degree", 0),
+                preserve_connectivity=lp_config.get("preserve_connectivity", True),
+            )
+            logger.info(f"Positive edges shape: {positive_edges.shape}")
+            logger.info(f"Positive edges type: {type(positive_edges)}")
+            logger.info(f"First few positive edges: {positive_edges[:5]}")
+
+            # Convert edges to tuples to ensure they're hashable
+            logger.info("Converting positive edges to tuples...")
+            try:
+                positive_edges = [tuple(map(int, edge)) for edge in positive_edges]
+                positive_edges = np.array(positive_edges)
+                logger.info("Successfully converted positive edges to tuples")
+            except Exception as e:
+                logger.error(f"Failed to convert positive edges to tuples: {str(e)}")
+                raise
+
+            # Generate negative samples
+            logger.info("Generating negative samples...")
+            negative_edges = _generate_negative_samples(
+                graphs=graphs,
+                positive_edges=positive_edges,
+                ratio=lp_config.get("negative_sampling_ratio", 1.0),
+                strategy=lp_config.get("sampling_strategy", "random"),
+                hard_negative=lp_config.get("hard_negative", False),
+                community_labels=community_labels,
+            )
+            logger.info(f"Negative edges shape: {negative_edges.shape}")
+            logger.info(f"Negative edges type: {type(negative_edges)}")
+            logger.info(f"First few negative edges: {negative_edges[:5]}")
+
+            # Convert negative edges to tuples as well
+            logger.info("Converting negative edges to tuples...")
+            try:
+                negative_edges = [tuple(map(int, edge)) for edge in negative_edges]
+                negative_edges = np.array(negative_edges)
+                logger.info("Successfully converted negative edges to tuples")
+            except Exception as e:
+                logger.error(f"Failed to convert negative edges to tuples: {str(e)}")
+                raise
+
+            # Split edges into train/val/test sets
+            logger.info("Splitting edges...")
+            edge_splits = _split_edges(
+                positive_edges=positive_edges,
+                negative_edges=negative_edges,
+                method=lp_config.get("edge_split_method", "random"),
+                community_labels=(
+                    community_labels
+                    if lp_config.get("edge_split_method") == "community_based"
+                    else None
+                ),
+            )
+
+            # Convert all edges in splits back to arrays for saving
+            logger.info("Processing splits for saving...")
+            processed_splits = {}
+            for split_name, split_data in edge_splits.items():
+                logger.info(f"Processing {split_name} split...")
+                processed_splits[split_name] = {
+                    "positive": np.array(
+                        [list(edge) for edge in split_data["positive"]]
+                    ),
+                    "negative": np.array(
+                        [list(edge) for edge in split_data["negative"]]
+                    ),
+                }
+
+            result = {
+                "splits": processed_splits,
+                "metadata": {
+                    "num_positive": len(positive_edges),
+                    "num_negative": len(negative_edges),
+                    "sampling_strategy": lp_config.get("sampling_strategy"),
+                    "split_method": lp_config.get("edge_split_method"),
+                },
+            }
+            logger.info("Link prediction data generation completed successfully")
+            return result
+
+        except Exception as e:
+            logger.error(f"Link prediction data generation failed: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(f"Error details: {str(e)}", exc_info=True)
+            raise RuntimeError(
+                f"Link prediction data generation failed: {str(e)}"
+            ) from e
 
     def generate_sequence(self) -> Dict:
         """Generate a single sequence with features"""
@@ -285,29 +445,56 @@ class DatasetGenerator:
         # Extract features
         features = self._extract_features(sequence["graphs"], sequence["metadata"])
 
+        # Generate link prediction data
+        link_pred_data = self._generate_link_prediction_data(
+            sequence["graphs"], sequence["metadata"]
+        )
+
         return {
-            "adjacency": sequence["graphs"],
+            "graphs": sequence["graphs"],
             "features": features,
-            "change_points": sequence["change_points"],
+            "link_prediction": link_pred_data,
             "metadata": sequence["metadata"],
-            "params": params,
+            "change_points": sequence["change_points"],
         }
 
     def create_dataset(self) -> None:
         """Create and save the full dataset"""
         logger.info("Starting dataset generation...")
 
-        # Generate sequences
-        sequences = []
-        for i in tqdm(range(self.config["num_sequences"]), desc="Generating sequences"):
-            try:
-                sequence = self.generate_sequence()
-                sequences.append(sequence)
-            except Exception as e:
-                logger.error(f"Failed to generate sequence {i}: {str(e)}")
-                continue
+        # Initialize multiprocessing
+        import multiprocessing as mp
 
-        # Split sequences
+        num_cores = max(1, mp.cpu_count() - 1)  # Leave one core free
+        logger.info(f"Using {num_cores} CPU cores for parallel processing")
+
+        # Create arguments for each sequence
+        args = [(self.config, i) for i in range(self.config["num_sequences"])]
+
+        # Create a pool of workers
+        with mp.Pool(num_cores) as pool:
+            # Generate sequences in parallel with progress bar
+            from tqdm import tqdm
+
+            sequences = []
+            with tqdm(
+                total=self.config["num_sequences"], desc="Generating sequences"
+            ) as pbar:
+                for result in pool.imap_unordered(_generate_sequence_worker, args):
+                    if result is not None:
+                        sequences.append(result)
+                    pbar.update()
+
+        # Verify we have enough sequences
+        if not sequences:
+            raise RuntimeError("No sequences were generated successfully")
+
+        if len(sequences) < self.config["num_sequences"]:
+            logger.warning(
+                f"Only generated {len(sequences)}/{self.config['num_sequences']} sequences successfully"
+            )
+
+        # Split sequences into train/val/test
         n_sequences = len(sequences)
         n_train = int(n_sequences * self.config["split_ratio"]["train"])
         n_val = int(n_sequences * self.config["split_ratio"]["val"])
@@ -319,111 +506,115 @@ class DatasetGenerator:
         }
 
         # Save dataset
-        self._save_dataset(splits)
+        output_path = os.path.join(
+            self.config["output"]["dir"], "link_prediction_dataset.h5"
+        )
+        self.save_dataset(sequences, output_path)
 
-    def _save_dataset(self, splits: Dict[str, List[Dict]]) -> None:
-        """Save the dataset in HDF5 format"""
-        output_dir = self.config["output"]["dir"]
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, "link_prediction_dataset.h5")
+        logger.info(f"Dataset generation complete. Total sequences: {len(sequences)}")
+        logger.info(
+            f"Train: {len(splits['train'])}, Val: {len(splits['val'])}, Test: {len(splits['test'])}"
+        )
+        logger.info(f"Dataset saved to {output_path}")
 
-        logger.info(f"Saving dataset to {output_path}")
+    def save_dataset(self, sequences: List[Dict], output_path: str) -> None:
+        """Save the generated dataset to disk.
 
-        with h5py.File(output_path, "w") as f:
-            # Save each split
-            for split_name, sequences in splits.items():
-                split_group = f.create_group(split_name)
+        Args:
+            sequences: List of dictionaries containing graph sequences and features
+            output_path: Path to save the dataset
+        """
+        try:
+            # Check if we have any sequences to save
+            if not sequences:
+                raise ValueError("No sequences were generated successfully")
 
-                for i, seq in enumerate(sequences):
-                    seq_group = split_group.create_group(f"sequence_{i}")
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-                    # Save adjacency matrices
-                    seq_group.create_dataset(
-                        "adjacency",
-                        data=seq["adjacency"],
-                        compression=(
-                            "gzip" if self.config["output"]["compression"] else None
-                        ),
-                    )
+            with h5py.File(output_path, "w") as f:
+                # Create groups for different components
+                seq_group = f.create_group("sequences")
+                feat_group = f.create_group("features")
+                lp_group = f.create_group("link_prediction")
+                meta_group = f.create_group("metadata")
 
-                    # Save features
-                    feat_group = seq_group.create_group("features")
-                    for feat_name, feat_data in seq["features"].items():
-                        feat_group.create_dataset(
-                            feat_name,
-                            data=feat_data,
+                for idx, seq_data in enumerate(sequences):
+                    seq_name = f"sequence_{idx}"
+
+                    # Save graph sequence
+                    seq_subgroup = seq_group.create_group(seq_name)
+                    for t, adj_matrix in enumerate(seq_data["graphs"]):
+                        seq_subgroup.create_dataset(
+                            f"graph_{t}",
+                            data=adj_matrix,
                             compression=(
                                 "gzip" if self.config["output"]["compression"] else None
                             ),
                         )
 
-                    # Save change points
-                    seq_group.create_dataset("change_points", data=seq["change_points"])
+                    # Save features if requested
+                    if self.config["output"]["save_features"]:
+                        feat_subgroup = feat_group.create_group(seq_name)
+                        for feat_name, feat_matrix in seq_data["features"].items():
+                            feat_subgroup.create_dataset(
+                                feat_name,
+                                data=feat_matrix,
+                                compression=(
+                                    "gzip"
+                                    if self.config["output"]["compression"]
+                                    else None
+                                ),
+                            )
+
+                    # Save link prediction data
+                    lp_subgroup = lp_group.create_group(seq_name)
+                    for split_name, split_data in seq_data["link_prediction"][
+                        "splits"
+                    ].items():
+                        split_group = lp_subgroup.create_group(split_name)
+                        for edge_type, edges in split_data.items():
+                            split_group.create_dataset(edge_type, data=edges)
 
                     # Save metadata
-                    meta_group = seq_group.create_group("metadata")
+                    meta_subgroup = meta_group.create_group(seq_name)
+                    # Handle both list and dict metadata formats
+                    if isinstance(seq_data["metadata"], list):
+                        metadata = seq_data["metadata"][0]  # Use first metadata entry
+                    else:
+                        metadata = seq_data["metadata"]
 
-                    # Use first metadata entry for community structure
-                    first_meta = (
-                        seq["metadata"][0]
-                        if isinstance(seq["metadata"], list)
-                        else seq["metadata"]
-                    )
-
-                    # Save community labels directly in metadata group
-                    if "community_labels" in first_meta:
-                        meta_group.create_dataset(
-                            "community_labels", data=first_meta["community_labels"]
-                        )
-
-                    # Save block sizes
-                    if "block_sizes" in first_meta:
-                        meta_group.create_dataset(
-                            "block_sizes", data=first_meta["block_sizes"]
-                        )
-
-                    # Save edge probabilities
-                    if "edge_probabilities" in first_meta:
-                        prob_group = meta_group.create_group("edge_probabilities")
-                        for k, v in first_meta["edge_probabilities"].items():
-                            prob_group.attrs[k] = v
-
-                    # Save other parameters
-                    if "params" in first_meta:
-                        param_group = meta_group.create_group("params")
-                        for k, v in first_meta["params"].items():
-                            if isinstance(v, (list, np.ndarray)):
-                                param_group.create_dataset(k, data=v)
+                    # Save metadata with proper type handling
+                    for key, value in metadata.items():
+                        try:
+                            if isinstance(value, (np.ndarray, list)):
+                                meta_subgroup.create_dataset(key, data=value)
+                            elif isinstance(value, (int, float, bool)):
+                                meta_subgroup.attrs[key] = value
+                            elif isinstance(value, str):
+                                meta_subgroup.attrs[key] = value
+                            elif isinstance(value, dict):
+                                # Convert dict to JSON string
+                                meta_subgroup.attrs[key] = json.dumps(value)
                             else:
-                                param_group.attrs[k] = v
+                                # Convert other types to string
+                                meta_subgroup.attrs[key] = str(value)
+                        except Exception as e:
+                            logger.warning(f"Failed to save metadata {key}: {str(e)}")
+                            meta_subgroup.attrs[key] = str(value)
 
-                    # Save all metadata entries in a separate group if it's a list
-                    if isinstance(seq["metadata"], list):
-                        all_meta_group = meta_group.create_group("all_segments")
-                        for i, meta in enumerate(seq["metadata"]):
-                            segment_group = all_meta_group.create_group(f"segment_{i}")
-                            for k, v in meta.items():
-                                if isinstance(v, (np.ndarray, list)):
-                                    segment_group.create_dataset(k, data=v)
-                                else:
-                                    segment_group.attrs[k] = str(v)
+                # Save global metadata
+                meta_group.attrs["num_sequences"] = len(sequences)
+                meta_group.attrs["sequence_length"] = len(sequences[0]["graphs"])
+                meta_group.attrs["num_nodes"] = sequences[0]["graphs"][0].shape[0]
 
-            # Save configuration
-            config_group = f.create_group("config")
-            for key, value in self.config.items():
-                if isinstance(value, dict):
-                    subgroup = config_group.create_group(key)
-                    for subkey, subvalue in value.items():
-                        if isinstance(subvalue, dict):
-                            subsubgroup = subgroup.create_group(subkey)
-                            for subsubkey, subsubvalue in subvalue.items():
-                                subsubgroup.attrs[subsubkey] = str(subsubvalue)
-                        else:
-                            subgroup.attrs[subkey] = str(subvalue)
-                else:
-                    config_group.attrs[key] = str(value)
+                # Save configuration as JSON string
+                meta_group.attrs["config"] = json.dumps(self.config)
 
-        logger.info("Dataset saved successfully")
+            logger.info(f"Dataset saved successfully to {output_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to save dataset: {str(e)}")
+            raise RuntimeError(f"Failed to save dataset: {str(e)}") from e
 
 
 def main():
