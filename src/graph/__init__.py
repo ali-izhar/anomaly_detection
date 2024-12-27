@@ -7,7 +7,7 @@ from .features import (
     compute_laplacian,
     compute_graph_statistics,
 )
-from .graph_generator import GraphGenerator
+from .generator import GraphGenerator
 
 
 __all__ = [

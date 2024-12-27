@@ -4,11 +4,12 @@
 
 This module provides functions to extract various graph features and embeddings,
 optimized for web applications. Features include centrality measures, structural
-embeddings, and anomaly detection metrics.
+embeddings, and link prediction metrics.
 
 Key Features:
 - Efficient computation of multiple centrality measures
 - Low-dimensional graph embeddings (SVD, LSVD)
+- Link prediction features (topology-based and similarity-based)
 - Strangeness scores for anomaly detection
 - Robust error handling and logging
 - Memory-efficient processing for web applications
@@ -17,12 +18,15 @@ Key Features:
 import networkx as nx
 import numpy as np
 import logging
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union, Optional, Tuple
 from sknetwork.embedding import SVD  # type: ignore
 from sklearn.cluster import KMeans
 from scipy.sparse import csr_matrix
 from concurrent.futures import ThreadPoolExecutor
 import warnings
+from scipy import sparse
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+import itertools
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
@@ -332,3 +336,226 @@ def compute_graph_statistics(graphs: List[np.ndarray]) -> Dict[str, List[float]]
     except Exception as e:
         logger.error(f"Statistics computation failed: {str(e)}")
         raise RuntimeError(f"Statistics computation failed: {str(e)}")
+
+
+def compute_link_prediction_features(
+    graphs: List[np.ndarray],
+    feature_types: List[str],
+    community_labels: Optional[np.ndarray] = None,
+) -> Dict[str, np.ndarray]:
+    """Compute static link prediction features for a sequence of graphs.
+
+    Args:
+        graphs: List of adjacency matrices
+        feature_types: List of feature types to compute
+        community_labels: Optional array of community labels for each node
+
+    Returns:
+        Dictionary mapping feature names to feature matrices
+    """
+    features = {}
+
+    # Convert first graph to NetworkX for computing features
+    G = nx.from_numpy_array(graphs[0])
+    n_nodes = G.number_of_nodes()
+
+    # Get all node pairs
+    node_pairs = list(itertools.combinations(range(n_nodes), 2))
+
+    # Compute each requested feature
+    if "common_neighbors" in feature_types:
+        features["common_neighbors"] = np.array(
+            [len(list(nx.common_neighbors(G, u, v))) for u, v in node_pairs]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "jaccard" in feature_types:
+        features["jaccard"] = np.array(
+            [nx.jaccard_coefficient(G, [(u, v)]).__next__()[2] for u, v in node_pairs]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "adamic_adar" in feature_types:
+        features["adamic_adar"] = np.array(
+            [nx.adamic_adar_index(G, [(u, v)]).__next__()[2] for u, v in node_pairs]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "preferential_attachment" in feature_types:
+        features["preferential_attachment"] = np.array(
+            [
+                nx.preferential_attachment(G, [(u, v)]).__next__()[2]
+                for u, v in node_pairs
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "resource_allocation" in feature_types:
+        features["resource_allocation"] = np.array(
+            [
+                nx.resource_allocation_index(G, [(u, v)]).__next__()[2]
+                for u, v in node_pairs
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "degree_similarity" in feature_types:
+        degrees = dict(G.degree())
+        features["degree_similarity"] = np.array(
+            [
+                abs(degrees[u] - degrees[v]) / max(degrees[u] + degrees[v], 1)
+                for u, v in node_pairs
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    if "community_similarity" in feature_types and community_labels is not None:
+        features["community_similarity"] = np.array(
+            [
+                1.0 if community_labels[u] == community_labels[v] else 0.0
+                for u, v in node_pairs
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+    return features
+
+
+def compute_temporal_link_features(
+    graphs: List[Union[nx.Graph, np.ndarray]],
+    node_pairs: Optional[List[Tuple[int, int]]] = None,
+    window_size: int = 3,
+) -> Dict[str, np.ndarray]:
+    """Compute temporal link prediction features from a sequence of graphs."""
+    if not graphs:
+        raise ValueError("Empty graph sequence")
+
+    # Convert numpy arrays to NetworkX graphs
+    if isinstance(graphs[0], np.ndarray):
+        graphs = [nx.from_numpy_array(g) for g in graphs]
+
+    if node_pairs is None:
+        node_pairs = [
+            (i, j) for i in graphs[0].nodes() for j in graphs[0].nodes() if i < j
+        ]
+
+    n_pairs = len(node_pairs)
+    logger.info(f"Computing temporal features for {n_pairs} node pairs")
+
+    try:
+        result = {}
+
+        # Link history
+        link_history = np.zeros((len(graphs), n_pairs))
+        for t, g in enumerate(graphs):
+            link_history[t] = np.array(
+                [1 if g.has_edge(u, v) else 0 for u, v in node_pairs]
+            )
+
+        # Compute features using sliding windows
+        result["link_frequency"] = np.array(
+            [
+                np.mean(link_history[max(0, t - window_size) : t + 1], axis=0)
+                for t in range(len(graphs))
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+        # Common neighbor history
+        cn_history = np.zeros((len(graphs), n_pairs))
+        for t, g in enumerate(graphs):
+            cn_history[t] = np.array(
+                [len(set(g.neighbors(u)) & set(g.neighbors(v))) for u, v in node_pairs]
+            )
+
+        result["cn_history"] = np.array(
+            [
+                np.mean(cn_history[max(0, t - window_size) : t + 1], axis=0)
+                for t in range(len(graphs))
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+        # Temporal stability (variance in link presence)
+        result["temporal_stability"] = np.array(
+            [
+                1 - np.var(link_history[max(0, t - window_size) : t + 1], axis=0)
+                for t in range(len(graphs))
+            ]
+        ).reshape(
+            -1, 1
+        )  # Reshape to 2D
+
+        logger.info("Temporal feature computation complete")
+        return result
+
+    except Exception as e:
+        logger.error(f"Temporal feature computation failed: {str(e)}")
+        raise RuntimeError(f"Temporal feature computation failed: {str(e)}")
+
+
+def normalize_features(
+    features: Dict[str, np.ndarray], method: str = "standard"
+) -> Dict[str, np.ndarray]:
+    """Normalize features using specified method.
+
+    Args:
+        features: Dictionary of feature matrices
+        method: Normalization method ('standard' or 'minmax')
+
+    Returns:
+        Dictionary of normalized feature matrices
+    """
+    if not features:
+        return features
+
+    normalized = {}
+    for feat_name, feat_matrix in features.items():
+        # Skip if already normalized or if normalization not needed
+        if feat_name in ["community_labels", "block_membership"]:
+            normalized[feat_name] = feat_matrix
+            continue
+
+        # Handle sparse matrices
+        is_sparse = sparse.issparse(feat_matrix)
+        if is_sparse:
+            feat_matrix = feat_matrix.toarray()
+
+        # Ensure 2D shape
+        if feat_matrix.ndim == 1:
+            feat_matrix = feat_matrix.reshape(-1, 1)
+        elif feat_matrix.ndim > 2:
+            feat_matrix = feat_matrix.reshape(feat_matrix.shape[0], -1)
+
+        # Select scaler
+        if method == "standard":
+            scaler = StandardScaler()
+        elif method == "minmax":
+            scaler = MinMaxScaler()
+        else:
+            raise ValueError(f"Unknown normalization method: {method}")
+
+        # Normalize
+        try:
+            normalized_matrix = scaler.fit_transform(feat_matrix)
+
+            # Convert back to sparse if original was sparse
+            if is_sparse:
+                normalized_matrix = sparse.csr_matrix(normalized_matrix)
+
+            normalized[feat_name] = normalized_matrix
+
+        except Exception as e:
+            logger.warning(f"Failed to normalize {feat_name}: {str(e)}")
+            normalized[feat_name] = feat_matrix
+
+    return normalized

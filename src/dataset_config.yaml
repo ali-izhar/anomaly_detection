@@ -1,0 +1,77 @@
+# DATASET CONFIGURATION
+
+dataset:
+  num_sequences: 100      # total number of graph sequences in the dataset
+  seq_len: 50             # length of each graph sequence
+  min_segment: 5          # minimum segment length between changes
+  min_changes: 2          # minimum number of changes allowed per graph sequence
+  max_changes: 4          # maximum number of changes allowed per graph sequence
+
+  # Type(s) of graphs to generate; "SBM" provides dense, community-structured graphs
+  graph_types: ["SBM"]    
+  graph_params:
+    nodes: 300            # number of nodes in each graph
+    sbm:
+      num_blocks: 6       # number of communities (blocks) in the graph
+      block_size_range:   
+        min: 40           # minimum size of a community
+        max: 50           # maximum size of a community
+      edge_probabilities: 
+        intra_block: 0.45 # probability of connections within the same community
+        inter_block: 0.08 # probability of connections between different communities
+      change_ranges:      
+        intra:            
+          min: 0.30       # minimum intra-community edge probability after changes
+          max: 0.50       # maximum intra-community edge probability after changes
+        inter:            
+          min: 0.05       # minimum inter-community edge probability after changes
+          max: 0.08       # maximum inter-community edge probability after changes
+  
+  # Feature extraction configuration
+  features:
+    use_node_features: true  # enable node-specific features
+    normalize: true          # normalize features for better model training
+    types:                   # types of features to extract
+      # basic topological features
+      - common_neighbors
+      - jaccard
+      - adamic_adar
+      - preferential_attachment
+      - resource_allocation
+      - degree_similarity
+      # advanced structural features
+      - katz
+      - pagerank_similarity
+      - local_clustering
+      - shortest_path
+      # features based on community structures
+      - community_similarity
+      - block_membership
+      # temporal features for dynamic graphs
+      - link_history
+      - temporal_stability
+      - cn_history
+
+  # Link prediction settings
+  link_prediction:
+    negative_sampling_ratio: 1.0    # ratio of negative to positive samples; balanced sampling
+    edge_split_method: "community_aware"  # split edges while preserving community structure
+    preserve_connectivity: true     # ensure the graph remains connected
+    min_positive_degree: 8          # minimum degree for positive edges to ensure reliable patterns
+    sampling_strategy: "stratified" # stratified samples across communities for better representation
+    hard_negative_mining: true      # include challenging negative examples for training
+    validation_metric: "auc"        # use AUC as the evaluation metric for validation
+
+  # Ratios for splitting the dataset into training, validation, and testing
+  split_ratio:
+    train: 0.70  # proportion of data for training
+    val: 0.15    # proportion of data for validation
+    test: 0.15   # proportion of data for testing
+
+  # Settings for dataset output
+  output:
+    dir: "dataset/link_prediction"  # directory to save the dataset
+    format: "h5"                    # file format for the saved dataset
+    compression: true               # enable compression for storage efficiency
+    save_features: true             # save precomputed features in the output
+    save_negative_samples: true     # save generated negative samples in the output

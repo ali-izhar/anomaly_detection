@@ -1,4 +1,4 @@
-# src/graph/graph_generator.py
+# src/graph/generator.py
 
 """Graph Generator for Dynamic Graph Sequences.
 
@@ -14,7 +14,7 @@ Key Features:
 """
 
 import logging
-from typing import Dict, List, Optional, Callable, Type
+from typing import Dict, List, Optional, Callable, Type, Tuple
 import numpy as np
 import networkx as nx
 from dataclasses import asdict
@@ -187,81 +187,65 @@ class GraphGenerator:
     def _generate_change_points(
         self,
         params: BaseParams,
-    ) -> tuple[List[int], int]:
+    ) -> Tuple[List[int], int]:
         """Generate random change points for the sequence.
 
-        Ensures that:
-        1. Each segment is at least min_segment length
-        2. First change point is at least min_segment from start
-        3. Last change point is at least min_segment from end
-        4. Each change point is at least min_segment from its neighbors
+        Args:
+            params: Graph generation parameters
+
+        Returns:
+            Tuple of (change points list, number of changes)
         """
-        try:
-            seq_len = params.seq_len
-            min_seg = params.min_segment
+        seq_len = params.seq_len
+        min_segment = params.min_segment
+        min_changes = params.min_changes
+        max_changes = params.max_changes
 
-            # Calculate maximum possible changes given constraints
-            max_possible_changes = (seq_len - min_seg) // min_seg - 1
-            num_changes = min(
-                np.random.randint(params.min_changes, params.max_changes + 1),
-                max_possible_changes,
+        # Validate parameters
+        max_possible_changes = (seq_len - min_segment) // min_segment
+        if max_changes > max_possible_changes:
+            max_changes = max_possible_changes
+        if min_changes > max_changes:
+            min_changes = max_changes
+
+        # Try to generate valid change points
+        max_attempts = 100
+        for attempt in range(max_attempts):
+            # Generate random number of changes
+            num_changes = np.random.randint(min_changes, max_changes + 1)
+
+            # Create valid positions for change points
+            valid_positions = []
+            current_pos = min_segment
+            while current_pos <= seq_len - min_segment:
+                valid_positions.append(current_pos)
+                current_pos += min_segment
+
+            # If we don't have enough valid positions, try again with fewer changes
+            if len(valid_positions) < num_changes:
+                continue
+
+            # Select change points from valid positions
+            points = sorted(
+                np.random.choice(valid_positions, size=num_changes, replace=False)
             )
 
-            if num_changes < params.min_changes:
-                msg = (
-                    f"Cannot generate {params.min_changes} changes with sequence length {seq_len} "
-                    f"and minimum segment {min_seg}. Maximum possible changes: {max_possible_changes}"
-                )
-                logger.error(msg)
-                raise ValueError(msg)
+            # Verify all segments meet minimum length
+            valid = True
+            prev_point = 0
+            for point in points + [seq_len]:
+                if point - prev_point < min_segment:
+                    valid = False
+                    break
+                prev_point = point
 
-            logger.debug(f"Attempting to generate {num_changes} change points")
+            if valid:
+                logger.info(f"Generated {num_changes} change points at: {points}")
+                return points, num_changes
 
-            MAX_ATTEMPTS = 100
-            for _ in range(MAX_ATTEMPTS):
-                # Available range for change points
-                available_range = seq_len - 2 * min_seg  # Leave space at start and end
-
-                # Generate candidate points
-                points = []
-                last_point = min_seg  # Start after minimum segment
-
-                for _ in range(num_changes):
-                    # Available range for this point
-                    start = last_point + min_seg
-                    end = seq_len - (num_changes - len(points)) * min_seg
-
-                    if start >= end:
-                        # Not enough space for remaining points
-                        points = []
-                        break
-
-                    point = np.random.randint(start, end)
-                    points.append(point)
-                    last_point = point
-
-                if len(points) == num_changes:
-                    # Verify minimum segment lengths
-                    points = sorted(points)
-                    segments = (
-                        [points[0]]
-                        + [points[i] - points[i - 1] for i in range(1, len(points))]
-                        + [seq_len - points[-1]]
-                    )
-
-                    if all(seg >= min_seg for seg in segments):
-                        logger.debug(f"Generated change points: {points}")
-                        return points, num_changes
-
-            msg = (
-                f"Failed to generate valid change points after {MAX_ATTEMPTS} attempts"
-            )
-            logger.error(msg)
-            raise RuntimeError(msg)
-
-        except Exception as e:
-            logger.error(f"Error in change point generation: {str(e)}", exc_info=True)
-            raise
+        msg = f"Failed to generate valid change points after {max_attempts} attempts"
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     def _generate_parameter_sets(
         self,

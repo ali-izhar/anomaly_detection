@@ -145,30 +145,30 @@ INFO:features:Successfully computed embeddings for 10 graphs
 INFO:features:Statistics computation complete
 ..INFO:features:Computing SVD embeddings with 5 components
 INFO:features:Successfully computed embeddings for 10 graphs
-.INFO:graph_generator:Registered model: BA
-INFO:graph_generator:Registered model: ER
-INFO:graph_generator:Registered model: SBM
-INFO:graph_generator:Generated 1 change points at: [83]
-INFO:graph_generator:Successfully generated sequence with 100 graphs
-.INFO:graph_generator:Registered model: BA
-INFO:graph_generator:Registered model: ER
-INFO:graph_generator:Registered model: SBM
-INFO:graph_generator:Generated 1 change points at: [36]
-INFO:graph_generator:Successfully generated sequence with 100 graphs
+.INFO:generator:Registered model: BA
+INFO:generator:Registered model: ER
+INFO:generator:Registered model: SBM
+INFO:generator:Generated 1 change points at: [83]
+INFO:generator:Successfully generated sequence with 100 graphs
+.INFO:generator:Registered model: BA
+INFO:generator:Registered model: ER
+INFO:generator:Registered model: SBM
+INFO:generator:Generated 1 change points at: [36]
+INFO:generator:Successfully generated sequence with 100 graphs
 INFO:main:Change points: [36]
 INFO:main:Segment lengths: [36, 64]
 INFO:main:Sequence length: 100, Min segment: 10
 INFO:main:Min changes: 1, Max changes: 3
-.INFO:graph_generator:Registered model: BA
-INFO:graph_generator:Registered model: ER
-INFO:graph_generator:Registered model: SBM
-INFO:graph_generator:Generated 1 change points at: [41]
-INFO:graph_generator:Successfully generated sequence with 100 graphs
-.INFO:graph_generator:Registered model: BA
-INFO:graph_generator:Registered model: ER
-INFO:graph_generator:Registered model: SBM
-INFO:graph_generator:Generated 3 change points at: [40, 51, 77]
-INFO:graph_generator:Successfully generated sequence with 100 graphs
+.INFO:generator:Registered model: BA
+INFO:generator:Registered model: ER
+INFO:generator:Registered model: SBM
+INFO:generator:Generated 1 change points at: [41]
+INFO:generator:Successfully generated sequence with 100 graphs
+.INFO:generator:Registered model: BA
+INFO:generator:Registered model: ER
+INFO:generator:Registered model: SBM
+INFO:generator:Generated 3 change points at: [40, 51, 77]
+INFO:generator:Successfully generated sequence with 100 graphs
 .INFO:features:Computing 1 centralities for 5 graphs
 INFO:features:Centrality computation complete
 INFO:main:Centrality computation took 0.08 seconds
@@ -210,17 +210,17 @@ OK
 
 4. **Model Registration**:
    ```
-   INFO:graph_generator:Registered model: BA
-   INFO:graph_generator:Registered model: ER
-   INFO:graph_generator:Registered model: SBM
+   INFO:generator:Registered model: BA
+   INFO:generator:Registered model: ER
+   INFO:generator:Registered model: SBM
    ```
    - Registering three graph models with their parameters
    - Setting up generator functions for each model
 
 5. **Change Point Generation**:
    ```
-   INFO:graph_generator:Generated 1 change points at: [83]
-   INFO:graph_generator:Successfully generated sequence with 100 graphs
+   INFO:generator:Generated 1 change points at: [83]
+   INFO:generator:Successfully generated sequence with 100 graphs
    ```
    - Testing sequence generation with parameter changes
    - Validating change point placement and sequence length

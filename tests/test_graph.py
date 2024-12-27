@@ -19,7 +19,7 @@ import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from src.graph.graph_generator import GraphGenerator
+from src.graph.generator import GraphGenerator
 from src.graph.features import (
     extract_centralities,
     compute_embeddings,
