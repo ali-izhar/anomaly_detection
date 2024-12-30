@@ -113,7 +113,7 @@ class DatasetGenerator:
     def create_dataset(self):
         """Create the full dataset."""
         logger.info("Starting dataset generation...")
-        
+
         for seq in range(self.config['num_sequences']):
             self.generate_sequence(seq)
             

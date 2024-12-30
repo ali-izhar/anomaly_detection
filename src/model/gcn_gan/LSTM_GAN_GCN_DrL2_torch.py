@@ -128,23 +128,29 @@ def get_mis_rate(adj_est, gnd):
     return mis_sum / (node_num * node_num)
 
 def main():
-    # Model parameters
+    # Model parameters aligned with paper
     node_num = 38
-    time_num = 5000       # Keep large dataset for better learning
-    window_size = 12      # Slightly increased from 10 (not as aggressive as 15)
+    time_num = 1000        # Reduced timesteps
+    window_size = 10       # Paper suggests moderate window size
     name_pre = "./data/SBM/edge_list"
-    dropout_rate = 0.15   # Reduced from 0.2 to prevent too much noise
-    decay_rate = 5e-5     # Increased from 1e-5 for stronger regularization
-    pre_epoch_num = 2000  # Keep longer pre-training
-    epoch_num = 8000      # Keep longer training
-    gen_hid_num0 = 2      # Reduced from 4 to prevent overfitting
-    gen_hid_num1 = 256    # Back to original size
-    disc_hid_num = 1024   # Back to original size
+    
+    # Architecture parameters
+    dropout_rate = 0.1     # Keep moderate dropout
+    decay_rate = 5e-5      # Reduced L2 regularization
+    pre_epoch_num = 2000   # Increased pre-training
+    epoch_num = 4000       # Keep same training length
+    gen_hid_num0 = 32      # Keep GCN capacity
+    gen_hid_num1 = 128     # Keep LSTM capacity
+    disc_hid_num = 256     # Keep discriminator capacity
     
     # Learning rates
-    pre_gen_lr = 0.001    # Reduced from 0.005
-    gen_lr = 0.0002       # Reduced from 0.001
-    disc_lr = 0.0002      # Reduced from 0.001
+    pre_gen_lr = 0.001     # Increased for better pre-training
+    gen_lr = 0.0002        # Increased slightly
+    disc_lr = 0.0001       # Keep discriminator slower
+    
+    # Training parameters
+    n_critic = 5           # Train discriminator more
+    clip_value = 0.01      # Weight clipping value
     
     # Use CUDA with RTX 4090
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -162,6 +168,7 @@ def main():
     print(f"- Dropout rate: {dropout_rate}")
     print(f"- L2 decay rate: {decay_rate}")
     print(f"- Learning rates - Pre-gen: {pre_gen_lr}, Gen: {gen_lr}, Disc: {disc_lr}")
+    print(f"- Critic iterations: {n_critic}")
     print()
     
     # Create models directory if it doesn't exist
@@ -175,15 +182,18 @@ def main():
     # Binary cross entropy loss for pre-training
     bce_loss = nn.BCELoss()
     
-    # Optimizers with reduced learning rates
-    pre_gen_optimizer = optim.RMSprop(generator.parameters(), lr=pre_gen_lr)
-    gen_optimizer = optim.RMSprop(generator.parameters(), lr=gen_lr)
-    disc_optimizer = optim.RMSprop(discriminator.parameters(), lr=disc_lr)
+    # Optimizers
+    pre_gen_optimizer = optim.Adam(generator.parameters(), lr=pre_gen_lr, betas=(0.5, 0.999))
+    gen_optimizer = optim.Adam(generator.parameters(), lr=gen_lr, betas=(0.5, 0.999))
+    disc_optimizer = optim.Adam(discriminator.parameters(), lr=disc_lr, betas=(0.5, 0.999))
     
-    # Add learning rate schedulers for better convergence
-    pre_gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(pre_gen_optimizer, mode='min', factor=0.5, patience=200, verbose=True)
-    gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(gen_optimizer, mode='min', factor=0.5, patience=500, verbose=True)
-    disc_scheduler = optim.lr_scheduler.ReduceLROnPlateau(disc_optimizer, mode='min', factor=0.5, patience=500, verbose=True)
+    # Learning rate schedulers with longer patience
+    pre_gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        pre_gen_optimizer, mode='min', factor=0.5, patience=200, verbose=True)
+    gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        gen_optimizer, mode='min', factor=0.5, patience=300, verbose=True)
+    disc_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        disc_optimizer, mode='min', factor=0.5, patience=300, verbose=True)
     
     # Training loop
     avg_accuracy = 0.0
@@ -203,7 +213,8 @@ def main():
         
         # Pre-training generator with binary cross entropy loss and L2 regularization
         print("Pre-training generator...")
-        loss_list = []
+        best_pre_loss = float('inf')
+        no_improve_count = 0
         for epoch in range(pre_epoch_num):
             noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
                           for _ in range(window_size + 1)]
@@ -212,54 +223,70 @@ def main():
             gen_output = generator(noise_inputs, gcn_facts)
             pre_loss = bce_loss(gen_output, gnd)
             
-            # Add L2 regularization
+            # Reduced L2 regularization during pre-training
             l2_reg = 0
             for param in generator.parameters():
-                l2_reg += decay_rate * torch.norm(param)
+                l2_reg += decay_rate * 0.1 * torch.norm(param)
             pre_loss += l2_reg
             
             pre_loss.backward()
             pre_gen_optimizer.step()
             
-            loss_list.append(pre_loss.item())
+            # Update learning rate and early stopping
+            if pre_loss.item() < best_pre_loss:
+                best_pre_loss = pre_loss.item()
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
+            
+            pre_gen_scheduler.step(pre_loss)
+            
             if epoch % 100 == 0:
-                print(f'Pre-Train #{epoch}, G-Loss: {pre_loss.item()}')
-            if epoch > 500 and loss_list[epoch] > loss_list[epoch-1] > loss_list[epoch-2]:
+                print(f'Pre-Train #{epoch}, G-Loss: {pre_loss.item():.6f}')
+            
+            # Early stopping with longer patience
+            if no_improve_count > 300:
+                print(f"Early stopping at epoch {epoch}")
                 break
         
         # Training GAN
         print('Train the GAN')
         for epoch in range(epoch_num):
-            # Train discriminator
-            noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
-                          for _ in range(window_size + 1)]
-            
-            disc_optimizer.zero_grad()
-            gen_output = generator(noise_inputs, gcn_facts)
-            disc_real, disc_logit_real = discriminator(gnd)
-            disc_fake, disc_logit_fake = discriminator(gen_output.detach())
-            
-            disc_loss = torch.mean(disc_logit_fake) - torch.mean(disc_logit_real)
-            
-            # Add L2 regularization for discriminator
-            l2_reg = 0
-            for param in discriminator.parameters():
-                l2_reg += decay_rate * torch.norm(param)
-            disc_loss += l2_reg
-            
-            disc_loss.backward()
-            disc_optimizer.step()
-            
-            # Clip discriminator weights
-            for p in discriminator.parameters():
-                p.data.clamp_(-0.01, 0.01)
+            # Train discriminator multiple times
+            for _ in range(n_critic):
+                noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
+                              for _ in range(window_size + 1)]
+                
+                disc_optimizer.zero_grad()
+                gen_output = generator(noise_inputs, gcn_facts)
+                disc_real, disc_logit_real = discriminator(gnd)
+                disc_fake, disc_logit_fake = discriminator(gen_output.detach())
+                
+                # Wasserstein loss
+                disc_loss = -(torch.mean(disc_logit_real) - torch.mean(disc_logit_fake))
+                
+                # Add L2 regularization
+                l2_reg = 0
+                for param in discriminator.parameters():
+                    l2_reg += decay_rate * torch.norm(param)
+                disc_loss += l2_reg
+                
+                disc_loss.backward()
+                disc_optimizer.step()
+                
+                # Clip weights
+                for p in discriminator.parameters():
+                    p.data.clamp_(-clip_value, clip_value)
             
             # Train generator
             gen_optimizer.zero_grad()
+            gen_output = generator(noise_inputs, gcn_facts)
             disc_fake, disc_logit_fake = discriminator(gen_output)
+            
+            # Generator tries to maximize discriminator output on fake data
             gen_loss = -torch.mean(disc_logit_fake)
             
-            # Add L2 regularization for generator
+            # Add L2 regularization
             l2_reg = 0
             for param in generator.parameters():
                 l2_reg += decay_rate * torch.norm(param)
@@ -269,7 +296,7 @@ def main():
             gen_optimizer.step()
             
             if epoch % 100 == 0:
-                print(f'GAN-Train #{epoch}, D-Loss: {disc_loss.item()}, G-Loss: {gen_loss.item()}')
+                print(f'GAN-Train #{epoch}, D-Loss: {disc_loss.item():.6f}, G-Loss: {gen_loss.item():.6f}')
         
         # Prediction
         print("Making prediction...")
