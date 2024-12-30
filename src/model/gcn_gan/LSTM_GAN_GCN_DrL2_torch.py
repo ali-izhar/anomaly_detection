@@ -130,24 +130,27 @@ def get_mis_rate(adj_est, gnd):
 def main():
     # Model parameters
     node_num = 38
-    time_num = 5000       # Increased from 1000 to get more temporal data
-    window_size = 15      # Increased from 10 to capture longer temporal dependencies
+    time_num = 5000       # Keep large dataset for better learning
+    window_size = 12      # Slightly increased from 10 (not as aggressive as 15)
     name_pre = "./data/SBM/edge_list"
-    dropout_rate = 0.2    # Increased dropout for better regularization with larger model
-    decay_rate = 1e-5     # Slightly reduced decay rate for larger model
-    pre_epoch_num = 2000  # Increased pre-training epochs
-    epoch_num = 8000      # Increased GAN training epochs
-    gen_hid_num0 = 4      # Increased from 1 to allow for more expressive GCN layers
-    gen_hid_num1 = 512    # Increased from 256 for more capacity
-    disc_hid_num = 2048   # Increased from 1024 for more capacity
-    batch_size = 32       # Added batch processing capability
+    dropout_rate = 0.15   # Reduced from 0.2 to prevent too much noise
+    decay_rate = 5e-5     # Increased from 1e-5 for stronger regularization
+    pre_epoch_num = 2000  # Keep longer pre-training
+    epoch_num = 8000      # Keep longer training
+    gen_hid_num0 = 2      # Reduced from 4 to prevent overfitting
+    gen_hid_num1 = 256    # Back to original size
+    disc_hid_num = 1024   # Back to original size
+    
+    # Learning rates
+    pre_gen_lr = 0.001    # Reduced from 0.005
+    gen_lr = 0.0002       # Reduced from 0.001
+    disc_lr = 0.0002      # Reduced from 0.001
     
     # Use CUDA with RTX 4090
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True  # Enable cuDNN auto-tuner
+        torch.backends.cudnn.benchmark = True
         print(f"Using GPU: {torch.cuda.get_device_name()}")
-        print(f"Available GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     print("\nTraining Configuration:")
     print(f"- Time steps: {time_num}")
@@ -158,7 +161,7 @@ def main():
     print(f"- Discriminator hidden dims: {disc_hid_num}")
     print(f"- Dropout rate: {dropout_rate}")
     print(f"- L2 decay rate: {decay_rate}")
-    print(f"- Batch size: {batch_size}")
+    print(f"- Learning rates - Pre-gen: {pre_gen_lr}, Gen: {gen_lr}, Disc: {disc_lr}")
     print()
     
     # Create models directory if it doesn't exist
@@ -172,10 +175,15 @@ def main():
     # Binary cross entropy loss for pre-training
     bce_loss = nn.BCELoss()
     
-    # Optimizers
-    pre_gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.005)
-    gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.001)
-    disc_optimizer = optim.RMSprop(discriminator.parameters(), lr=0.001)
+    # Optimizers with reduced learning rates
+    pre_gen_optimizer = optim.RMSprop(generator.parameters(), lr=pre_gen_lr)
+    gen_optimizer = optim.RMSprop(generator.parameters(), lr=gen_lr)
+    disc_optimizer = optim.RMSprop(discriminator.parameters(), lr=disc_lr)
+    
+    # Add learning rate schedulers for better convergence
+    pre_gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(pre_gen_optimizer, mode='min', factor=0.5, patience=200, verbose=True)
+    gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(gen_optimizer, mode='min', factor=0.5, patience=500, verbose=True)
+    disc_scheduler = optim.lr_scheduler.ReduceLROnPlateau(disc_optimizer, mode='min', factor=0.5, patience=500, verbose=True)
     
     # Training loop
     avg_accuracy = 0.0
