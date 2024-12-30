@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from pathlib import Path
+from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score, accuracy_score
 
 class GCNLayer(nn.Module):
     def __init__(self, node_num, hid_num):
@@ -113,46 +114,33 @@ def get_gcn_fact(adj, node_num):
     d_mat_inv_sqrt = np.mat(np.diag(d_inv_sqrt))
     return d_mat_inv_sqrt * adj_ * d_mat_inv_sqrt
 
-def get_wei_KL(adj_est, gnd):
-    '''
-    Function to calculate the edge weight KL divergence
-    :param adj_est: prediction result
-    :param gnd: ground-truth
-    :return: edge weight KL divergence
-    '''
-    sum_est = 0
-    for r in range(adj_est.shape[0]):
-        for c in range(adj_est.shape[0]):
-            sum_est += adj_est[r, c]
-    sum_gnd = 0
-    for r in range(gnd.shape[0]):
-        for c in range(gnd.shape[0]):
-            sum_gnd += gnd[r, c]
-    p = gnd/sum_gnd
-    q = adj_est/sum_est
-    edge_wei_KL = 0
-    for r in range(adj_est.shape[0]):
-        for c in range(adj_est.shape[0]):
-            cur_KL = 0
-            if q[r, c]>0 and p[r, c]>0:
-                cur_KL = p[r, c]*np.log(p[r, c]/q[r, c])
-            edge_wei_KL += cur_KL
-
-    return edge_wei_KL
-
-def get_binary_accuracy(adj_est, gnd):
-    """Calculate accuracy for binary edge prediction."""
-    predictions = (adj_est > 0.5).astype(np.float32)
-    correct = (predictions == gnd).sum()
-    total = gnd.size
-    return correct / total
-
-def get_mis_rate(adj_est, gnd):
-    """Calculate mismatch rate for binary edge prediction."""
-    node_num = adj_est.shape[0]
-    predictions = (adj_est > 0.5).astype(np.float32)
-    mis_sum = ((predictions != gnd).sum())
-    return mis_sum / (node_num * node_num)
+def evaluate_binary_predictions(adj_est, gnd):
+    """
+    Evaluate binary predictions using multiple classification metrics.
+    
+    Args:
+        adj_est: Predicted adjacency matrix (with probabilities)
+        gnd: Ground truth adjacency matrix (binary)
+    
+    Returns:
+        dict: Dictionary containing various metrics
+    """
+    # Flatten matrices for evaluation
+    y_true = gnd.flatten()
+    y_pred_proba = adj_est.flatten()
+    y_pred = (y_pred_proba > 0.5).astype(float)
+    
+    # Calculate metrics
+    metrics = {
+        'accuracy': accuracy_score(y_true, y_pred),
+        'auc_roc': roc_auc_score(y_true, y_pred_proba),
+        'precision': precision_score(y_true, y_pred),
+        'recall': recall_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred),
+        'mismatch_rate': (y_pred != y_true).mean()
+    }
+    
+    return metrics
 
 def main():
     # Model parameters aligned with paper
@@ -198,21 +186,16 @@ def main():
     print(f"- Critic iterations: {n_critic}")
     print()
     
-    # Create models directory if it doesn't exist
-    models_dir = Path('models')
-    models_dir.mkdir(exist_ok=True)
-    
     # Initialize models with dropout
     generator = Generator(node_num, window_size, gen_hid_num0, dropout_rate).to(device)
     discriminator = Discriminator(node_num, disc_hid_num, dropout_rate).to(device)
     
-    # Load data
+    # Load data (binary adjacency matrices)
     adjs = []
     for time_index in range(time_num):
         adjs.append(read_data(name_pre, time_index, node_num))
-    max_elem = np.max(adjs)
     
-    # Optimizers with same learning rates as TF version
+    # Optimizers
     pre_gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.005)  # Same as TF
     gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.001)      # Same as TF
     disc_optimizer = optim.RMSprop(discriminator.parameters(), lr=0.001) # Same as TF
@@ -222,24 +205,30 @@ def main():
         # Prepare data
         gcn_facts = []
         for k in range(t-window_size, t+1):
-            adj = adjs[k]/max_elem  # Normalize by max_elem like TF version
+            adj = adjs[k]  # No normalization needed for binary
             gcn_fact = get_gcn_fact(adj, node_num)
             gcn_facts.append(torch.FloatTensor(gcn_fact).to(device))
             
-        gnd = torch.FloatTensor(np.reshape(adjs[t+1], (1, node_num*node_num))/max_elem).to(device)
+        gnd = torch.FloatTensor(np.reshape(adjs[t+1], (1, node_num*node_num))).to(device)
         
-        # Pre-training generator with exact same early stopping as TF
+        # Pre-training generator
         print("Pre-training generator...")
         loss_list = []
+        best_loss = float('inf')
+        patience = 50  # Number of epochs to wait for improvement
+        no_improve = 0
+
         for epoch in range(pre_epoch_num):
             noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
-                          for _ in range(window_size + 1)]
+                           for _ in range(window_size + 1)]
             
             pre_gen_optimizer.zero_grad()
             gen_output = generator(noise_inputs, gcn_facts)
-            pre_loss = torch.sum((gnd - gen_output) ** 2)
             
-            # Add L2 regularization exactly like TF version
+            # Binary cross entropy for pre-training
+            pre_loss = torch.nn.functional.binary_cross_entropy(gen_output, gnd)
+            
+            # Add L2 regularization
             l2_reg = 0
             for param in generator.parameters():
                 l2_reg += decay_rate * torch.norm(param)
@@ -248,30 +237,40 @@ def main():
             pre_loss.backward()
             pre_gen_optimizer.step()
             
-            loss_list.append(pre_loss.item())
+            loss_val = pre_loss.item()
+            loss_list.append(loss_val)
+            
             if epoch % 100 == 0:
-                print(f'Pre-Train #{epoch}, G-Loss: {pre_loss.item():.6f}')
-                
-            # Exact same early stopping as TF version
-            if epoch > 500 and len(loss_list) > 2:
-                if loss_list[-1] > loss_list[-2] and loss_list[-2] > loss_list[-3]:
-                    print(f"Early stopping at epoch {epoch}")
-                    break
+                print(f'Pre-Train #{epoch}, G-Loss: {loss_val:.6f}')
+            
+            # Early stopping with patience
+            if loss_val < best_loss:
+                best_loss = loss_val
+                no_improve = 0
+            else:
+                no_improve += 1
+            
+            if no_improve >= patience and epoch > 500:
+                print(f"Early stopping at epoch {epoch}")
+                break
         
-        # Training GAN with same number of discriminator updates as TF
+        # Training GAN
         print('Training GAN...')
+        gen_losses = []
+        disc_losses = []
+
         for epoch in range(epoch_num):
-            # Train discriminator multiple times like TF
+            # Train discriminator
             for _ in range(n_critic):
                 noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
-                              for _ in range(window_size + 1)]
+                               for _ in range(window_size + 1)]
                 
                 disc_optimizer.zero_grad()
                 gen_output = generator(noise_inputs, gcn_facts)
                 disc_real, disc_logit_real = discriminator(gnd)
                 disc_fake, disc_logit_fake = discriminator(gen_output.detach())
                 
-                # Wasserstein loss exactly like TF
+                # Wasserstein loss
                 disc_loss = -(torch.mean(disc_logit_real) - torch.mean(disc_logit_fake))
                 
                 # Add L2 regularization
@@ -283,17 +282,24 @@ def main():
                 disc_loss.backward()
                 disc_optimizer.step()
                 
-                # Clip weights exactly like TF
+                # Clip weights
                 for p in discriminator.parameters():
                     p.data.clamp_(-clip_value, clip_value)
             
             # Train generator
             gen_optimizer.zero_grad()
-            gen_output = generator(noise_inputs, gcn_facts)
-            disc_fake, disc_logit_fake = discriminator(gen_output)
+            gen_loss = 0
+            n_accumulate = 3  # Accumulate gradients over multiple forward passes
             
-            # Generator loss exactly like TF
-            gen_loss = -torch.mean(disc_logit_fake)
+            for _ in range(n_accumulate):
+                noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
+                               for _ in range(window_size + 1)]
+                gen_output = generator(noise_inputs, gcn_facts)
+                disc_fake, disc_logit_fake = discriminator(gen_output)
+                
+                # Generator loss
+                cur_gen_loss = -torch.mean(disc_logit_fake)
+                gen_loss += cur_gen_loss / n_accumulate
             
             # Add L2 regularization
             l2_reg = 0
@@ -304,14 +310,20 @@ def main():
             gen_loss.backward()
             gen_optimizer.step()
             
+            # Track losses
+            gen_losses.append(gen_loss.item())
+            disc_losses.append(disc_loss.item())
+            
             if epoch % 100 == 0:
-                print(f'GAN-Train #{epoch}, D-Loss: {disc_loss.item():.6f}, G-Loss: {gen_loss.item():.6f}')
+                avg_gen_loss = np.mean(gen_losses[-100:]) if len(gen_losses) >= 100 else np.mean(gen_losses)
+                avg_disc_loss = np.mean(disc_losses[-100:]) if len(disc_losses) >= 100 else np.mean(disc_losses)
+                print(f'GAN-Train #{epoch}, D-Loss: {avg_disc_loss:.6f}, G-Loss: {avg_gen_loss:.6f}')
         
         # Prediction
         print("Making prediction...")
         gcn_facts = []
         for k in range(t-window_size+1, t+2):
-            adj = adjs[k]/max_elem
+            adj = adjs[k]  # No normalization needed for binary
             gcn_fact = get_gcn_fact(adj, node_num)
             gcn_facts.append(torch.FloatTensor(gcn_fact).to(device))
             
@@ -322,45 +334,43 @@ def main():
         generator.eval()
         with torch.no_grad():
             output = generator(noise_inputs, gcn_facts)
-            adj_est = output.cpu().numpy().reshape(node_num, node_num) * max_elem
+            adj_est = output.cpu().numpy().reshape(node_num, node_num)
             adj_est = (adj_est + adj_est.T) / 2  # Ensure symmetry
             np.fill_diagonal(adj_est, 0)  # No self-loops
-            adj_est[adj_est < 0.01] = 0  # Same threshold as TF
         generator.train()  # Set back to training mode
             
         gnd = adjs[t+2]
         
-        # Calculate metrics exactly like TF
-        error = np.linalg.norm(gnd-adj_est, ord='fro')/(node_num*node_num)
-        edge_wei_KL = get_wei_KL(adj_est, gnd)
-        mis_rate = get_mis_rate(adj_est, gnd)
+        # Calculate binary classification metrics
+        metrics = evaluate_binary_predictions(adj_est, gnd)
         
         # Print results
-        print(f'#{t+2} Error: {error:.6f}')
-        print(f'#{t+2} Edge Weight KL: {edge_wei_KL:.6f}')
-        print(f'#{t+2} Mismatch Rate: {mis_rate:.6f}')
+        print(f'\nPrediction Results for timestep #{t+2}:')
+        print(f'Accuracy: {metrics["accuracy"]:.4f}')
+        print(f'AUC-ROC: {metrics["auc_roc"]:.4f}')
+        print(f'Precision: {metrics["precision"]:.4f}')
+        print(f'Recall: {metrics["recall"]:.4f}')
+        print(f'F1 Score: {metrics["f1"]:.4f}')
+        print(f'Mismatch Rate: {metrics["mismatch_rate"]:.4f}')
         
-        print('Predicted adjacency matrix:')
+        print('\nPredicted adjacency matrix (probabilities):')
         for r in range(node_num):
             for c in range(node_num):
                 print(f'{adj_est[c, r]:.2f}', end=' ')
             print()
             
-        print('Ground truth:')
+        print('\nGround truth:')
         for r in range(node_num):
             for c in range(node_num):
-                print(f'{gnd[c, r]:.2f}', end=' ')
+                print(f'{int(gnd[c, r])}', end=' ')
             print()
         
-        # Save results exactly like TF
-        with open("+UCSB-LSTM_GAN_GCN(DrL2)-error.txt", 'a+') as f:
-            f.write(f'{t+2} {error}\n')
-            
-        with open("+UCSB-LSTM_GAN_GCN(DrL2)-KL.txt", 'a+') as f:
-            f.write(f'{t+2} {edge_wei_KL}\n')
-            
-        with open("+UCSB-LSTM_GAN_GCN(DrL2)-mis.txt", 'a+') as f:
-            f.write(f'{t+2} {mis_rate}\n')
+        # Save results
+        with open("+UCSB-LSTM_GAN_GCN(DrL2)-metrics.txt", 'a+') as f:
+            f.write(f'{t+2}')
+            for metric_name, value in metrics.items():
+                f.write(f' {value:.6f}')
+            f.write('\n')
 
 if __name__ == "__main__":
     main() 
