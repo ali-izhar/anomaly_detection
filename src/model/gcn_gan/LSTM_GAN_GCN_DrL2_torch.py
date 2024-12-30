@@ -36,7 +36,7 @@ class Generator(nn.Module):
             batch_first=True
         )
         
-        # Output layer - modified for binary prediction
+        # Output layer
         init_range = np.sqrt(6.0 / (node_num * gen_hid_num0 + node_num * node_num))
         self.output_weight = nn.Parameter(torch.FloatTensor(node_num * gen_hid_num0, node_num * node_num).uniform_(-init_range, init_range))
         self.output_bias = nn.Parameter(torch.zeros(node_num * node_num))
@@ -46,7 +46,7 @@ class Generator(nn.Module):
         gcn_outputs = []
         for t in range(self.window_size + 1):
             gcn_out = self.gcn_layers[t](gcn_facts[t], noise_inputs[t])
-            gcn_out = self.dropout(gcn_out)  # Apply dropout
+            gcn_out = self.dropout(gcn_out)  # Apply dropout after GCN
             gcn_outputs.append(gcn_out.view(1, -1))  # Reshape for LSTM
             
         # Stack GCN outputs for LSTM
@@ -55,9 +55,9 @@ class Generator(nn.Module):
         # LSTM processing
         lstm_out, _ = self.lstm(gcn_outputs)
         lstm_out = lstm_out[:, -1, :]  # Take last output
-        lstm_out = self.dropout(lstm_out)  # Apply dropout
+        lstm_out = self.dropout(lstm_out)  # Apply dropout after LSTM
         
-        # Output layer with sigmoid for binary prediction
+        # Output layer
         gen_output = torch.sigmoid(torch.matmul(lstm_out, self.output_weight) + self.output_bias)
         return gen_output
 
@@ -112,6 +112,33 @@ def get_gcn_fact(adj, node_num):
     d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
     d_mat_inv_sqrt = np.mat(np.diag(d_inv_sqrt))
     return d_mat_inv_sqrt * adj_ * d_mat_inv_sqrt
+
+def get_wei_KL(adj_est, gnd):
+    '''
+    Function to calculate the edge weight KL divergence
+    :param adj_est: prediction result
+    :param gnd: ground-truth
+    :return: edge weight KL divergence
+    '''
+    sum_est = 0
+    for r in range(adj_est.shape[0]):
+        for c in range(adj_est.shape[0]):
+            sum_est += adj_est[r, c]
+    sum_gnd = 0
+    for r in range(gnd.shape[0]):
+        for c in range(gnd.shape[0]):
+            sum_gnd += gnd[r, c]
+    p = gnd/sum_gnd
+    q = adj_est/sum_est
+    edge_wei_KL = 0
+    for r in range(adj_est.shape[0]):
+        for c in range(adj_est.shape[0]):
+            cur_KL = 0
+            if q[r, c]>0 and p[r, c]>0:
+                cur_KL = p[r, c]*np.log(p[r, c]/q[r, c])
+            edge_wei_KL += cur_KL
+
+    return edge_wei_KL
 
 def get_binary_accuracy(adj_est, gnd):
     """Calculate accuracy for binary edge prediction."""
@@ -179,80 +206,62 @@ def main():
     generator = Generator(node_num, window_size, gen_hid_num0, dropout_rate).to(device)
     discriminator = Discriminator(node_num, disc_hid_num, dropout_rate).to(device)
     
-    # Binary cross entropy loss for pre-training
-    bce_loss = nn.BCELoss()
+    # Load data
+    adjs = []
+    for time_index in range(time_num):
+        adjs.append(read_data(name_pre, time_index, node_num))
+    max_elem = np.max(adjs)
     
-    # Optimizers
-    pre_gen_optimizer = optim.Adam(generator.parameters(), lr=pre_gen_lr, betas=(0.5, 0.999))
-    gen_optimizer = optim.Adam(generator.parameters(), lr=gen_lr, betas=(0.5, 0.999))
-    disc_optimizer = optim.Adam(discriminator.parameters(), lr=disc_lr, betas=(0.5, 0.999))
-    
-    # Learning rate schedulers with longer patience
-    pre_gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        pre_gen_optimizer, mode='min', factor=0.5, patience=200, verbose=True)
-    gen_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        gen_optimizer, mode='min', factor=0.5, patience=300, verbose=True)
-    disc_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        disc_optimizer, mode='min', factor=0.5, patience=300, verbose=True)
+    # Optimizers with same learning rates as TF version
+    pre_gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.005)  # Same as TF
+    gen_optimizer = optim.RMSprop(generator.parameters(), lr=0.001)      # Same as TF
+    disc_optimizer = optim.RMSprop(discriminator.parameters(), lr=0.001) # Same as TF
     
     # Training loop
-    avg_accuracy = 0.0
-    avg_mis = 0.0
-    cal_count = 0
-    
-    for t in range(window_size, time_num-2):
+    for t in range(window_size, time_num-3):
         # Prepare data
         gcn_facts = []
         for k in range(t-window_size, t+1):
-            adj = read_data(name_pre, k, node_num)
+            adj = adjs[k]/max_elem  # Normalize by max_elem like TF version
             gcn_fact = get_gcn_fact(adj, node_num)
             gcn_facts.append(torch.FloatTensor(gcn_fact).to(device))
             
-        gnd = torch.FloatTensor(np.reshape(read_data(name_pre, t+1, node_num), 
-                                         (1, node_num*node_num))).to(device)
+        gnd = torch.FloatTensor(np.reshape(adjs[t+1], (1, node_num*node_num))/max_elem).to(device)
         
-        # Pre-training generator with binary cross entropy loss and L2 regularization
+        # Pre-training generator with exact same early stopping as TF
         print("Pre-training generator...")
-        best_pre_loss = float('inf')
-        no_improve_count = 0
+        loss_list = []
         for epoch in range(pre_epoch_num):
             noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
                           for _ in range(window_size + 1)]
             
             pre_gen_optimizer.zero_grad()
             gen_output = generator(noise_inputs, gcn_facts)
-            pre_loss = bce_loss(gen_output, gnd)
+            pre_loss = torch.sum((gnd - gen_output) ** 2)
             
-            # Reduced L2 regularization during pre-training
+            # Add L2 regularization exactly like TF version
             l2_reg = 0
             for param in generator.parameters():
-                l2_reg += decay_rate * 0.1 * torch.norm(param)
+                l2_reg += decay_rate * torch.norm(param)
             pre_loss += l2_reg
             
             pre_loss.backward()
             pre_gen_optimizer.step()
             
-            # Update learning rate and early stopping
-            if pre_loss.item() < best_pre_loss:
-                best_pre_loss = pre_loss.item()
-                no_improve_count = 0
-            else:
-                no_improve_count += 1
-            
-            pre_gen_scheduler.step(pre_loss)
-            
+            loss_list.append(pre_loss.item())
             if epoch % 100 == 0:
                 print(f'Pre-Train #{epoch}, G-Loss: {pre_loss.item():.6f}')
-            
-            # Early stopping with longer patience
-            if no_improve_count > 300:
-                print(f"Early stopping at epoch {epoch}")
-                break
+                
+            # Exact same early stopping as TF version
+            if epoch > 500 and len(loss_list) > 2:
+                if loss_list[-1] > loss_list[-2] and loss_list[-2] > loss_list[-3]:
+                    print(f"Early stopping at epoch {epoch}")
+                    break
         
-        # Training GAN
-        print('Train the GAN')
+        # Training GAN with same number of discriminator updates as TF
+        print('Training GAN...')
         for epoch in range(epoch_num):
-            # Train discriminator multiple times
+            # Train discriminator multiple times like TF
             for _ in range(n_critic):
                 noise_inputs = [torch.FloatTensor(gen_noise(node_num, node_num)).to(device) 
                               for _ in range(window_size + 1)]
@@ -262,7 +271,7 @@ def main():
                 disc_real, disc_logit_real = discriminator(gnd)
                 disc_fake, disc_logit_fake = discriminator(gen_output.detach())
                 
-                # Wasserstein loss
+                # Wasserstein loss exactly like TF
                 disc_loss = -(torch.mean(disc_logit_real) - torch.mean(disc_logit_fake))
                 
                 # Add L2 regularization
@@ -274,7 +283,7 @@ def main():
                 disc_loss.backward()
                 disc_optimizer.step()
                 
-                # Clip weights
+                # Clip weights exactly like TF
                 for p in discriminator.parameters():
                     p.data.clamp_(-clip_value, clip_value)
             
@@ -283,7 +292,7 @@ def main():
             gen_output = generator(noise_inputs, gcn_facts)
             disc_fake, disc_logit_fake = discriminator(gen_output)
             
-            # Generator tries to maximize discriminator output on fake data
+            # Generator loss exactly like TF
             gen_loss = -torch.mean(disc_logit_fake)
             
             # Add L2 regularization
@@ -302,7 +311,7 @@ def main():
         print("Making prediction...")
         gcn_facts = []
         for k in range(t-window_size+1, t+2):
-            adj = read_data(name_pre, k, node_num)
+            adj = adjs[k]/max_elem
             gcn_fact = get_gcn_fact(adj, node_num)
             gcn_facts.append(torch.FloatTensor(gcn_fact).to(device))
             
@@ -313,55 +322,45 @@ def main():
         generator.eval()
         with torch.no_grad():
             output = generator(noise_inputs, gcn_facts)
-            adj_est = output.cpu().numpy().reshape(node_num, node_num)
+            adj_est = output.cpu().numpy().reshape(node_num, node_num) * max_elem
             adj_est = (adj_est + adj_est.T) / 2  # Ensure symmetry
             np.fill_diagonal(adj_est, 0)  # No self-loops
+            adj_est[adj_est < 0.01] = 0  # Same threshold as TF
         generator.train()  # Set back to training mode
             
-        gnd = read_data(name_pre, t+2, node_num)
+        gnd = adjs[t+2]
         
-        # Calculate metrics
-        accuracy = get_binary_accuracy(adj_est, gnd)
+        # Calculate metrics exactly like TF
+        error = np.linalg.norm(gnd-adj_est, ord='fro')/(node_num*node_num)
+        edge_wei_KL = get_wei_KL(adj_est, gnd)
         mis_rate = get_mis_rate(adj_est, gnd)
-        avg_accuracy += accuracy
-        avg_mis += mis_rate
-        cal_count += 1
         
         # Print results
-        print(f'Accuracy: {accuracy:.4f}, Mismatch Rate: {mis_rate:.4f}')
+        print(f'#{t+2} Error: {error:.6f}')
+        print(f'#{t+2} Edge Weight KL: {edge_wei_KL:.6f}')
+        print(f'#{t+2} Mismatch Rate: {mis_rate:.6f}')
+        
         print('Predicted adjacency matrix:')
         for r in range(node_num):
             for c in range(node_num):
-                print(f'{int(adj_est[c, r] > 0.5)}', end=' ')  # Print binary predictions
+                print(f'{adj_est[c, r]:.2f}', end=' ')
             print()
             
         print('Ground truth:')
         for r in range(node_num):
             for c in range(node_num):
-                print(f'{int(gnd[c, r])}', end=' ')
+                print(f'{gnd[c, r]:.2f}', end=' ')
             print()
-    
-    # Print average metrics
-    if cal_count > 0:
-        print(f'\nAverage Accuracy: {avg_accuracy/cal_count:.4f}')
-        print(f'Average Mismatch Rate: {avg_mis/cal_count:.4f}')
-    
-    # After training loop ends, save the models
-    print("\nSaving models...")
-    model_state = {
-        'generator_state': generator.state_dict(),
-        'discriminator_state': discriminator.state_dict(),
-        'model_params': {
-            'node_num': node_num,
-            'window_size': window_size,
-            'gen_hid_num0': gen_hid_num0,
-            'disc_hid_num': disc_hid_num,
-            'dropout_rate': dropout_rate,
-            'decay_rate': decay_rate
-        }
-    }
-    torch.save(model_state, models_dir / 'lstm_gan_gcn_drl2_model.pt')
-    print("Models saved successfully!")
+        
+        # Save results exactly like TF
+        with open("+UCSB-LSTM_GAN_GCN(DrL2)-error.txt", 'a+') as f:
+            f.write(f'{t+2} {error}\n')
+            
+        with open("+UCSB-LSTM_GAN_GCN(DrL2)-KL.txt", 'a+') as f:
+            f.write(f'{t+2} {edge_wei_KL}\n')
+            
+        with open("+UCSB-LSTM_GAN_GCN(DrL2)-mis.txt", 'a+') as f:
+            f.write(f'{t+2} {mis_rate}\n')
 
 if __name__ == "__main__":
     main() 
