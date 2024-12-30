@@ -2,85 +2,30 @@
 
 dataset:
   num_sequences: 100      # total number of graph sequences in the dataset
-  seq_len: 50             # length of each graph sequence
-  min_segment: 5          # minimum segment length between changes
-  min_changes: 3          # minimum number of changes allowed per graph sequence
-  max_changes: 4          # maximum number of changes allowed per graph sequence
+  seq_len: 50            # length of each graph sequence
+  min_segment: 5         # minimum segment length between changes
+  min_changes: 3         # minimum number of changes per sequence
+  max_changes: 4         # maximum number of changes per sequence
 
-  # Type(s) of graphs to generate; "SBM" provides dense, community-structured graphs
-  graph_types: ["SBM"]    
   graph_params:
-    nodes: 300            # number of nodes in each graph
+    nodes: 38            # number of nodes in each graph (matching UCSB dataset)
     sbm:
-      num_blocks: 6       # number of communities (blocks) in the graph
+      num_blocks: 4      # number of communities (blocks) in the graph
       block_size_range:   
-        min: 40           # minimum size of a community
-        max: 50           # maximum size of a community
+        min: 8           # minimum size of a community
+        max: 12          # maximum size of a community
       edge_probabilities: 
-        intra_block: 0.50 # probability of connections within the same community
-        inter_block: 0.07 # probability of connections between different communities
+        intra_block: 0.7  # probability of connections within the same community
+        inter_block: 0.1  # probability of connections between different communities
       change_ranges:      
         intra:            
-          min: 0.35       # minimum intra-community edge probability after changes
-          max: 0.50       # maximum intra-community edge probability after changes
+          min: 0.5       # minimum intra-community edge probability after changes
+          max: 0.8       # maximum intra-community edge probability after changes
         inter:            
-          min: 0.05       # minimum inter-community edge probability after changes
-          max: 0.08       # maximum inter-community edge probability after changes
+          min: 0.05      # minimum inter-community edge probability after changes
+          max: 0.15      # maximum inter-community edge probability after changes
   
-  # Feature extraction configuration
-  features:
-    use_node_features: true  # enable node-specific features
-    normalize: true          # normalize features for better model training
-    normalization_method: "standard"  # use standard scaling for normalization
-    window_size: 3          # window size for temporal features
-    types:                   
-      # Basic topological features
-      - common_neighbors
-      - jaccard
-      - adamic_adar
-      - resource_allocation
-      # Degree-based features
-      - preferential_attachment
-      - degree_similarity
-      - degree_product
-      # Path-based features
-      - shortest_path
-      # Local clustering features
-      - clustering_coefficient
-      # Community-based features
-      - community_similarity
-      - block_membership
-      - community_edge_density
-      - community_role
-      # Temporal features
-      - link_frequency
-      - link_persistence
-      - cn_history
-      - cn_change_rate
-      - degree_correlation
-      - temporal_stability
-
-  # Link prediction settings
-  link_prediction:
-    negative_sampling_ratio: 1.0    # ratio of negative to positive samples
-    edge_split_method: "community_based"  # split edges while preserving community structure
-    preserve_connectivity: true     # ensure the graph remains connected
-    min_positive_degree: 8          # minimum degree for positive edges
-    sampling_strategy: "community_based"  # balanced sampling across communities
-    hard_negative: true            # include challenging negative examples
-    temporal_split: false          # whether to use temporal ordering for splits
-
-  # Ratios for splitting the dataset into training, validation, and testing
-  split_ratio:
-    train: 0.70  # proportion of data for training
-    val: 0.15    # proportion of data for validation
-    test: 0.15   # proportion of data for testing
-
-  # Settings for dataset output
+  # Output settings
   output:
-    dir: "dataset/link_prediction"  # directory to save the dataset
-    format: "h5"                    # file format for the saved dataset
-    compression: true               # enable compression for storage efficiency
-    save_features: true             # save precomputed features in the output
-    save_negative_samples: true     # save generated negative samples in the output
-    save_community_info: true       # save community labels and metrics
+    dir: "data/SBM"      # directory to save the dataset
+    format: "txt"        # file format for edge lists

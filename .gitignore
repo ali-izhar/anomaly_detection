@@ -198,3 +198,8 @@ experiments*/
 
 # archive
 archive*/
+
+# .pt files
+*.pt
+
+gcn_gan_original_working/
