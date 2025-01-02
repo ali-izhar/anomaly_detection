@@ -32,10 +32,11 @@ from typing import Optional
 @dataclass
 class BaseParams:
     """Base parameters for all graph types.
-    
+
     Standard deviation parameters (with _std suffix) control the evolution of the network.
     Min/max parameters control the range for anomaly injection during change points.
     """
+
     # Required parameters
     n: int  # Number of nodes
     seq_len: int  # Sequence length
@@ -49,6 +50,7 @@ class BaseParams:
 @dataclass
 class BAParams:
     """Parameters for Barabási-Albert network generation."""
+
     # Required base parameters
     n: int  # Number of nodes
     seq_len: int  # Sequence length
@@ -67,6 +69,7 @@ class BAParams:
 @dataclass
 class WSParams:
     """Parameters for Watts-Strogatz small-world graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -89,6 +92,7 @@ class WSParams:
 @dataclass
 class RRParams:
     """Parameters for Random Regular graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -107,6 +111,7 @@ class RRParams:
 @dataclass
 class RGParams:
     """Parameters for Random Geometric graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -126,6 +131,7 @@ class RGParams:
 @dataclass
 class ERParams:
     """Parameters for Erdos-Renyi graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -144,6 +150,7 @@ class ERParams:
 @dataclass
 class SBMParams:
     """Parameters for Stochastic Block Model graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -170,6 +177,7 @@ class SBMParams:
 @dataclass
 class RCPParams:
     """Parameters for Random Core-Periphery graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -194,6 +202,7 @@ class RCPParams:
 @dataclass
 class CGParams:
     """Parameters for Complete Graph sequences."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -212,6 +221,7 @@ class CGParams:
 @dataclass
 class DRGParams:
     """Parameters for Dense Random Geometric graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -231,6 +241,7 @@ class DRGParams:
 @dataclass
 class NWParams:
     """Parameters for Newman-Watts graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -251,6 +262,7 @@ class NWParams:
 @dataclass
 class HKParams:
     """Parameters for Holme-Kim graph."""
+
     # Required base parameters
     n: int
     seq_len: int
@@ -273,6 +285,7 @@ class HKParams:
 @dataclass
 class LFRParams:
     """Parameters for LFR Benchmark graph."""
+
     # Required base parameters
     n: int
     seq_len: int

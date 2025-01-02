@@ -49,14 +49,14 @@ class GraphGenerator:
     def __init__(self):
         """Initialize the graph generator."""
         self._generators: Dict[str, Dict] = {}
-        
+
         # Register standard BA model
         self.register_model(
             name="barabasi_albert",
             generator_func=self.generate_ba_network,
             param_class=BAParams,
             param_mutation_func=self.ba_param_mutation,
-            metadata_func=self.ba_metadata
+            metadata_func=self.ba_metadata,
         )
 
     def register_model(
@@ -193,7 +193,7 @@ class GraphGenerator:
             G = generator(**current_params)
             adj_matrix = graph_to_adjacency(G)
             graphs.append(adj_matrix)
-            
+
             # Evolve parameters for next iteration
             current_params = self._evolve_parameters(current_params)
 
@@ -284,7 +284,7 @@ class GraphGenerator:
     @staticmethod
     def _default_param_mutation(params: Dict) -> Dict:
         """Default parameter mutation strategy for anomaly injection.
-        
+
         For each parameter with min/max bounds, generates a random value
         between those bounds. Evolution parameters (_std) are preserved.
         """
@@ -321,53 +321,55 @@ class GraphGenerator:
         """Parameter mutation for BA networks, supporting both evolution and anomalies."""
         # First apply standard anomaly mutation
         new_params = self._default_param_mutation(params)
-        
+
         # Preserve evolution parameters
         for key in params:
-            if key.endswith('_std'):
+            if key.endswith("_std"):
                 new_params[key] = params[key]
-        
+
         return new_params
 
     def ba_metadata(self, params: Dict) -> Dict:
         """Metadata for BA networks."""
         meta = {"params": params.copy()}
-        evolving_params = [k[:-4] for k in params if k.endswith('_std') and params[k] is not None]
+        evolving_params = [
+            k[:-4] for k in params if k.endswith("_std") and params[k] is not None
+        ]
         if evolving_params:
             meta["evolving_parameters"] = evolving_params
         return meta
 
     def _evolve_parameters(self, params: Dict) -> Dict:
         """Evolve parameters based on their standard deviations.
-        
+
         For each parameter with a corresponding _std suffix, generates a new value
         from a normal distribution with the current value as mean and _std as
         standard deviation. Ensures numeric constraints (e.g., non-negative values).
         """
         evolved_params = params.copy()
-        
+
         for key, value in params.items():
             std_key = f"{key}_std"
             if std_key in params and params[std_key] is not None:
                 std_value = params[std_key]
-                
+
                 # Generate new value from normal distribution
                 new_value = np.random.normal(value, std_value)
-                
+
                 # Apply constraints based on parameter type
                 if isinstance(value, int):
                     new_value = int(round(new_value))
                     # Ensure non-negative for most parameters
-                    if key not in ['min_changes', 'max_changes']:
+                    if key not in ["min_changes", "max_changes"]:
                         new_value = max(1, new_value)
                 elif isinstance(value, float):
                     # Probabilities should be between 0 and 1
-                    if 'prob' in key:
+                    if "prob" in key:
                         new_value = np.clip(new_value, 0.0, 1.0)
                     # Other float parameters should be non-negative
                     else:
                         new_value = max(0.0, new_value)
-                
+
                 evolved_params[key] = new_value
-        
+
         return evolved_params

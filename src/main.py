@@ -13,9 +13,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.params import BAParams
+from graph.features import NetworkFeatureExtractor, calculate_error_metrics
 from graph_forecasting.predictors import WeightedAveragePredictor
 from graph_forecasting.visualization import plot_metric_evolution
-from graph_forecasting.metrics import get_network_metrics, calculate_error_metrics
 
 from typing import Dict, List, Any
 import numpy as np
@@ -42,8 +42,9 @@ def generate_network_series(
     if seed is not None:
         np.random.seed(seed)
 
-    # Initialize generator
+    # Initialize generator and feature extractor
     generator = GraphGenerator()
+    feature_extractor = NetworkFeatureExtractor()
 
     # Configure BA parameters with evolution and anomaly injection
     params = BAParams(
@@ -62,10 +63,7 @@ def generate_network_series(
     )
 
     # Generate sequence
-    result = generator.generate_sequence(
-        model="barabasi_albert",
-        params=params
-    )
+    result = generator.generate_sequence(model="barabasi_albert", params=params)
 
     # Create a mapping of parameters for each time step
     param_map = {}
@@ -80,14 +78,18 @@ def generate_network_series(
     network_series = []
     for i, adj in enumerate(result["graphs"]):
         G = nx.from_numpy_array(adj)
-        network_series.append({
-            "time": i,
-            "adjacency": adj,
-            "graph": G,
-            "metrics": get_network_metrics(G),
-            "params": param_map[i],
-            "is_change_point": i in result["change_points"]
-        })
+        network_series.append(
+            {
+                "time": i,
+                "adjacency": adj,
+                "graph": G,
+                "metrics": feature_extractor.get_all_metrics(
+                    G
+                ).__dict__,  # Convert to dict for serialization
+                "params": param_map[i],
+                "is_change_point": i in result["change_points"],
+            }
+        )
 
     return network_series
 
@@ -108,6 +110,9 @@ def analyze_prediction_phases(
     min_history : int
         Minimum history used
     """
+    # Initialize feature extractor
+    feature_extractor = NetworkFeatureExtractor()
+
     # Define phases
     phases = [
         (0, 50, "First 50 predictions"),
@@ -126,8 +131,8 @@ def analyze_prediction_phases(
         # Calculate average errors for this phase
         all_errors = []
         for pred, actual in zip(phase_predictions, phase_actuals):
-            pred_metrics = get_network_metrics(pred["graph"])
-            actual_metrics = get_network_metrics(actual["graph"])
+            pred_metrics = feature_extractor.get_all_metrics(pred["graph"]).__dict__
+            actual_metrics = feature_extractor.get_all_metrics(actual["graph"]).__dict__
             errors = calculate_error_metrics(actual_metrics, pred_metrics)
             all_errors.append(errors)
 
@@ -158,6 +163,8 @@ def main():
     # Perform rolling predictions
     print("Performing rolling predictions...")
     predictions = []
+    feature_extractor = NetworkFeatureExtractor()
+
     for t in range(min_history, total_steps):
         # Get historical data up to current time t
         history = network_series[:t]
@@ -172,7 +179,7 @@ def main():
                 "time": t,
                 "adjacency": predicted_adjs[0],
                 "graph": pred_graph,
-                "metrics": get_network_metrics(pred_graph),
+                "metrics": feature_extractor.get_all_metrics(pred_graph).__dict__,
                 "history_size": len(history),
             }
         )

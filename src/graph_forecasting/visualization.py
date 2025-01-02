@@ -7,7 +7,9 @@ prediction results, and evolution of network properties.
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Dict, Any, Tuple
-from .metrics import get_network_metrics
+from graph.features import NetworkFeatureExtractor
+
+feature_extractor = NetworkFeatureExtractor()
 
 
 def plot_metric_evolution(
@@ -30,8 +32,13 @@ def plot_metric_evolution(
         Figure size (width, height), by default (15, 25)
     """
     # Calculate metrics
-    actual_metrics = [get_network_metrics(net["graph"]) for net in actual_series]
-    pred_metrics = [get_network_metrics(p["graph"]) for p in predictions]
+    actual_metrics = [
+        feature_extractor.get_all_metrics(net["graph"]).__dict__
+        for net in actual_series
+    ]
+    pred_metrics = [
+        feature_extractor.get_all_metrics(p["graph"]).__dict__ for p in predictions
+    ]
     pred_times = [p["time"] for p in predictions]
     history_sizes = [p["history_size"] for p in predictions]
 
@@ -187,8 +194,8 @@ def _plot_prediction_error(
     """
     errors = []
     for p, actual in zip(predictions, actual_series):
-        pred_metrics = get_network_metrics(p["graph"])
-        actual_metrics = get_network_metrics(actual["graph"])
+        pred_metrics = feature_extractor.get_all_metrics(p["graph"]).__dict__
+        actual_metrics = feature_extractor.get_all_metrics(actual["graph"]).__dict__
         error = abs(pred_metrics["avg_degree"] - actual_metrics["avg_degree"])
         errors.append(error)
 
