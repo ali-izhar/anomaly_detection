@@ -203,14 +203,14 @@ class StrangenessDetector:
             if data_array.ndim == 3:
                 data_array = data_array.reshape(-1, data_array.shape[-1])
 
-            if self.batch_size and data_array.shape[0] > self.batch_size:
-                from sklearn.cluster import MiniBatchKMeans
+                if self.batch_size and data_array.shape[0] > self.batch_size:
+                    from sklearn.cluster import MiniBatchKMeans
 
-                kmeans = MiniBatchKMeans(
-                    n_clusters=self.n_clusters,
-                    batch_size=self.batch_size,
-                    random_state=self.random_state,
-                )
+                    kmeans = MiniBatchKMeans(
+                        n_clusters=self.n_clusters,
+                        batch_size=self.batch_size,
+                        random_state=self.random_state,
+                    )
             else:
                 kmeans = KMeans(
                     n_clusters=self.n_clusters,
@@ -218,7 +218,7 @@ class StrangenessDetector:
                     random_state=self.random_state,
                 )
 
-            return kmeans.fit_transform(data_array)
+                return kmeans.fit_transform(data_array)
 
         except Exception as e:
             logger.error(f"Strangeness computation failed: {str(e)}")

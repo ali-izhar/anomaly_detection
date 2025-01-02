@@ -20,7 +20,7 @@ from .embedding import EmbeddingPredictor
 from .hybrid import HybridPredictor
 from .ensemble import EnsemblePredictor
 from .adaptive import AdaptivePredictor
-from .visualize import plot_metric_evolution
+from .visualize import Visualizer
 
 __all__ = [
     "BasePredictor",
@@ -31,5 +31,5 @@ __all__ = [
     "HybridPredictor",
     "EnsemblePredictor",
     "AdaptivePredictor",
-    "plot_metric_evolution",
+    "Visualizer",
 ]

@@ -9,17 +9,21 @@ This script shows how to use the graph_forecasting package to:
 import sys
 from pathlib import Path
 import argparse
+import os
+import json
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
-from predictor import WeightedPredictor, plot_metric_evolution
+from predictor import WeightedPredictor, Visualizer
 from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
 import numpy as np
 import networkx as nx
+import matplotlib.pyplot as plt
 
 
 def generate_network_series(
@@ -82,7 +86,8 @@ def analyze_prediction_phases(
     predictions: List[Dict[str, Any]],
     actual_series: List[Dict[str, Any]],
     min_history: int,
-) -> None:
+    output_dir: Path,
+) -> Dict[str, Any]:
     """Analyze prediction accuracy across different phases.
 
     Parameters
@@ -93,6 +98,13 @@ def analyze_prediction_phases(
         Actual network series
     min_history : int
         Minimum history used
+    output_dir : Path
+        Directory to save results
+
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing analysis results
     """
     # Initialize feature extractor
     feature_extractor = NetworkFeatureExtractor()
@@ -103,6 +115,9 @@ def analyze_prediction_phases(
         (50, 100, "Middle 50 predictions"),
         (100, None, "Last predictions"),
     ]
+
+    # Store results
+    results = {"phases": {}}
 
     # Calculate errors for each phase
     for start, end, phase_name in phases:
@@ -120,14 +135,28 @@ def analyze_prediction_phases(
             errors = calculate_error_metrics(actual_metrics, pred_metrics)
             all_errors.append(errors)
 
-        # Print average errors for each metric
+        # Calculate average errors for each metric
         avg_errors = {
             metric: np.mean([e[metric] for e in all_errors])
             for metric in all_errors[0].keys()
         }
 
+        # Store results
+        results["phases"][phase_name] = {
+            "start": start,
+            "end": end,
+            "errors": avg_errors,
+        }
+
+        # Print results
         for metric, error in avg_errors.items():
             print(f"Average MAE for {metric}: {error:.3f}")
+
+    # Save results to JSON
+    with open(output_dir / "prediction_analysis.json", "w") as f:
+        json.dump(results, f, indent=4)
+
+    return results
 
 
 def main():
@@ -159,9 +188,20 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=None, help="Random seed for reproducibility"
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="results",
+        help="Output directory for results and visualizations",
+    )
     args = parser.parse_args()
 
-    # Get configuration for selected model
+    # Create output directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path(args.output) / f"{args.model}_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save configuration
     config = GRAPH_CONFIGS[args.model](
         n=args.n,
         seq_len=args.seq_len,
@@ -169,6 +209,18 @@ def main():
         min_changes=args.min_changes,
         max_changes=args.max_changes,
     )
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(
+            {
+                "model": args.model,
+                "parameters": {
+                    k: str(v) if isinstance(v, Path) else v
+                    for k, v in vars(args).items()
+                },
+            },
+            f,
+            indent=4,
+        )
 
     # Parameters for prediction
     min_history = 3
@@ -205,14 +257,45 @@ def main():
             }
         )
 
-    # Visualize results
-    print("Visualizing metric evolution...")
-    plot_metric_evolution(network_series, predictions, min_history)
+    # Generate and save visualizations
+    print("Generating visualizations...")
+    visualizer = Visualizer()
 
-    # Analyze prediction accuracy
-    print(f"\nPrediction Performance Summary for {args.model}:")
-    print("-" * 50)
-    analyze_prediction_phases(predictions, network_series, min_history)
+    # 1. Metric evolution plot
+    plt.figure(figsize=(12, 8))
+    visualizer.plot_metric_evolution(network_series, predictions, min_history)
+    plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 2. Network snapshots at key points
+    plt.figure(figsize=(15, 5))
+    visualizer.plot_network_snapshots(
+        network_series, predictions, [min_history, len(predictions) // 2, -1]
+    )
+    plt.savefig(output_dir / "network_snapshots.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 3. Adjacency matrix comparison
+    plt.figure(figsize=(15, 5))
+    # Get first change point from the series
+    change_points = [
+        i
+        for i, state in enumerate(network_series)
+        if state.get("is_change_point", False)
+    ]
+    change_point = change_points[0] if change_points else len(network_series) // 2
+    visualizer.plot_adjacency_comparison(network_series, predictions, change_point)
+    plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # # Analyze prediction accuracy
+    # print(f"\nPrediction Performance Summary for {args.model}:")
+    # print("-" * 50)
+    # analysis_results = analyze_prediction_phases(
+    #     predictions, network_series, min_history, output_dir
+    # )
+
+    print(f"\nResults saved to: {output_dir}")
 
 
 if __name__ == "__main__":
