@@ -1,20 +1,21 @@
 """Example script demonstrating network forecasting capabilities.
 
 This script shows how to use the graph_forecasting package to:
-1. Generate evolving network time series
+1. Generate evolving network time series for different graph types
 2. Predict future network states
 3. Visualize and analyze prediction accuracy
 """
 
 import sys
 from pathlib import Path
+import argparse
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
-from graph.params import BAParams
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
 from predictor import WeightedPredictor, plot_metric_evolution
+from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
 import numpy as np
@@ -22,14 +23,14 @@ import networkx as nx
 
 
 def generate_network_series(
-    total_steps: int = 200, seed: int = None
+    config: Dict[str, Any], seed: int = None
 ) -> List[Dict[str, Any]]:
     """Generate a time series of evolving networks.
 
     Parameters
     ----------
-    total_steps : int, optional
-        Number of time steps to generate, by default 200
+    config : Dict[str, Any]
+        Configuration dictionary containing model and parameters
     seed : int, optional
         Random seed for reproducibility, by default None
 
@@ -45,29 +46,15 @@ def generate_network_series(
     generator = GraphGenerator()
     feature_extractor = NetworkFeatureExtractor()
 
-    # Configure BA parameters with evolution and anomaly injection
-    params = BAParams(
-        # Required parameters
-        n=100,  # Fixed number of nodes
-        seq_len=total_steps,
-        min_segment=20,  # Minimum length between anomalies
-        min_changes=2,  # At least 2 anomalies
-        max_changes=5,  # At most 5 anomalies
-        m=3,  # Base number of edges per new node
-        min_m=1,  # Minimum edges during anomalies
-        max_m=6,  # Maximum edges during anomalies
-        # Optional evolution parameters
-        n_std=None,  # Keep node count fixed
-        m_std=0.5,  # Allow edge count to evolve
-    )
-
     # Generate sequence
-    result = generator.generate_sequence(model="barabasi_albert", params=params)
+    result = generator.generate_sequence(
+        model=config["model"], params=config["params"], seed=seed
+    )
 
     # Create a mapping of parameters for each time step
     param_map = {}
     current_params = result["parameters"][0]
-    for i in range(total_steps):
+    for i in range(config["params"].seq_len):
         # Update parameters at change points
         if i in result["change_points"]:
             current_params = result["parameters"][result["change_points"].index(i) + 1]
@@ -82,9 +69,7 @@ def generate_network_series(
                 "time": i,
                 "adjacency": adj,
                 "graph": G,
-                "metrics": feature_extractor.get_all_metrics(
-                    G
-                ).__dict__,  # Convert to dict for serialization
+                "metrics": feature_extractor.get_all_metrics(G).__dict__,
                 "params": param_map[i],
                 "is_change_point": i in result["change_points"],
             }
@@ -147,24 +132,61 @@ def analyze_prediction_phases(
 
 def main():
     """Run network forecasting example."""
-    # Parameters
-    total_steps = 200
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Generate and analyze network time series"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="barabasi_albert",
+        choices=list(GRAPH_CONFIGS.keys()),
+        help="Type of network model to generate",
+    )
+    parser.add_argument("--n", type=int, default=100, help="Number of nodes")
+    parser.add_argument(
+        "--seq_len", type=int, default=200, help="Length of time series"
+    )
+    parser.add_argument(
+        "--min_segment", type=int, default=20, help="Minimum length between changes"
+    )
+    parser.add_argument(
+        "--min_changes", type=int, default=2, help="Minimum number of changes"
+    )
+    parser.add_argument(
+        "--max_changes", type=int, default=5, help="Maximum number of changes"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Random seed for reproducibility"
+    )
+    args = parser.parse_args()
+
+    # Get configuration for selected model
+    config = GRAPH_CONFIGS[args.model](
+        n=args.n,
+        seq_len=args.seq_len,
+        min_segment=args.min_segment,
+        min_changes=args.min_changes,
+        max_changes=args.max_changes,
+    )
+
+    # Parameters for prediction
     min_history = 3
     prediction_window = 10
 
     # Generate network time series
-    print("Generating network time series...")
-    network_series = generate_network_series(total_steps=total_steps)
+    print(f"Generating {args.model} network time series...")
+    network_series = generate_network_series(config, seed=args.seed)
 
     # Create predictor
-    predictor = WeightedPredictor(n_history=3)
+    predictor = WeightedPredictor(n_history=min_history)
 
     # Perform rolling predictions
     print("Performing rolling predictions...")
     predictions = []
     feature_extractor = NetworkFeatureExtractor()
 
-    for t in range(min_history, total_steps):
+    for t in range(min_history, args.seq_len):
         # Get historical data up to current time t
         history = network_series[:t]
 
@@ -188,8 +210,8 @@ def main():
     plot_metric_evolution(network_series, predictions, min_history)
 
     # Analyze prediction accuracy
-    print("\nPrediction Performance Summary:")
-    print("-------------------------------")
+    print(f"\nPrediction Performance Summary for {args.model}:")
+    print("-" * 50)
     analyze_prediction_phases(predictions, network_series, min_history)
 
 

@@ -19,13 +19,13 @@ from .base import BasePredictor
 
 class HybridPredictor(BasePredictor):
     """Network predictor using hybrid prediction strategies.
-    
+
     This predictor combines multiple prediction strategies:
     - Structural: topology and connectivity patterns
     - Spectral: eigenvalue and eigenvector evolution
     - Temporal: time series patterns and dynamics
     - Feature-based: network metrics and properties
-    
+
     Parameters
     ----------
     n_history : int, optional
@@ -47,12 +47,12 @@ class HybridPredictor(BasePredictor):
     ):
         """Initialize the hybrid predictor."""
         self.n_history = n_history
-        
+
         # Validate and normalize weights
         weights = [spectral_weight, structural_weight, temporal_weight]
         if not np.isclose(sum(weights), 1.0):
             weights = np.array(weights) / sum(weights)
-            
+
         self.spectral_weight = weights[0]
         self.structural_weight = weights[1]
         self.temporal_weight = weights[2]
@@ -74,4 +74,4 @@ class HybridPredictor(BasePredictor):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        raise NotImplementedError("Hybrid predictor not implemented yet") 
+        raise NotImplementedError("Hybrid predictor not implemented yet")

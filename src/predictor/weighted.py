@@ -51,7 +51,7 @@ class WeightedPredictor(BasePredictor):
 
         for _ in range(horizon):
             # Get recent networks
-            last_networks = current_history[-self.n_history:]
+            last_networks = current_history[-self.n_history :]
 
             # Get target properties from most recent network
             latest_network = last_networks[-1]["graph"]
@@ -160,4 +160,4 @@ class WeightedPredictor(BasePredictor):
                     i, j = best_edge
                     predicted_adj[i, j] = predicted_adj[j, i] = 1
 
-        return predicted_adj 
+        return predicted_adj

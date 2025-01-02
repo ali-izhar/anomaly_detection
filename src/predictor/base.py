@@ -61,4 +61,4 @@ class BasePredictor(ABC):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        pass 
+        pass

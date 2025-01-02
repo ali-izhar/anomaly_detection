@@ -31,4 +31,4 @@ class AdaptivePredictor(BasePredictor):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        raise NotImplementedError("Adaptive predictor not implemented yet") 
+        raise NotImplementedError("Adaptive predictor not implemented yet")

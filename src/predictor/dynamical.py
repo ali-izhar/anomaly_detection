@@ -31,4 +31,4 @@ class DynamicalPredictor(BasePredictor):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        raise NotImplementedError("Dynamical predictor not implemented yet") 
+        raise NotImplementedError("Dynamical predictor not implemented yet")

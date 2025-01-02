@@ -31,4 +31,4 @@ class EnsemblePredictor(BasePredictor):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        raise NotImplementedError("Ensemble predictor not implemented yet") 
+        raise NotImplementedError("Ensemble predictor not implemented yet")

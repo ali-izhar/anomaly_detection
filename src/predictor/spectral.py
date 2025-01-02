@@ -31,4 +31,4 @@ class SpectralPredictor(BasePredictor):
         List[np.ndarray]
             List of predicted adjacency matrices
         """
-        raise NotImplementedError("Spectral predictor not implemented yet") 
+        raise NotImplementedError("Spectral predictor not implemented yet")

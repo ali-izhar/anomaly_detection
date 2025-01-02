@@ -19,7 +19,15 @@ import numpy as np
 import networkx as nx
 from dataclasses import asdict
 
-from .params import BaseParams, BAParams
+from .params import (
+    BaseParams,
+    BAParams,
+    WSParams,
+    ERParams,
+    SBMParams,
+    RCPParams,
+    LFRParams,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +55,10 @@ class GraphGenerator:
     """
 
     def __init__(self):
-        """Initialize the graph generator."""
+        """Initialize the graph generator with all supported models."""
         self._generators: Dict[str, Dict] = {}
 
-        # Register standard BA model
+        # Register Barabási-Albert model
         self.register_model(
             name="barabasi_albert",
             generator_func=self.generate_ba_network,
@@ -58,6 +66,48 @@ class GraphGenerator:
             param_mutation_func=self.ba_param_mutation,
             metadata_func=self.ba_metadata,
         )
+        # Also register with short name
+        self._generators["ba"] = self._generators["barabasi_albert"]
+
+        # Register Watts-Strogatz model
+        self.register_model(
+            name="watts_strogatz",
+            generator_func=self.generate_ws_network,
+            param_class=WSParams,
+        )
+        self._generators["ws"] = self._generators["watts_strogatz"]
+
+        # Register Erdős-Rényi model
+        self.register_model(
+            name="erdos_renyi",
+            generator_func=self.generate_er_network,
+            param_class=ERParams,
+        )
+        self._generators["er"] = self._generators["erdos_renyi"]
+
+        # Register Stochastic Block Model
+        self.register_model(
+            name="stochastic_block_model",
+            generator_func=self.generate_sbm_network,
+            param_class=SBMParams,
+        )
+        self._generators["sbm"] = self._generators["stochastic_block_model"]
+
+        # Register Random Core-Periphery model
+        self.register_model(
+            name="random_core_periphery",
+            generator_func=self.generate_rcp_network,
+            param_class=RCPParams,
+        )
+        self._generators["rcp"] = self._generators["random_core_periphery"]
+
+        # Register LFR Benchmark model
+        self.register_model(
+            name="lfr_benchmark",
+            generator_func=self.generate_lfr_network,
+            param_class=LFRParams,
+        )
+        self._generators["lfr"] = self._generators["lfr_benchmark"]
 
     def register_model(
         self,
@@ -316,6 +366,109 @@ class GraphGenerator:
     def generate_ba_network(self, n: int, m: int, **kwargs) -> nx.Graph:
         """Generate Barabási-Albert preferential attachment network."""
         return nx.barabasi_albert_graph(n=n, m=m)
+
+    def generate_ws_network(
+        self, n: int, k_nearest: int, rewire_prob: float, **kwargs
+    ) -> nx.Graph:
+        """Generate Watts-Strogatz small-world network."""
+        return nx.watts_strogatz_graph(n=n, k=k_nearest, p=rewire_prob)
+
+    def generate_er_network(self, n: int, prob: float, **kwargs) -> nx.Graph:
+        """Generate Erdős-Rényi random network."""
+        return nx.erdos_renyi_graph(n=n, p=prob)
+
+    def generate_sbm_network(
+        self, n: int, num_blocks: int, intra_prob: float, inter_prob: float, **kwargs
+    ) -> nx.Graph:
+        """Generate Stochastic Block Model network."""
+        # Calculate block sizes
+        block_size = n // num_blocks
+        sizes = [block_size] * (num_blocks - 1)
+        sizes.append(n - sum(sizes))  # Last block gets remaining nodes
+
+        # Create probability matrix
+        probs = np.full((num_blocks, num_blocks), inter_prob)
+        np.fill_diagonal(probs, intra_prob)
+
+        return nx.stochastic_block_model(sizes, probs)
+
+    def generate_rcp_network(
+        self,
+        n: int,
+        core_size: int,
+        core_prob: float,
+        periph_prob: float,
+        core_periph_prob: float,
+        **kwargs,
+    ) -> nx.Graph:
+        """Generate Random Core-Periphery network."""
+        G = nx.Graph()
+        G.add_nodes_from(range(n))
+
+        # Add core edges
+        core_nodes = list(range(core_size))
+        for i in range(core_size):
+            for j in range(i + 1, core_size):
+                if np.random.random() < core_prob:
+                    G.add_edge(i, j)
+
+        # Add periphery edges
+        periph_nodes = list(range(core_size, n))
+        for i in range(core_size, n):
+            for j in range(i + 1, n):
+                if np.random.random() < periph_prob:
+                    G.add_edge(i, j)
+
+        # Add core-periphery edges
+        for i in core_nodes:
+            for j in periph_nodes:
+                if np.random.random() < core_periph_prob:
+                    G.add_edge(i, j)
+
+        return G
+
+    def generate_lfr_network(
+        self,
+        n: int,
+        avg_degree: int,
+        max_degree: int,
+        mu: float,
+        min_community: int,
+        max_community: int,
+        tau1: float = 2.5,
+        tau2: float = 1.5,
+        **kwargs,
+    ) -> nx.Graph:
+        """Generate LFR Benchmark network."""
+        # Note: This is a simplified version. For full LFR implementation,
+        # consider using networkx_benchmark_graphs or cdlib packages
+        G = nx.scale_free_graph(n, alpha=tau1 - 1, beta=0.1, gamma=tau2 - 1)
+        G = nx.Graph(G)  # Convert to undirected
+        G.remove_edges_from(nx.selfloop_edges(G))
+
+        # Adjust average degree
+        current_avg_degree = sum(dict(G.degree()).values()) / n
+        target_edges = (avg_degree * n) // 2
+        current_edges = G.number_of_edges()
+
+        if current_edges < target_edges:
+            # Add random edges to reach target average degree
+            possible_edges = list(nx.non_edges(G))
+            edges_to_add = np.random.choice(
+                len(possible_edges),
+                min(target_edges - current_edges, len(possible_edges)),
+                replace=False,
+            )
+            G.add_edges_from([possible_edges[i] for i in edges_to_add])
+        elif current_edges > target_edges:
+            # Remove random edges to reach target average degree
+            edges = list(G.edges())
+            edges_to_remove = np.random.choice(
+                len(edges), current_edges - target_edges, replace=False
+            )
+            G.remove_edges_from([edges[i] for i in edges_to_remove])
+
+        return G
 
     def ba_param_mutation(self, params: Dict) -> Dict:
         """Parameter mutation for BA networks, supporting both evolution and anomalies."""
