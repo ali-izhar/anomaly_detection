@@ -19,7 +19,7 @@ import numpy as np
 import networkx as nx
 from dataclasses import asdict
 
-from .params import BaseParams
+from .params import BaseParams, BAParams
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +41,23 @@ def graph_to_adjacency(G: nx.Graph) -> np.ndarray:
 class GraphGenerator:
     """Generator for dynamic graph sequences.
 
-    This class provides a generic interface to generate sequences of graphs with changing
-    parameters using any NetworkX-compatible model.
+    This class provides a generic interface to generate sequences of graphs with:
+    1. Gradual evolution through _std parameters
+    2. Sudden changes through min/max parameters at change points
     """
 
     def __init__(self):
         """Initialize the graph generator."""
         self._generators: Dict[str, Dict] = {}
+        
+        # Register standard BA model
+        self.register_model(
+            name="barabasi_albert",
+            generator_func=self.generate_ba_network,
+            param_class=BAParams,
+            param_mutation_func=self.ba_param_mutation,
+            metadata_func=self.ba_metadata
+        )
 
     def register_model(
         self,
@@ -173,14 +183,19 @@ class GraphGenerator:
         params: Dict,
         length: int,
     ) -> List[np.ndarray]:
-        """Generate a sequence of graphs with fixed parameters."""
+        """Generate a sequence of graphs with evolving parameters."""
         graphs = []
         generator = self._generators[model]["generator"]
+        current_params = params.copy()
 
         for _ in range(length):
-            G = generator(**params)
+            # Generate graph with current parameters
+            G = generator(**current_params)
             adj_matrix = graph_to_adjacency(G)
             graphs.append(adj_matrix)
+            
+            # Evolve parameters for next iteration
+            current_params = self._evolve_parameters(current_params)
 
         return graphs
 
@@ -254,11 +269,12 @@ class GraphGenerator:
         num_changes: int,
         mutation_func: Callable[[Dict], Dict],
     ) -> List[Dict]:
-        """Generate parameter sets for each segment."""
+        """Generate parameter sets for each segment, including both evolution and anomaly changes."""
         param_dict = asdict(params)
         param_sets = [param_dict]
 
         for _ in range(num_changes):
+            # Apply anomaly changes through mutation function
             new_params = mutation_func(param_dict.copy())
             param_sets.append(new_params)
             param_dict = new_params
@@ -267,19 +283,19 @@ class GraphGenerator:
 
     @staticmethod
     def _default_param_mutation(params: Dict) -> Dict:
-        """Default parameter mutation strategy.
-
-        For each parameter ending with 'min' or 'max', generates a random value
-        between those bounds for the corresponding parameter.
+        """Default parameter mutation strategy for anomaly injection.
+        
+        For each parameter with min/max bounds, generates a random value
+        between those bounds. Evolution parameters (_std) are preserved.
         """
         new_params = params.copy()
 
         # Find all parameter pairs with min/max bounds
         param_bounds = {}
         for key in params:
-            if key.endswith("_min"):
-                base_key = key[:-4]
-                max_key = f"{base_key}_max"
+            if key.startswith("min_"):
+                base_key = key[4:]
+                max_key = f"max_{base_key}"
                 if max_key in params:
                     param_bounds[base_key] = (params[key], params[max_key])
 
@@ -296,3 +312,62 @@ class GraphGenerator:
     def _default_metadata(params: Dict) -> Dict:
         """Default metadata generation."""
         return {"params": params.copy()}
+
+    def generate_ba_network(self, n: int, m: int, **kwargs) -> nx.Graph:
+        """Generate Barabási-Albert preferential attachment network."""
+        return nx.barabasi_albert_graph(n=n, m=m)
+
+    def ba_param_mutation(self, params: Dict) -> Dict:
+        """Parameter mutation for BA networks, supporting both evolution and anomalies."""
+        # First apply standard anomaly mutation
+        new_params = self._default_param_mutation(params)
+        
+        # Preserve evolution parameters
+        for key in params:
+            if key.endswith('_std'):
+                new_params[key] = params[key]
+        
+        return new_params
+
+    def ba_metadata(self, params: Dict) -> Dict:
+        """Metadata for BA networks."""
+        meta = {"params": params.copy()}
+        evolving_params = [k[:-4] for k in params if k.endswith('_std') and params[k] is not None]
+        if evolving_params:
+            meta["evolving_parameters"] = evolving_params
+        return meta
+
+    def _evolve_parameters(self, params: Dict) -> Dict:
+        """Evolve parameters based on their standard deviations.
+        
+        For each parameter with a corresponding _std suffix, generates a new value
+        from a normal distribution with the current value as mean and _std as
+        standard deviation. Ensures numeric constraints (e.g., non-negative values).
+        """
+        evolved_params = params.copy()
+        
+        for key, value in params.items():
+            std_key = f"{key}_std"
+            if std_key in params and params[std_key] is not None:
+                std_value = params[std_key]
+                
+                # Generate new value from normal distribution
+                new_value = np.random.normal(value, std_value)
+                
+                # Apply constraints based on parameter type
+                if isinstance(value, int):
+                    new_value = int(round(new_value))
+                    # Ensure non-negative for most parameters
+                    if key not in ['min_changes', 'max_changes']:
+                        new_value = max(1, new_value)
+                elif isinstance(value, float):
+                    # Probabilities should be between 0 and 1
+                    if 'prob' in key:
+                        new_value = np.clip(new_value, 0.0, 1.0)
+                    # Other float parameters should be non-negative
+                    else:
+                        new_value = max(0.0, new_value)
+                
+                evolved_params[key] = new_value
+        
+        return evolved_params

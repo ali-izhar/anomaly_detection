@@ -26,230 +26,272 @@ Mixed Density Models:
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
 class BaseParams:
-    """Base parameters for all graph types."""
-
+    """Base parameters for all graph types.
+    
+    Standard deviation parameters (with _std suffix) control the evolution of the network.
+    Min/max parameters control the range for anomaly injection during change points.
+    """
+    # Required parameters
     n: int  # Number of nodes
     seq_len: int  # Sequence length
     min_segment: int  # Minimum segment length
     min_changes: int  # Minimum number of changes
     max_changes: int  # Maximum number of changes
-
-
-# ============= Sparse Models =============
-
-
-@dataclass
-class BAParams(BaseParams):
-    """Parameters for Barabasi-Albert graph.
-
-    Generates scale-free networks using preferential attachment.
-    Typically produces sparse networks with power-law degree distribution.
-    Average degree: 2 * initial_edges
-    """
-
-    initial_edges: int  # Initial number of edges per new node (m)
-    min_edges: int  # Minimum edges after change
-    max_edges: int  # Maximum edges after change
-    pref_exp: float = 1.0  # Preferential attachment exponent
+    # Optional parameters
+    n_std: Optional[float] = None  # Standard deviation for evolving node count
 
 
 @dataclass
-class WSParams(BaseParams):
-    """Parameters for Watts-Strogatz small-world graph.
+class BAParams:
+    """Parameters for Barabási-Albert network generation."""
+    # Required base parameters
+    n: int  # Number of nodes
+    seq_len: int  # Sequence length
+    min_segment: int  # Minimum segment length
+    min_changes: int  # Minimum number of changes
+    max_changes: int  # Maximum number of changes
+    # Required model-specific parameters
+    m: int  # Number of edges to attach from a new node
+    min_m: int  # Minimum m for anomaly injection
+    max_m: int  # Maximum m for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None  # Standard deviation for evolving node count
+    m_std: Optional[float] = None  # Standard deviation for evolving m parameter
 
-    Generates small-world networks with high clustering.
-    Typically sparse with regular structure plus random rewiring.
-    Average degree: 2 * k_nearest
-    """
 
+@dataclass
+class WSParams:
+    """Parameters for Watts-Strogatz small-world graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     k_nearest: int  # Number of nearest neighbors (k)
-    min_k: int  # Minimum k after change
-    max_k: int  # Maximum k after change
-    rewire_prob: float = 0.1  # Rewiring probability (p)
-    min_prob: float = 0.0  # Minimum rewiring probability after change
-    max_prob: float = 0.3  # Maximum rewiring probability after change
+    min_k: int  # Minimum k for anomaly injection
+    max_k: int  # Maximum k for anomaly injection
+    rewire_prob: float  # Rewiring probability (p)
+    min_prob: float  # Minimum rewiring probability for anomaly injection
+    max_prob: float  # Maximum rewiring probability for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    k_std: Optional[float] = None
+    prob_std: Optional[float] = None
 
 
 @dataclass
-class RRParams(BaseParams):
-    """Parameters for Random Regular graph.
-
-    Generates graphs where each node has exactly d neighbors.
-    Maintains constant sparsity with regular structure.
-    Average degree: degree
-    """
-
+class RRParams:
+    """Parameters for Random Regular graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     degree: int  # Degree of each node (d)
-    min_degree: int  # Minimum degree after change
-    max_degree: int  # Maximum degree after change
+    min_degree: int  # Minimum degree for anomaly injection
+    max_degree: int  # Maximum degree for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    degree_std: Optional[float] = None
 
 
 @dataclass
-class RGParams(BaseParams):
-    """Parameters for Random Geometric graph.
-
-    Generates spatial networks with distance-based connections.
-    Typically sparse with geometric constraints.
-    Average degree varies with radius.
-    """
-
+class RGParams:
+    """Parameters for Random Geometric graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     radius: float  # Connection radius (r)
-    min_radius: float  # Minimum radius after change
-    max_radius: float  # Maximum radius after change
+    min_radius: float  # Minimum radius for anomaly injection
+    max_radius: float  # Maximum radius for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    radius_std: Optional[float] = None
     dim: int = 2  # Dimension of geometric space
 
 
 @dataclass
-class RTParams(BaseParams):
-    """Parameters for Random Tree.
-
-    Generates tree structures with no cycles.
-    Always sparse (|E| = |V| - 1).
-    Average degree: 2 - 2/n
-    """
-
-    branching_factor: float  # Average number of children
-    min_branching: float  # Minimum branching factor after change
-    max_branching: float  # Maximum branching factor after change
-
-
-# ============= Dense Models =============
-
-
-@dataclass
-class ERParams(BaseParams):
-    """Parameters for Erdos-Renyi graph.
-
-    Generates random graphs with uniform edge probability.
-    Can be dense or sparse depending on probability.
-    Average degree: (n-1) * prob
-    """
-
-    initial_prob: float  # Initial edge probability (p)
-    min_prob: float  # Minimum probability after change
-    max_prob: float  # Maximum probability after change
+class ERParams:
+    """Parameters for Erdos-Renyi graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
+    prob: float  # Edge probability (p)
+    min_prob: float  # Minimum probability for anomaly injection
+    max_prob: float  # Maximum probability for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    prob_std: Optional[float] = None
 
 
 @dataclass
-class SBMParams(BaseParams):
-    """Parameters for Stochastic Block Model graph.
-
-    Generates networks with community structure.
-    Can be dense within communities and sparse between them.
-    Average degree depends on probabilities and block sizes.
-    """
-
+class SBMParams:
+    """Parameters for Stochastic Block Model graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     num_blocks: int  # Number of communities
     min_block_size: int  # Minimum community size
     max_block_size: int  # Maximum community size
-    initial_intra_prob: float  # Initial within-community probability
-    initial_inter_prob: float  # Initial between-community probability
+    intra_prob: float  # Within-community probability
+    inter_prob: float  # Between-community probability
     min_intra_prob: float  # Minimum intra-community probability
     max_intra_prob: float  # Maximum intra-community probability
     min_inter_prob: float  # Minimum inter-community probability
     max_inter_prob: float  # Maximum inter-community probability
+    # Optional parameters
+    n_std: Optional[float] = None
+    blocks_std: Optional[float] = None
+    intra_prob_std: Optional[float] = None
+    inter_prob_std: Optional[float] = None
 
 
 @dataclass
-class RCPParams(BaseParams):
-    """Parameters for Random Core-Periphery graph.
-
-    Generates networks with dense core and sparse periphery.
-    Mixed density with controlled core-periphery structure.
-    Average degree varies between core and periphery.
-    """
-
+class RCPParams:
+    """Parameters for Random Core-Periphery graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     core_size: int  # Size of the core
     core_prob: float  # Edge probability within core
     periph_prob: float  # Edge probability in periphery
-    min_core_size: int  # Minimum core size after change
-    max_core_size: int  # Maximum core size after change
-    core_periph_prob: float = 0.1  # Edge probability between core and periphery
+    min_core_size: int  # Minimum core size for anomaly injection
+    max_core_size: int  # Maximum core size for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    core_size_std: Optional[float] = None
+    core_prob_std: Optional[float] = None
+    periph_prob_std: Optional[float] = None
+    core_periph_prob: float = 0.1
+    core_periph_prob_std: Optional[float] = None
 
 
 @dataclass
-class CGParams(BaseParams):
-    """Parameters for Complete Graph sequences.
-
-    Generates fully connected graphs or near-complete graphs.
-    Always dense (|E| = n(n-1)/2).
-    Average degree: n-1
-    """
-
-    edge_removal_prob: float = 0.0  # Probability of edge removal
-    min_removal_prob: float = 0.0  # Minimum removal probability after change
-    max_removal_prob: float = 0.1  # Maximum removal probability after change
+class CGParams:
+    """Parameters for Complete Graph sequences."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
+    min_removal_prob: float  # Minimum removal probability for anomaly injection
+    max_removal_prob: float  # Maximum removal probability for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    edge_removal_prob: float = 0.0
+    removal_prob_std: Optional[float] = None
 
 
 @dataclass
-class DRGParams(BaseParams):
-    """Parameters for Dense Random Geometric graph.
-
-    Generates dense spatial networks with large radius.
-    Typically dense with geometric constraints.
-    Average degree increases with radius.
-    """
-
+class DRGParams:
+    """Parameters for Dense Random Geometric graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     radius: float  # Connection radius (must be large)
-    min_radius: float  # Minimum radius after change
-    max_radius: float  # Maximum radius after change
-    dim: int = 2  # Dimension of geometric space
-
-
-# ============= Mixed Density Models =============
+    min_radius: float  # Minimum radius for anomaly injection
+    max_radius: float  # Maximum radius for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    radius_std: Optional[float] = None
+    dim: int = 2
 
 
 @dataclass
-class NWParams(BaseParams):
-    """Parameters for Newman-Watts graph.
-
-    Modified WS model with added random edges.
-    Can have varying density based on parameters.
-    Average degree: k_nearest + n * prob
-    """
-
+class NWParams:
+    """Parameters for Newman-Watts graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     k_nearest: int  # Number of nearest neighbors
-    initial_prob: float  # Initial shortcut probability
-    min_prob: float  # Minimum probability after change
-    max_prob: float  # Maximum probability after change
+    prob: float  # Shortcut probability
+    min_prob: float  # Minimum probability for anomaly injection
+    max_prob: float  # Maximum probability for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    k_std: Optional[float] = None
+    prob_std: Optional[float] = None
 
 
 @dataclass
-class HKParams(BaseParams):
-    """Parameters for Holme-Kim graph.
-
-    BA variant with tunable clustering.
-    Typically sparse with controlled clustering.
-    Average degree: 2 * initial_edges * (1 + triad_prob)
-    """
-
-    initial_edges: int  # Initial edges per node
-    min_edges: int  # Minimum edges after change
-    max_edges: int  # Maximum edges after change
-    triad_prob: float = 0.1  # Probability of triad formation
-    min_triad_prob: float = 0.0  # Minimum triad probability after change
-    max_triad_prob: float = 0.3  # Maximum triad probability after change
+class HKParams:
+    """Parameters for Holme-Kim graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
+    edges: int  # Edges per node
+    min_edges: int  # Minimum edges for anomaly injection
+    max_edges: int  # Maximum edges for anomaly injection
+    min_triad_prob: float  # Minimum triad probability for anomaly injection
+    max_triad_prob: float  # Maximum triad probability for anomaly injection
+    # Optional parameters
+    n_std: Optional[float] = None
+    edges_std: Optional[float] = None
+    triad_prob: float = 0.1
+    triad_prob_std: Optional[float] = None
 
 
 @dataclass
-class LFRParams(BaseParams):
-    """Parameters for LFR Benchmark graph.
-
-    Generates realistic networks with communities.
-    Can have varying density based on parameters.
-    Average degree specified directly.
-    """
-
+class LFRParams:
+    """Parameters for LFR Benchmark graph."""
+    # Required base parameters
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
+    # Required model-specific parameters
     avg_degree: int  # Average node degree
     max_degree: int  # Maximum node degree
     mu: float  # Mixing parameter
-    min_mu: float  # Minimum mixing parameter after change
-    max_mu: float  # Maximum mixing parameter after change
-    tau1: float = 2.5  # Node degree exponent
-    tau2: float = 1.5  # Community size exponent
-    min_community: int = 20  # Minimum community size
-    max_community: int = 100  # Maximum community size
+    min_mu: float  # Minimum mixing parameter for anomaly injection
+    max_mu: float  # Maximum mixing parameter for anomaly injection
+    min_community: int  # Minimum community size
+    max_community: int  # Maximum community size
+    # Optional parameters
+    n_std: Optional[float] = None
+    degree_std: Optional[float] = None
+    mu_std: Optional[float] = None
+    tau1: float = 2.5
+    tau1_std: Optional[float] = None
+    tau2: float = 1.5
+    tau2_std: Optional[float] = None

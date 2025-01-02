@@ -10,6 +10,38 @@ from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 
 
+def pad_or_truncate_matrix(matrix: np.ndarray, target_size: int) -> np.ndarray:
+    """Pad or truncate a matrix to match the target size.
+    
+    If matrix is smaller, pad with zeros.
+    If matrix is larger, truncate to target size.
+    
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Input matrix to resize
+    target_size : int
+        Desired size of output matrix
+        
+    Returns
+    -------
+    np.ndarray
+        Resized matrix of shape (target_size, target_size)
+    """
+    current_size = matrix.shape[0]
+    if current_size == target_size:
+        return matrix
+        
+    if current_size < target_size:
+        # Pad with zeros
+        padded = np.zeros((target_size, target_size))
+        padded[:current_size, :current_size] = matrix
+        return padded
+    else:
+        # Truncate
+        return matrix[:target_size, :target_size]
+
+
 class BaseNetworkPredictor(ABC):
     """Abstract base class for network prediction models."""
 

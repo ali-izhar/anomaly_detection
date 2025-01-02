@@ -11,7 +11,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from graph_forecasting.generators import generate_evolving_ba_network
+from graph.generator import GraphGenerator
+from graph.params import BAParams
 from graph_forecasting.predictors import WeightedAveragePredictor
 from graph_forecasting.visualization import plot_metric_evolution
 from graph_forecasting.metrics import get_network_metrics, calculate_error_metrics
@@ -38,12 +39,56 @@ def generate_network_series(
     List[Dict[str, Any]]
         List of network states over time
     """
-    network_series = []
+    if seed is not None:
+        np.random.seed(seed)
+
+    # Initialize generator
+    generator = GraphGenerator()
+
+    # Configure BA parameters with evolution and anomaly injection
+    params = BAParams(
+        # Required parameters
+        n=100,  # Fixed number of nodes
+        seq_len=total_steps,
+        min_segment=20,  # Minimum length between anomalies
+        min_changes=2,  # At least 2 anomalies
+        max_changes=5,  # At most 5 anomalies
+        m=3,  # Base number of edges per new node
+        min_m=1,  # Minimum edges during anomalies
+        max_m=6,  # Maximum edges during anomalies
+        # Optional evolution parameters
+        n_std=None,  # Keep node count fixed
+        m_std=0.5,  # Allow edge count to evolve
+    )
+
+    # Generate sequence
+    result = generator.generate_sequence(
+        model="barabasi_albert",
+        params=params
+    )
+
+    # Create a mapping of parameters for each time step
+    param_map = {}
+    current_params = result["parameters"][0]
     for i in range(total_steps):
-        network = generate_evolving_ba_network(
-            N=100, m_mean=3, m_std=0.5, seed=None if seed is None else seed + i
-        )
-        network_series.append(network)
+        # Update parameters at change points
+        if i in result["change_points"]:
+            current_params = result["parameters"][result["change_points"].index(i) + 1]
+        param_map[i] = current_params
+
+    # Convert to list of network states
+    network_series = []
+    for i, adj in enumerate(result["graphs"]):
+        G = nx.from_numpy_array(adj)
+        network_series.append({
+            "time": i,
+            "adjacency": adj,
+            "graph": G,
+            "metrics": get_network_metrics(G),
+            "params": param_map[i],
+            "is_change_point": i in result["change_points"]
+        })
+
     return network_series
 
 
