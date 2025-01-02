@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from graph.generator import GraphGenerator
 from graph.params import BAParams
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
-from predictors import WeightedPredictor, plot_metric_evolution
+from predictor import WeightedPredictor, plot_metric_evolution
 
 from typing import Dict, List, Any
 import numpy as np
