@@ -1,72 +1,17 @@
-"""Network forecasting models and prediction utilities.
+"""Weighted average network predictor.
 
-This module provides classes and functions for predicting future states
-of evolving networks using various forecasting approaches.
+This module implements a predictor that uses weighted averaging of recent states
+to forecast future network states.
 """
 
 import networkx as nx
 import numpy as np
 from typing import List, Dict, Any, Optional
-from abc import ABC, abstractmethod
+
+from .base import BasePredictor, pad_or_truncate_matrix
 
 
-def pad_or_truncate_matrix(matrix: np.ndarray, target_size: int) -> np.ndarray:
-    """Pad or truncate a matrix to match the target size.
-
-    If matrix is smaller, pad with zeros.
-    If matrix is larger, truncate to target size.
-
-    Parameters
-    ----------
-    matrix : np.ndarray
-        Input matrix to resize
-    target_size : int
-        Desired size of output matrix
-
-    Returns
-    -------
-    np.ndarray
-        Resized matrix of shape (target_size, target_size)
-    """
-    current_size = matrix.shape[0]
-    if current_size == target_size:
-        return matrix
-
-    if current_size < target_size:
-        # Pad with zeros
-        padded = np.zeros((target_size, target_size))
-        padded[:current_size, :current_size] = matrix
-        return padded
-    else:
-        # Truncate
-        return matrix[:target_size, :target_size]
-
-
-class BaseNetworkPredictor(ABC):
-    """Abstract base class for network prediction models."""
-
-    @abstractmethod
-    def predict(
-        self, history: List[Dict[str, Any]], horizon: int = 1
-    ) -> List[np.ndarray]:
-        """Predict future network states.
-
-        Parameters
-        ----------
-        history : List[Dict[str, Any]]
-            Historical network data
-        horizon : int, optional
-            Number of steps to predict ahead, by default 1
-
-        Returns
-        -------
-        List[np.ndarray]
-            List of predicted adjacency matrices
-        """
-        pass
-
-
-class WeightedAveragePredictor(BaseNetworkPredictor):
+class WeightedPredictor(BasePredictor):
     """Network predictor using weighted averaging of recent states.
 
     Parameters
@@ -100,21 +45,13 @@ class WeightedAveragePredictor(BaseNetworkPredictor):
         -------
         List[np.ndarray]
             List of predicted adjacency matrices
-
-        Notes
-        -----
-        The prediction process:
-        1. Compute weighted average of recent adjacency matrices
-        2. Determine target network properties
-        3. Generate new network matching these properties
-        4. Ensure network connectivity and degree distribution
         """
         predictions = []
         current_history = history.copy()
 
         for _ in range(horizon):
             # Get recent networks
-            last_networks = current_history[-self.n_history :]
+            last_networks = current_history[-self.n_history:]
 
             # Get target properties from most recent network
             latest_network = last_networks[-1]["graph"]
@@ -223,4 +160,4 @@ class WeightedAveragePredictor(BaseNetworkPredictor):
                     i, j = best_edge
                     predicted_adj[i, j] = predicted_adj[j, i] = 1
 
-        return predicted_adj
+        return predicted_adj 

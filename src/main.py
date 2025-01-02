@@ -14,8 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from graph.generator import GraphGenerator
 from graph.params import BAParams
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
-from predictors.predictors import WeightedAveragePredictor
-from predictors.vis import plot_metric_evolution
+from predictors import WeightedPredictor, plot_metric_evolution
 
 from typing import Dict, List, Any
 import numpy as np
@@ -158,7 +157,7 @@ def main():
     network_series = generate_network_series(total_steps=total_steps)
 
     # Create predictor
-    predictor = WeightedAveragePredictor(n_history=3)
+    predictor = WeightedPredictor(n_history=3)
 
     # Perform rolling predictions
     print("Performing rolling predictions...")
