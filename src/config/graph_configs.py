@@ -1,9 +1,6 @@
-"""Configuration for different graph types.
+# src/config/graph_configs.py
 
-This module provides predefined configurations for various graph models,
-making it easy to generate different types of network time series.
-Each configuration includes both standard parameters and evolution parameters.
-"""
+"""Predefined configurations including standard and evolving parameters for graph models."""
 
 from typing import Dict, Any
 from graph.params import BAParams, WSParams, ERParams, SBMParams, RCPParams, LFRParams
@@ -12,9 +9,9 @@ from graph.params import BAParams, WSParams, ERParams, SBMParams, RCPParams, LFR
 def get_ba_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for Barabási-Albert network.
 
@@ -44,9 +41,9 @@ def get_ba_config(
 def get_ws_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for Watts-Strogatz network.
 
@@ -80,9 +77,9 @@ def get_ws_config(
 def get_er_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for Erdős-Rényi network.
 
@@ -111,9 +108,9 @@ def get_er_config(
 def get_sbm_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for Stochastic Block Model network.
 
@@ -151,9 +148,9 @@ def get_sbm_config(
 def get_rcp_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for Random Core-Periphery network.
 
@@ -189,9 +186,9 @@ def get_rcp_config(
 def get_lfr_config(
     n: int = 100,
     seq_len: int = 200,
-    min_segment: int = 20,
-    min_changes: int = 2,
-    max_changes: int = 5,
+    min_segment: int = 40,
+    min_changes: int = 1,
+    max_changes: int = 3,
 ) -> Dict[str, Any]:
     """Get configuration for LFR Benchmark network.
 

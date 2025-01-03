@@ -28,7 +28,6 @@ from typing import List, Dict, Any, Union, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from sklearn.cluster import KMeans
-from scipy.sparse import csr_matrix
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -120,18 +119,7 @@ class NetworkFeatureExtractor:
         }
 
     def get_all_metrics(self, graph: nx.Graph) -> NetworkMetrics:
-        """Get all network metrics in a structured format.
-
-        Parameters
-        ----------
-        graph : nx.Graph
-            Input network graph
-
-        Returns
-        -------
-        NetworkMetrics
-            Structured container with all network metrics
-        """
+        """Get all network metrics in a structured format."""
         metrics = {}
         for extractor in self.extractors.values():
             metrics.update(extractor.extract(graph))
@@ -141,20 +129,7 @@ class NetworkFeatureExtractor:
     def get_metrics(
         self, graph: nx.Graph, metric_types: Optional[List[str]] = None
     ) -> Dict[str, float]:
-        """Get specific network metrics.
-
-        Parameters
-        ----------
-        graph : nx.Graph
-            Input network graph
-        metric_types : Optional[List[str]]
-            Types of metrics to compute. If None, computes all.
-
-        Returns
-        -------
-        Dict[str, float]
-            Dictionary of requested metrics
-        """
+        """Get specific network metrics."""
         if metric_types is None:
             metric_types = list(self.extractors.keys())
 

@@ -1,6 +1,7 @@
+# archive/draw_predicts.py
+
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import norm
 
 
 def generate_feature_data(n_historical=100, n_future=50, n_features=6, seed=42):

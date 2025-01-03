@@ -1,29 +1,6 @@
 # src/graph/params.py
 
-"""Parameter classes for different graph types.
-
-This module defines parameter classes for various NetworkX graph models, organized by their
-density characteristics:
-
-Sparse Models:
-- Barabasi-Albert (BA): Scale-free networks with preferential attachment
-- Watts-Strogatz (WS): Small-world networks with high clustering
-- Random Regular (RR): Regular graphs with fixed degree
-- Random Geometric (RG): Spatial networks with distance-based connections
-- Random Trees (RT): Tree structures with no cycles
-
-Dense Models:
-- Erdos-Renyi (ER): Random graphs with uniform edge probability
-- Stochastic Block Model (SBM): Community-structured networks
-- Random Core-Periphery (RCP): Networks with dense core and sparse periphery
-- Complete Graph (CG): Fully connected networks
-- Dense Random Geometric (DRG): High-density spatial networks
-
-Mixed Density Models:
-- Newman-Watts (NW): Modified WS model with added random edges
-- Holme-Kim (HK): BA variant with added clustering
-- LFR Benchmark (LFR): Realistic community networks
-"""
+"""Parameter classes for different graph types."""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -40,7 +17,7 @@ class BaseParams:
     # Required parameters
     n: int  # Number of nodes
     seq_len: int  # Sequence length
-    min_segment: int  # Minimum segment length
+    min_segment: int  # Minimum segment length between change points
     min_changes: int  # Minimum number of changes
     max_changes: int  # Maximum number of changes
     # Optional parameters
@@ -52,11 +29,11 @@ class BAParams:
     """Parameters for Barabási-Albert network generation."""
 
     # Required base parameters
-    n: int  # Number of nodes
-    seq_len: int  # Sequence length
-    min_segment: int  # Minimum segment length
-    min_changes: int  # Minimum number of changes
-    max_changes: int  # Maximum number of changes
+    n: int
+    seq_len: int
+    min_segment: int
+    min_changes: int
+    max_changes: int
     # Required model-specific parameters
     m: int  # Number of edges to attach from a new node
     min_m: int  # Minimum m for anomaly injection

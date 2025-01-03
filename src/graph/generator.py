@@ -7,7 +7,7 @@ using various NetworkX models. It supports both sparse and dense graph types wit
 configurable parameters that can change over time.
 
 Key Features:
-- Generic interface for any NetworkX-compatible graph model
+- Generic interface for various NetworkX-compatible graph models
 - Generates sequences with controlled parameter changes
 - Maintains consistent node labeling across sequences
 - Provides metadata about changes and parameters
@@ -275,7 +275,7 @@ class GraphGenerator:
 
         # Try to generate valid change points
         max_attempts = 100
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             # Generate random number of changes
             num_changes = np.random.randint(min_changes, max_changes + 1)
 
@@ -433,40 +433,125 @@ class GraphGenerator:
         avg_degree: int,
         max_degree: int,
         mu: float,
+        tau1: float,
+        tau2: float,
         min_community: int,
         max_community: int,
-        tau1: float = 2.5,
-        tau2: float = 1.5,
         **kwargs,
     ) -> nx.Graph:
-        """Generate LFR Benchmark network."""
-        # Note: This is a simplified version. For full LFR implementation,
-        # consider using networkx_benchmark_graphs or cdlib packages
-        G = nx.scale_free_graph(n, alpha=tau1 - 1, beta=0.1, gamma=tau2 - 1)
-        G = nx.Graph(G)  # Convert to undirected
-        G.remove_edges_from(nx.selfloop_edges(G))
+        """Generate LFR benchmark network.
 
-        # Adjust average degree
-        current_avg_degree = sum(dict(G.degree()).values()) / n
-        target_edges = (avg_degree * n) // 2
-        current_edges = G.number_of_edges()
+        Parameters
+        ----------
+        n : int
+            Number of nodes
+        avg_degree : int
+            Average degree
+        max_degree : int
+            Maximum degree
+        mu : float
+            Mixing parameter
+        tau1 : float
+            Node degree distribution power law exponent
+        tau2 : float
+            Community size distribution power law exponent
+        min_community : int
+            Minimum community size
+        max_community : int
+            Maximum community size
+        """
+        # Generate base scale-free network
+        # Use configuration model with power law degree sequence
+        degrees = [min(max_degree, int(d)) for d in nx.utils.powerlaw_sequence(n, tau1)]
+        # Ensure minimum degree and even sum
+        degrees = [max(avg_degree // 2, d) for d in degrees]
+        if sum(degrees) % 2 == 1:
+            degrees[0] += 1
 
-        if current_edges < target_edges:
-            # Add random edges to reach target average degree
-            possible_edges = list(nx.non_edges(G))
-            edges_to_add = np.random.choice(
-                len(possible_edges),
-                min(target_edges - current_edges, len(possible_edges)),
-                replace=False,
+        G = nx.configuration_model(degrees)
+
+        # Remove self-loops and parallel edges
+        G = nx.Graph(G)
+
+        # Generate community sizes following power law
+        remaining_nodes = n
+        communities = []
+        while remaining_nodes > 0:
+            size = min(
+                max(
+                    min_community,
+                    int(nx.utils.powerlaw_sequence(1, tau2)[0] * max_community),
+                ),
+                remaining_nodes,
             )
-            G.add_edges_from([possible_edges[i] for i in edges_to_add])
-        elif current_edges > target_edges:
-            # Remove random edges to reach target average degree
-            edges = list(G.edges())
-            edges_to_remove = np.random.choice(
-                len(edges), current_edges - target_edges, replace=False
-            )
-            G.remove_edges_from([edges[i] for i in edges_to_remove])
+            communities.append(size)
+            remaining_nodes -= size
+
+        # Assign nodes to communities
+        node_communities = []
+        start_idx = 0
+        for size in communities:
+            node_communities.extend([start_idx] * size)
+            start_idx += 1
+
+        # Rewire edges to match mixing parameter
+        edges = list(G.edges())
+        np.random.shuffle(edges)
+
+        # Calculate target number of inter-community edges
+        target_inter = int(mu * len(edges))
+        current_inter = sum(
+            1 for u, v in edges if node_communities[u] != node_communities[v]
+        )
+
+        # Rewire edges to achieve target mixing
+        while current_inter != target_inter:
+            if current_inter < target_inter:
+                # Need more inter-community edges
+                for u, v in edges:
+                    if node_communities[u] == node_communities[v]:
+                        # Find a node from different community
+                        candidates = [
+                            w
+                            for w in range(n)
+                            if node_communities[w] != node_communities[u]
+                            and w != u
+                            and w != v
+                            and not G.has_edge(u, w)
+                        ]
+                        if candidates:
+                            w = np.random.choice(candidates)
+                            G.remove_edge(u, v)
+                            G.add_edge(u, w)
+                            current_inter += 1
+                            if current_inter == target_inter:
+                                break
+            else:
+                # Need more intra-community edges
+                for u, v in edges:
+                    if node_communities[u] != node_communities[v]:
+                        # Find a node from same community
+                        candidates = [
+                            w
+                            for w in range(n)
+                            if node_communities[w] == node_communities[u]
+                            and w != u
+                            and w != v
+                            and not G.has_edge(u, w)
+                        ]
+                        if candidates:
+                            w = np.random.choice(candidates)
+                            G.remove_edge(u, v)
+                            G.add_edge(u, w)
+                            current_inter -= 1
+                            if current_inter == target_inter:
+                                break
+
+        # Store community information
+        nx.set_node_attributes(
+            G,
+            {i: {"community": c} for i, c in enumerate(node_communities)},
+        )
 
         return G
 

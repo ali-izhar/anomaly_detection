@@ -1,19 +1,21 @@
+# archive/draw_architecture.py
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 def plot_high_level_architecture():
-    """Create a professional architecture diagram with consistent visual elements."""
-    plt.figure(figsize=(20, 12))
+    """Create a high-level architecture diagram for the anomaly detection framework."""
+    plt.figure(figsize=(10, 6))
     ax = plt.gca()
 
     colors = {
-        "graph": "#4B6BF5",  # Blue - for graph structure
-        "features": "#45A247",  # Green - for features
-        "learned": "#FF4B4B",  # Red - for learned representations
-        "predict": "#FFA500",  # Orange - for predictions
-        "arrow": "#666666",  # Gray - for connections
-        "text": "#2F4F4F",  # Dark slate gray - for text
+        "graph": "#4B6BF5",  # Blue
+        "features": "#45A247",  # Green
+        "learned": "#FF4B4B",  # Red
+        "predict": "#FFA500",  # Orange
+        "arrow": "#666666",  # Gray
+        "text": "#2F4F4F",  # Dark slate gray
     }
 
     # Component positions

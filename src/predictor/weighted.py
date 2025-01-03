@@ -1,3 +1,5 @@
+# src/predictor/weighted.py
+
 """Weighted average network predictor.
 
 This module implements a predictor that uses weighted averaging of recent states
@@ -8,7 +10,7 @@ import networkx as nx
 import numpy as np
 from typing import List, Dict, Any, Optional
 
-from .base import BasePredictor, pad_or_truncate_matrix
+from .base import BasePredictor
 
 
 class WeightedPredictor(BasePredictor):

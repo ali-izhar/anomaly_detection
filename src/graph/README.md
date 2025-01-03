@@ -1,259 +1,63 @@
-# Graph Generators and Feature Extraction
+# Graph Models
 
-This module provides functionality for generating dynamic graph sequences and computing graph features for anomaly detection. Built on top of [NetworkX](https://networkx.org/), it supports multiple graph models and feature extraction methods.
-
-## Graph Models
+Built on top of [NetworkX](https://networkx.org/), this module supports multiple graph models:
 
 ### Barabási-Albert (BA)
-- **Description**: Scale-free networks following preferential attachment
-- **Parameters**:
-  - `n`: Number of nodes
-  - `initial_edges`: Number of edges each new node creates ($m$ parameter)
-  - `pref_exp`: Preferential attachment exponent ($\alpha$ parameter)
-- **Properties**: Power-law degree distribution $P(k) \sim k^{-\alpha}$
-- **NetworkX Implementation**: [`barabasi_albert_graph`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html)
+- **Mathematics**: Grows by adding nodes with $m$ edges, connecting to existing nodes with probability $\Pi(k_i) \sim k_i^{\alpha}$ where $k_i$ is node degree
+- **Properties**: Power-law degree distribution $P(k) \sim k^{-\gamma}$ where $\gamma \approx 3$
+- **Real-world Example**: World Wide Web, citation networks, protein interaction networks
 
 ### Erdős-Rényi (ER)
-- **Description**: Random graphs with fixed edge probability
-- **Parameters**:
-  - `n`: Number of nodes
-  - `initial_prob`: Edge probability ($p$ parameter)
-- **Properties**: Poisson degree distribution
-- **NetworkX Implementation**: [`erdos_renyi_graph`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.random_graphs.erdos_renyi_graph.html)
+- **Mathematics**: Each edge exists with independent probability $p$
+- **Properties**: Poisson degree distribution $P(k) = \frac{e^{-\lambda}\lambda^k}{k!}$ where $\lambda = p(n-1)$
+- **Real-world Example**: Random connections in social networks, random chemical reactions
+
+### Watts-Strogatz (WS)
+- **Mathematics**: Start with ring lattice, rewire edges with probability $p$
+- **Properties**: High clustering coefficient and low average path length
+- **Real-world Example**: Neural networks, power grids, actor collaboration networks
+
+### Random Regular (RR)
+- **Mathematics**: Each node has exactly $d$ random connections
+- **Properties**: Uniform degree distribution $P(k) = \delta_{k,d}$
+- **Real-world Example**: Peer-to-peer networks, certain types of computer architectures
+
+### Random Geometric (RG)
+- **Mathematics**: Nodes connect if Euclidean distance $< r$ in $d$-dimensional space
+- **Properties**: High clustering, spatial dependency
+- **Real-world Example**: Wireless sensor networks, ecological interaction networks
 
 ### Stochastic Block Model (SBM)
-- **Description**: Random graphs with community structure
-- **Parameters**:
-  - `n`: Number of nodes
-  - `num_blocks`: Number of communities
-  - `initial_intra_prob`: Edge probability within communities
-  - `initial_inter_prob`: Edge probability between communities
-- **Properties**: Modular structure with dense intra-community and sparse inter-community connections
-- **NetworkX Implementation**: [`stochastic_block_model`](https://networkx.org/documentation/stable/reference/generated/networkx.generators.community.stochastic_block_model.html)
+- **Mathematics**: Nodes in same block connect with probability $p_{in}$, different blocks with $p_{out}$
+- **Properties**: Community structure with $p_{in} > p_{out}$
+- **Real-world Example**: Social communities, protein-protein interaction networks
 
-## Feature Extraction
+### Random Core-Periphery (RCP)
+- **Mathematics**: Dense core with probability $p_{core}$, sparse periphery with $p_{periph}$
+- **Properties**: Hierarchical structure with $p_{core} > p_{core-periph} > p_{periph}$
+- **Real-world Example**: Financial networks, transportation hubs
 
-### Centrality Measures
-- **Degree Centrality**: Fraction of nodes a node is connected to
-  ```python
-  nx.degree_centrality(G)
-  ```
-- **Betweenness Centrality**: Fraction of shortest paths passing through a node
-  ```python
-  nx.betweenness_centrality(G)
-  ```
-- **Eigenvector Centrality**: Node importance based on neighbor importance
-  ```python
-  nx.eigenvector_centrality(G)
-  ```
+### Complete Graph (CG)
+- **Mathematics**: Every node connects to every other node, with edge removal probability $p$
+- **Properties**: Maximum density, degree $k = n-1$ for all nodes
+- **Real-world Example**: Fully connected computer networks, complete social groups
 
-### Graph Embeddings
-- **SVD Embeddings**: Singular value decomposition of adjacency matrix
-  - Parameters: `n_components`, `use_sparse`
-  - Implementation: `sknetwork.embedding.SVD`
-  - Properties: Preserves global graph structure
+### Dense Random Geometric (DRG)
+- **Mathematics**: Similar to RG but with larger radius $r$ ensuring high density
+- **Properties**: High clustering, high density, spatial correlation
+- **Real-world Example**: Dense wireless networks, close-range communication systems
 
-### Graph Statistics
-- **Density**: Ratio of actual to possible edges
-  ```python
-  nx.density(G)
-  ```
-- **Average Degree**: Mean number of edges per node
-  ```python
-  np.mean([d for _, d in G.degree()])
-  ```
-- **Clustering Coefficient**: Fraction of closed triangles
-  ```python
-  nx.average_clustering(G)
-  ```
-- **Diameter**: Maximum shortest path length
-  ```python
-  nx.diameter(G)
-  ```
+### Newman-Watts (NW)
+- **Mathematics**: Ring lattice with additional random shortcuts probability $p$
+- **Properties**: Small-world properties with preserved local structure
+- **Real-world Example**: Social networks with both local and long-range connections
 
-## Testing Framework
+### Holme-Kim (HK)
+- **Mathematics**: BA model with added triangle formation probability $p_{triad}$
+- **Properties**: Scale-free with high clustering
+- **Real-world Example**: Social media networks, scientific collaboration networks
 
-### Graph Generation Tests (`TestGraphGeneration`)
-1. **Model-Specific Tests**:
-   - `test_ba_generation`: Verifies scale-free properties
-   - `test_er_generation`: Checks edge probability distribution
-   - `test_sbm_generation`: Validates community structure
-
-2. **Change Point Tests**:
-   - `test_change_points`: Ensures valid segment lengths and ordering
-   - Parameters: `min_segment`, `min_changes`, `max_changes`
-
-### Feature Extraction Tests (`TestFeatureExtraction`)
-1. **Centrality Tests**:
-   - Verifies value ranges [0,1]
-   - Checks computation for multiple measures
-
-2. **Embedding Tests**:
-   - Validates orthogonality
-   - Checks dimensionality reduction
-
-3. **Graph Statistics Tests**:
-   - Verifies basic properties (density, clustering)
-   - Ensures valid ranges for metrics
-
-### Performance Tests (`TestPerformance`)
-- Tests for large graphs (1000+ nodes)
-- Benchmarks parallel computation
-- Validates sparse matrix operations
-
-## Usage
-
-### Graph Generation
-```python
-generator = GraphGenerator()
-generator.register_model("BA", nx.barabasi_albert_graph, BAParams)
-
-sequence = generator.generate_sequence(
-    model="BA",
-    params=BAParams(n=100, initial_edges=3),
-    seed=42
-)
-```
-
-### Feature Extraction
-```python
-# Compute centralities
-centralities = extract_centralities(
-    graphs,
-    measures=["degree", "betweenness"],
-    batch_size=10,
-    n_jobs=-1
-)
-
-# Generate embeddings
-embeddings = compute_embeddings(
-    graphs,
-    method="svd",
-    n_components=10,
-    use_sparse=True
-)
-```
-
-### Example
-```python
-(venv) PS D:\github\research\anomaly_detection\src\graph> python -m unittest .\main.py
-INFO:features:Computing 2 centralities for 10 graphs
-INFO:features:Centrality computation complete
-.INFO:features:Computing SVD embeddings with 5 components
-INFO:features:Successfully computed embeddings for 10 graphs
-.INFO:features:Computing statistics for 10 graphs
-INFO:features:Statistics computation complete
-..INFO:features:Computing SVD embeddings with 5 components
-INFO:features:Successfully computed embeddings for 10 graphs
-.INFO:generator:Registered model: BA
-INFO:generator:Registered model: ER
-INFO:generator:Registered model: SBM
-INFO:generator:Generated 1 change points at: [83]
-INFO:generator:Successfully generated sequence with 100 graphs
-.INFO:generator:Registered model: BA
-INFO:generator:Registered model: ER
-INFO:generator:Registered model: SBM
-INFO:generator:Generated 1 change points at: [36]
-INFO:generator:Successfully generated sequence with 100 graphs
-INFO:main:Change points: [36]
-INFO:main:Segment lengths: [36, 64]
-INFO:main:Sequence length: 100, Min segment: 10
-INFO:main:Min changes: 1, Max changes: 3
-.INFO:generator:Registered model: BA
-INFO:generator:Registered model: ER
-INFO:generator:Registered model: SBM
-INFO:generator:Generated 1 change points at: [41]
-INFO:generator:Successfully generated sequence with 100 graphs
-.INFO:generator:Registered model: BA
-INFO:generator:Registered model: ER
-INFO:generator:Registered model: SBM
-INFO:generator:Generated 3 change points at: [40, 51, 77]
-INFO:generator:Successfully generated sequence with 100 graphs
-.INFO:features:Computing 1 centralities for 5 graphs
-INFO:features:Centrality computation complete
-INFO:main:Centrality computation took 0.08 seconds
-.INFO:features:Computing SVD embeddings with 10 components
-INFO:features:Successfully computed embeddings for 5 graphs
-INFO:main:Embedding computation took 0.18 seconds
-.
-----------------------------------------------------------------------
-Ran 11 tests in 1.792s
-
-OK
-```
-
-#### Test Output Explanation
-
-1. **Feature Extraction Tests**:
-   ```
-   INFO:features:Computing 2 centralities for 10 graphs
-   INFO:features:Centrality computation complete
-   ```
-   - Testing centrality computation on 10 test graphs
-   - Computing degree and betweenness centralities
-
-2. **Embedding Tests**:
-   ```
-   INFO:features:Computing SVD embeddings with 5 components
-   INFO:features:Successfully computed embeddings for 10 graphs
-   ```
-   - Testing SVD embedding generation
-   - Reducing to 5 dimensions for each graph
-
-3. **Graph Statistics Tests**:
-   ```
-   INFO:features:Computing statistics for 10 graphs
-   INFO:features:Statistics computation complete
-   ```
-   - Computing density, clustering, and diameter metrics
-   - Validating basic graph properties
-
-4. **Model Registration**:
-   ```
-   INFO:generator:Registered model: BA
-   INFO:generator:Registered model: ER
-   INFO:generator:Registered model: SBM
-   ```
-   - Registering three graph models with their parameters
-   - Setting up generator functions for each model
-
-5. **Change Point Generation**:
-   ```
-   INFO:generator:Generated 1 change points at: [83]
-   INFO:generator:Successfully generated sequence with 100 graphs
-   ```
-   - Testing sequence generation with parameter changes
-   - Validating change point placement and sequence length
-
-6. **Segment Validation**:
-   ```
-   INFO:main:Change points: [36]
-   INFO:main:Segment lengths: [36, 64]
-   INFO:main:Sequence length: 100, Min segment: 10
-   INFO:main:Min changes: 1, Max changes: 3
-   ```
-   - Verifying segment lengths meet minimum requirements
-   - Checking change point constraints are satisfied
-
-7. **Performance Tests**:
-   ```
-   INFO:features:Computing 1 centralities for 5 graphs
-   INFO:main:Centrality computation took 0.08 seconds
-   INFO:features:Computing SVD embeddings with 10 components
-   INFO:main:Embedding computation took 0.18 seconds
-   ```
-   - Benchmarking centrality computation speed
-   - Testing embedding generation performance
-   - Validating computation times are within bounds
-
-8. **Test Summary**:
-   ```
-   Ran 11 tests in 1.792s
-   OK
-   ```
-   - All 11 test cases passed successfully
-   - Total execution time under 2 seconds
-   - No failures or errors encountered
-
-Each dot (`.`) in the output represents a successfully completed test case. The tests cover feature extraction, graph generation, change point detection, and performance benchmarks.
-
+### LFR Benchmark
+- **Mathematics**: Communities with power-law degree ($\tau_1$) and size ($\tau_2$) distributions, mixing parameter $\mu$
+- **Properties**: Realistic community structure with heterogeneous degree and community sizes
+- **Real-world Example**: Large social networks, online communities with varying sizes

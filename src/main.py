@@ -9,21 +9,136 @@ This script shows how to use the graph_forecasting package to:
 import sys
 from pathlib import Path
 import argparse
-import os
 import json
 from datetime import datetime
+import logging
 
 sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
-from predictor import WeightedPredictor, Visualizer
+from predictor import (
+    WeightedPredictor,
+    SpectralPredictor,
+    EmbeddingPredictor,
+    DynamicalPredictor,
+    EnsemblePredictor,
+    AdaptivePredictor,
+    HybridPredictor,
+    Visualizer,
+)
 from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
+
+logger = logging.getLogger(__name__)
+
+# Define predictor mapping
+PREDICTOR_MAP = {
+    "weighted": WeightedPredictor,
+    "spectral": SpectralPredictor,
+    "embedding": EmbeddingPredictor,
+    "dynamical": DynamicalPredictor,
+    "ensemble": EnsemblePredictor,
+    "adaptive": AdaptivePredictor,
+    "hybrid": HybridPredictor,
+}
+
+# Define recommended predictors for each model
+MODEL_PREDICTOR_RECOMMENDATIONS = {
+    "ba": ["spectral", "dynamical"],
+    "er": ["spectral", "dynamical"],
+    "ws": ["embedding", "hybrid"],
+    "sbm": ["embedding", "spectral"],
+    "rcp": ["embedding", "spectral"],
+}
+
+
+def get_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Network prediction framework")
+
+    # Model selection
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["ba", "er", "ws", "sbm", "rcp"],
+        default="ba",
+        help="Type of network model to use",
+    )
+
+    # Predictor selection
+    parser.add_argument(
+        "--predictor",
+        type=str,
+        choices=list(PREDICTOR_MAP.keys()),
+        help="Type of predictor to use. If not specified, will use recommended predictor for the model.",
+    )
+
+    # Other parameters
+    parser.add_argument(
+        "--n-nodes",
+        type=int,
+        default=50,
+        help="Number of nodes in the network",
+    )
+    parser.add_argument(
+        "--seq-len",
+        type=int,
+        default=100,
+        help="Length of the network sequence",
+    )
+    parser.add_argument(
+        "--min-changes",
+        type=int,
+        default=2,
+        help="Minimum number of change points",
+    )
+    parser.add_argument(
+        "--max-changes",
+        type=int,
+        default=5,
+        help="Maximum number of change points",
+    )
+    parser.add_argument(
+        "--min-segment",
+        type=int,
+        default=20,
+        help="Minimum length between changes",
+    )
+    parser.add_argument(
+        "--prediction-window",
+        type=int,
+        default=5,
+        help="Number of steps to predict ahead",
+    )
+    parser.add_argument(
+        "--min-history",
+        type=int,
+        default=10,
+        help="Minimum history length before making predictions",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility",
+    )
+
+    args = parser.parse_args()
+
+    # If predictor not specified, use the recommended one
+    if args.predictor is None:
+        args.predictor = MODEL_PREDICTOR_RECOMMENDATIONS[args.model][0]
+        logger.info(f"Using recommended predictor for {args.model}: {args.predictor}")
+        logger.info(
+            f"Alternative recommendation: {MODEL_PREDICTOR_RECOMMENDATIONS[args.model][1]}"
+        )
+
+    return args
 
 
 def generate_network_series(
@@ -109,19 +224,29 @@ def analyze_prediction_phases(
     # Initialize feature extractor
     feature_extractor = NetworkFeatureExtractor()
 
-    # Define phases
-    phases = [
-        (0, 50, "First 50 predictions"),
-        (50, 100, "Middle 50 predictions"),
-        (100, None, "Last predictions"),
-    ]
+    # Check if we have predictions to analyze
+    if not predictions or not actual_series:
+        logger.warning("No predictions or actual series to analyze")
+        return {"phases": {}, "error": "No data to analyze"}
+
+    # Define phases based on available predictions
+    total_predictions = len(predictions)
+    if total_predictions < 3:
+        phases = [(0, total_predictions, "All predictions")]
+    else:
+        third = total_predictions // 3
+        phases = [
+            (0, third, "First third"),
+            (third, 2 * third, "Middle third"),
+            (2 * third, None, "Last third"),
+        ]
 
     # Store results
     results = {"phases": {}}
 
     # Calculate errors for each phase
     for start, end, phase_name in phases:
-        print(f"\n{phase_name}:")
+        logger.info(f"\nAnalyzing {phase_name}:")
         phase_predictions = predictions[start:end]
         phase_actuals = actual_series[
             min_history + start : min_history + (end if end else len(predictions))
@@ -134,6 +259,10 @@ def analyze_prediction_phases(
             actual_metrics = feature_extractor.get_all_metrics(actual["graph"]).__dict__
             errors = calculate_error_metrics(actual_metrics, pred_metrics)
             all_errors.append(errors)
+
+        if not all_errors:
+            logger.warning(f"No errors calculated for {phase_name}")
+            continue
 
         # Calculate average errors for each metric
         avg_errors = {
@@ -150,7 +279,7 @@ def analyze_prediction_phases(
 
         # Print results
         for metric, error in avg_errors.items():
-            print(f"Average MAE for {metric}: {error:.3f}")
+            logger.info(f"Average MAE for {metric}: {error:.3f}")
 
     # Save results to JSON
     with open(output_dir / "prediction_analysis.json", "w") as f:
@@ -160,50 +289,24 @@ def analyze_prediction_phases(
 
 
 def main():
-    """Run network forecasting example."""
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description="Generate and analyze network time series"
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="barabasi_albert",
-        choices=list(GRAPH_CONFIGS.keys()),
-        help="Type of network model to generate",
-    )
-    parser.add_argument("--n", type=int, default=100, help="Number of nodes")
-    parser.add_argument(
-        "--seq_len", type=int, default=200, help="Length of time series"
-    )
-    parser.add_argument(
-        "--min_segment", type=int, default=20, help="Minimum length between changes"
-    )
-    parser.add_argument(
-        "--min_changes", type=int, default=2, help="Minimum number of changes"
-    )
-    parser.add_argument(
-        "--max_changes", type=int, default=5, help="Maximum number of changes"
-    )
-    parser.add_argument(
-        "--seed", type=int, default=None, help="Random seed for reproducibility"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="results",
-        help="Output directory for results and visualizations",
-    )
-    args = parser.parse_args()
+    """Main execution function."""
+    args = get_args()
 
-    # Create output directory with timestamp
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+
+    # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(args.output) / f"{args.model}_{timestamp}"
+    output_dir = Path(f"results/{args.model}_{args.predictor}_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize components
+    generator = GraphGenerator()
+    predictor = PREDICTOR_MAP[args.predictor]()
 
     # Save configuration
     config = GRAPH_CONFIGS[args.model](
-        n=args.n,
+        n=args.n_nodes,
         seq_len=args.seq_len,
         min_segment=args.min_segment,
         min_changes=args.min_changes,
@@ -223,15 +326,12 @@ def main():
         )
 
     # Parameters for prediction
-    min_history = 3
-    prediction_window = 10
+    min_history = args.min_history
+    prediction_window = args.prediction_window
 
     # Generate network time series
     print(f"Generating {args.model} network time series...")
     network_series = generate_network_series(config, seed=args.seed)
-
-    # Create predictor
-    predictor = WeightedPredictor(n_history=min_history)
 
     # Perform rolling predictions
     print("Performing rolling predictions...")
@@ -288,12 +388,12 @@ def main():
     plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # # Analyze prediction accuracy
-    # print(f"\nPrediction Performance Summary for {args.model}:")
-    # print("-" * 50)
-    # analysis_results = analyze_prediction_phases(
-    #     predictions, network_series, min_history, output_dir
-    # )
+    # Analyze prediction accuracy
+    print(f"\nPrediction Performance Summary for {args.model}:")
+    print("-" * 50)
+    analysis_results = analyze_prediction_phases(
+        predictions, network_series, min_history, output_dir
+    )
 
     print(f"\nResults saved to: {output_dir}")
 
