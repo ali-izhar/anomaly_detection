@@ -59,7 +59,7 @@ Each new observation gets a **strangeness** value, $\alpha_n$, measuring how "un
 Let $\{\alpha_1, \alpha_2, \ldots, \alpha_n\}$ be all strangeness values up to time $n$. We define:
 
 $$
-p_n = \frac{\text{\#}\{\alpha_i : \alpha_i > \alpha_n\} + \theta \,\text{\#}\{\alpha_i : \alpha_i = \alpha_n\}}{n},
+p_n = \frac{| \{\alpha_i : \alpha_i > \alpha_n\} | + \theta | \{\alpha_i : \alpha_i = \alpha_n\} |}{n}
 $$
 
 where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conformal prediction** p-value approach:
