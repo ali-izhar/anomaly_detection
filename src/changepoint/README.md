@@ -4,7 +4,7 @@ This module demonstrates **martingale-based change detection** in sequential dat
 
 ## What Is a Change Point?
 
-Given a data stream $ X_1, X_2, \ldots, X_n $, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs significantly from the distribution of $X_{k+1:n}$. In practice, we usually do **online** detection — we process observations one at a time and raise an alarm as soon as a suspected shift is detected.
+Given a data stream $X_1, X_2, \ldots, X_n$, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs significantly from the distribution of $X_{k+1:n}$. In practice, we usually do **online** detection — we process observations one at a time and raise an alarm as soon as a suspected shift is detected.
 
 ## The Martingale Framework
 
@@ -13,7 +13,7 @@ Given a data stream $ X_1, X_2, \ldots, X_n $, a **change point** at time $k$ in
 A **martingale** $\{M_n\}_{n \ge 0}$ is a process that satisfies the property
 
 $$
-E[M_{n+1} \mid M_1, M_2, \ldots, M_n] \;=\; M_n
+E[M_{n+1} \mid M_1, M_2, \ldots, M_n] = M_n
 $$
 
 Intuitively, the expected future value of a martingale equals its current value. This differs from:
@@ -28,7 +28,7 @@ In **change detection**, we construct a **test martingale** from sequentially co
 We use the **power martingale** update rule:
 
 $$
-M_n \;=\; M_{n-1} \;\times\; \epsilon \;\times\; (p_n)^{\,(\epsilon - 1)}
+M_n = M_{n-1} \times \epsilon \times (p_n)^{\,(\epsilon - 1)}
 $$
 
 where
@@ -59,7 +59,7 @@ Each new observation gets a **strangeness** value, $\alpha_n$, measuring how "un
 Let $\{\alpha_1, \alpha_2, \ldots, \alpha_n\}$ be all strangeness values up to time $n$. We define:
 
 $$
-p_n \;=\; \frac{\#\{\alpha_i : \alpha_i > \alpha_n\} + \theta \,\#\{\alpha_i : \alpha_i = \alpha_n\}}{n},
+p_n = \frac{\text{\#}\{\alpha_i : \alpha_i > \alpha_n\} + \theta \,\text{\#}\{\alpha_i : \alpha_i = \alpha_n\}}{n},
 $$
 
 where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conformal prediction** p-value approach:
@@ -72,7 +72,7 @@ where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conform
 1. **Single-View**: We have a single stream $\{X_t\}$. For each point, we compute strangeness, then p-value, then update one martingale $M_n$.
 2. **Multi-View** (or multi-feature): Suppose we have $d$ different features or “views,” each producing its own martingale $M_j(n)$. Then we can **combine** them (often by summation) to get a global statistic:
    $$
-     M_{\mathrm{total}}(n) \;=\; \sum_{j=1}^{d} M_j(n).
+     M_{\mathrm{total}}(n) = \sum_{j=1}^{d} M_j(n).
    $$
    If $M_{\mathrm{total}}(n)$ exceeds $\tau$, we declare a global change point.
 
