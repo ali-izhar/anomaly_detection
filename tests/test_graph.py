@@ -1,8 +1,8 @@
 # tests/test_graph.py
 
-"""Test suite for graph generation and feature extraction.
+"""
+Test the `src/graph` module.
 
-This module provides tests for the graph generator and feature extraction modules. It verifies:
 1. Graph generation for different models
 2. Feature computation correctness
 3. Performance benchmarks

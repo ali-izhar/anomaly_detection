@@ -1,8 +1,8 @@
 # tests/test_changepoint.py
 
-"""Test suite for martingale-based change point detection.
+"""
+Test the `src/changepoint` module.
 
-This module tests:
 1. Single-view martingale detection
 2. Multi-view martingale detection
 3. Memory efficiency

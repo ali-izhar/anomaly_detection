@@ -1,98 +1,134 @@
 # Change Point Detection
 
-Detect significant changes in sequential data, especially in dynamic networks, using martingale-based statistical methods.
+This module demonstrates **martingale-based change detection** in sequential data (including **multi-view** or multi-feature scenarios), grounded in **conformal prediction** principles. The approach combines **strangeness measures**, **p-values**, and a **power martingale** update rule to detect distributional shifts over time.
 
-## Components
+## What Is a Change Point?
 
-- **`martingale.py`**: Implements martingale-based change point detection algorithms.
-- **`detector.py`**: Integrates graph feature extraction with change point detection.
+Given a data stream $ X_1, X_2, \ldots, X_n $, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs significantly from the distribution of $X_{k+1:n}$. In practice, we usually do **online** detection — we process observations one at a time and raise an alarm as soon as a suspected shift is detected.
 
-## Theory
+## The Martingale Framework
 
-### Change Points
+### Background
 
-A change point in a sequence $X_1, X_2, \ldots, X_n$ exists at time $k$ if the distributions of $X_{1:k}$ and $X_{k+1:n}$ differ significantly.
-
-### Martingale Theory
-
-A martingale $\\{M_n\\}_{n \geq 0}$ satisfies:
+A **martingale** $\{M_n\}_{n \ge 0}$ is a process that satisfies the property
 
 $$
-E[M_{n+1} \mid M_1, \ldots, M_n] = M_n
+E[M_{n+1} \mid M_1, M_2, \ldots, M_n] \;=\; M_n
 $$
 
-**Comparison with Markov Processes:**
+Intuitively, the expected future value of a martingale equals its current value. This differs from:
 
-- **Markov Process**: Future state depends only on the present state. *Example*: In the PageRank algorithm, the next page visited depends solely on the current page.
-- **Martingale**: Expected future value equals the present value. *Example*: In fair betting games, the expected winnings tomorrow equal the current winnings. In financial modeling, stock prices are modeled as martingales assuming that future price movements are independent of past trends. Or in a random walk, the expected position equals the current position.
+- **Markov Processes**: Where the future state depends only on the current state.
+- **Martingale Processes**: Where the *expected* future value is the current value (like fair games where your expected winnings remain constant).
 
-### Application to Change Detection
+In **change detection**, we construct a **test martingale** from sequentially computed p-values. Under a stable (unchanged) distribution, this martingale remains bounded or grows slowly; a sharp growth in the martingale suggests a change point.
 
-Under stable conditions, the martingale remains fair. A deviation indicates a potential change point.
+### The Power Martingale Update
 
-#### Martingale Update
-
-$$
-M_n = M_{n-1} \cdot \epsilon \cdot \frac{p_n}{\epsilon - 1}
-$$
-
-- $p_n$: p-value at time $n$. If the current data is normal, $p_n$ is high, and $M_n$ decreases or remains stable. However, if the data is unusual, $p_n$ is low, and $M_n$ increases, signaling a change.
-- $\epsilon$: Sensitivity parameter (0.5 to 0.99). $\epsilon$ controls the influence of the p-value on the martingale update. For instance, if $\epsilon = 0$, then $\frac{\epsilon}{1 - \epsilon} = 0$, and the martingale update diminishes regardless of $p_n$, making detection ineffective. On the other hand, if $\epsilon = 1$, then $\frac{\epsilon}{1 - \epsilon} = \infty$, and the martingale update increases indefinitely, leading to frequent false alarms.
-
-    - $\epsilon \approx 0.95$: Conservative, fewer false alarms.
-    - $\epsilon \approx 0.5$: Sensitive, detects subtle changes.
-    - **Default**: $\epsilon = 0.8$.
-
-#### P-value and Strangeness
-
-For each observation $i$, compute the p-value $p_i$ as:
+We use the **power martingale** update rule:
 
 $$
-p_i = \frac{|\{j : \alpha_j > \alpha_i\}| + \theta|\{j : \alpha_j = \alpha_i\}|}{i}
+M_n \;=\; M_{n-1} \;\times\; \epsilon \;\times\; (p_n)^{\,(\epsilon - 1)}
 $$
 
-Where $\alpha_i$ is the strangeness of the $i$-th observation and $\theta$ is a tiebreaker parameter (typically between 0 and 1). If the strangeness is high, it indicates that the observation is unusual compared to past data, thus the p-value is low. On the other hand, if the strangeness is low, it indicates that the observation is typical, thus the p-value is high.
+where
 
-- **Low $p_i$**: Few past observations are more strange, indicating a potential change point.
-- **High $p_i$**: Many past observations are more strange, suggesting normal variability.
+- $p_n$ is the **p-value** at time $n$.
+- $\epsilon \in (0,1)$ is a **sensitivity parameter**. Smaller $\epsilon$ places more emphasis on small p-values (anomalies), making the martingale spike faster.
 
+**Key insight**:  
+- If $p_n$ is high (meaning the new observation is not strange), $(p_n)^{(\epsilon - 1)}$ is not too large, and $M_n$ remains stable or decreases.  
+- If $p_n$ is very low (the point is suspicious), $(p_n)^{(\epsilon - 1)}$ can be large, so $M_n$ increases significantly.
 
-### Centrality Measures
+### Thresholding
 
-#### 1. Degree Centrality: "The Popularity Contest"
+We set a **detection threshold** $\tau$. Whenever $M_n$ exceeds $\tau$, we raise a **change point alarm**. Optionally, we can **reset** the martingale and/or the historical window upon detection to search for subsequent changes.
 
-$$
-C_D(v) = \frac{\text{degree}(v)}{N-1}
-$$
+## P-Value via Strangeness
 
-Measures how many direct connections a node has relative to the maximum possible. For example, counting the number of followers of a celebrity. A celebrity with many followers has a high degree centrality score. A regular user with few connections has a low degree centrality score. A use case is identifying social influencers.
+### Strangeness
 
-#### 2. Betweenness Centrality: "The Bridge Builder"
+Each new observation gets a **strangeness** value, $\alpha_n$, measuring how "unusual" it is relative to past observations. For instance, one might use:
 
-$$
-C_B(v) = \sum_{s \neq v \neq t} \frac{\sigma_{st}(v)}{\sigma_{st}}
-$$
+- **Cluster-based distance**: Minimum distance to a KMeans cluster center.
+- **Graph structural features**: Degree, betweenness, or subgraph patterns.
+- **Embedding distance**: Distance in a learned embedding space (node2vec, GNN, etc.).
 
-Quantifies the number of times a node acts as a bridge along the shortest path between two other nodes. For example, a manager who connects different departments. A manager who connects many departments has a high betweenness centrality score. A manager who connects few departments has a low betweenness centrality score. A use case is finding information bottlenecks.
+### Empirical P-value Calculation
 
-#### 3. Eigenvector Centrality: "Connected to VIPs"
-
-$$
-C_E(v) = \frac{1}{\lambda} \sum_{u \in G} A_{vu} C_E(u)
-$$
-
-Measures a node's influence based on the influence of its neighbors. For example, a paper cited by important papers has a high eigenvector centrality score. A paper with few citations has a low eigenvector centrality score. A use case is identifying key influencers.
-
-#### 4. Closeness Centrality: "The Quick Communicator"
+Let $\{\alpha_1, \alpha_2, \ldots, \alpha_n\}$ be all strangeness values up to time $n$. We define:
 
 $$
-C_C(v) = \frac{N-1}{\sum_{u \neq v} d(u,v)}
+p_n \;=\; \frac{\#\{\alpha_i : \alpha_i > \alpha_n\} + \theta \,\#\{\alpha_i : \alpha_i = \alpha_n\}}{n},
 $$
 
-Measures how quickly a node can access all other nodes in the network. For example, a central hospital has a high closeness centrality score. A remote clinic has a low closeness centrality score. A use case is optimal resource placement.
+where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conformal prediction** p-value approach:
+
+- **Low p-value** ($p_n \approx 0$) means $\alpha_n$ is larger than most previous strangeness scores (the new point is very unusual).
+- **High p-value** ($p_n \approx 1$) means the new point is not unusual compared to history.
+
+## Single-View vs. Multi-View Detection
+
+1. **Single-View**: We have a single stream $\{X_t\}$. For each point, we compute strangeness, then p-value, then update one martingale $M_n$.
+2. **Multi-View** (or multi-feature): Suppose we have $d$ different features or “views,” each producing its own martingale $M_j(n)$. Then we can **combine** them (often by summation) to get a global statistic:
+   $$
+     M_{\mathrm{total}}(n) \;=\; \sum_{j=1}^{d} M_j(n).
+   $$
+   If $M_{\mathrm{total}}(n)$ exceeds $\tau$, we declare a global change point.
+
+## Step-by-Step Algorithm
+
+1. **Compute Strangeness**: For each new observation (or network snapshot), compute a numeric measure of how unusual it is.
+2. **Compute P-value**: Compare that strangeness to the empirical distribution of past strangeness, per conformal prediction.
+3. **Update Martingale**: 
+   $$
+     M_n = M_{n-1} \times \epsilon \times \bigl(p_n\bigr)^{(\epsilon - 1)}
+   $$
+4. **Threshold**: If $M_n > \tau$, flag a change point and optionally reset.
+
+**Advantages**:
+- Nonparametric, distribution-free approach.
+- Adaptable to complex data (graphs, embeddings, etc.) by customizing the strangeness measure.
+- Online: can process data as it arrives.
+
+**Challenges**:
+- Choosing $\epsilon$ and $\tau$ can be domain-specific.
+- Large dimensional data might need sophisticated strangeness measures (e.g., embeddings).
+
+## Example Usage
+
+1. **Single-View**:
+   ```python
+   from changepoint.detector import ChangePointDetector
+   import numpy as np
+
+   data = np.array([0.1, 0.2, 0.5, 1.2, 1.25, 0.3]).reshape(-1,1)
+   detector = ChangePointDetector()
+   result = detector.detect_changes(data, threshold=5.0, epsilon=0.6, max_window=3)
+   print(result["change_points"])
+   print(result["martingale_values"])
+   ```
+
+2. **Multi-View**:
+    ```python
+    feat1 = np.array([0.1, 0.2, 0.5, 1.2, 1.25, 0.3]).reshape(-1,1)
+    feat2 = np.array([2.1, 2.2, 2.5, 1.9, 2.0, 2.1]).reshape(-1,1)
+
+    detector = ChangePointDetector()
+    result = detector.detect_changes_multiview(
+        data=[feat1, feat2],
+        threshold=7.0,
+        epsilon=0.4,
+        max_window=3
+    )
+    print(result["change_points"])
+    print(result["martingale_values"])
+    ```
 
 ## References
 
-1. Ho, S. S., & Wechsler, H. (2005). "A martingale framework for detecting changes in data streams by testing exchangeability." IEEE TPAMI.
-2. Newman, M. E. J. (2010). Networks: An Introduction. Oxford University Press.
-3. Doob, J. L. (1953). Stochastic Processes. John Wiley & Sons. (Martingale Theory)
+- Ho, S. S., & Wechsler, H. (2005). A martingale framework for detecting changes in data streams by testing exchangeability. IEEE Transactions on Pattern Analysis and Machine Intelligence.
+- Newman, M. E. J. (2010). Networks: An Introduction. Oxford University Press.
+- Doob, J. L. (1953). Stochastic Processes. John Wiley & Sons.
+- Vovk, V. et al. (2005+). Conformal Prediction frameworks for nonparametric p-values in machine learning.
+- Shafer, G., & Vovk, V. (2008). A tutorial on conformal prediction. Journal of Machine Learning Research.

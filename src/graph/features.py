@@ -143,63 +143,6 @@ class NetworkFeatureExtractor:
         return metrics
 
 
-class StrangenessDetector:
-    """Detects strangeness in network features."""
-
-    def __init__(
-        self,
-        n_clusters: int = 1,
-        random_state: Optional[int] = 42,
-        batch_size: Optional[int] = None,
-    ):
-        """Initialize detector."""
-        self.n_clusters = n_clusters
-        self.random_state = random_state
-        self.batch_size = batch_size
-
-    def compute_strangeness(self, data: Union[List[Any], np.ndarray]) -> np.ndarray:
-        """Compute strangeness scores.
-
-        Parameters
-        ----------
-        data : Union[List[Any], np.ndarray]
-            Input vectors to compute strangeness for
-
-        Returns
-        -------
-        np.ndarray
-            Array of strangeness scores
-        """
-        if not data:
-            raise ValueError("Empty data sequence")
-
-        try:
-            data_array = np.array(data)
-            if data_array.ndim == 3:
-                data_array = data_array.reshape(-1, data_array.shape[-1])
-
-                if self.batch_size and data_array.shape[0] > self.batch_size:
-                    from sklearn.cluster import MiniBatchKMeans
-
-                    kmeans = MiniBatchKMeans(
-                        n_clusters=self.n_clusters,
-                        batch_size=self.batch_size,
-                        random_state=self.random_state,
-                    )
-            else:
-                kmeans = KMeans(
-                    n_clusters=self.n_clusters,
-                    n_init="auto",
-                    random_state=self.random_state,
-                )
-
-                return kmeans.fit_transform(data_array)
-
-        except Exception as e:
-            logger.error(f"Strangeness computation failed: {str(e)}")
-            raise RuntimeError(f"Strangeness computation failed: {str(e)}")
-
-
 def calculate_error_metrics(
     actual_metrics: Dict[str, float], predicted_metrics: Dict[str, float]
 ) -> Dict[str, float]:
