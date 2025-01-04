@@ -181,11 +181,22 @@ class Visualizer:
                 G_pred, pos, ax=ax_pred, **PlotStyle.NODE_STYLES["predicted"]
             )
 
+            # Calculate accuracy metrics
+            actual_adj = nx.to_numpy_array(G_actual)
+            pred_adj = nx.to_numpy_array(G_pred)
+            triu_indices = np.triu_indices_from(actual_adj, k=1)
+            total_positions = len(triu_indices[0])
+            correct_predictions = total_positions - np.sum(
+                actual_adj[triu_indices] != pred_adj[triu_indices]
+            )
+            accuracy = (correct_predictions / total_positions) * 100
+
             # Add network stats with consistent style
             stats_pred = (
                 f"Nodes: {G_pred.number_of_nodes():,d}\n"
                 f"Edges: {G_pred.number_of_edges():,d}\n"
-                f"Density: {nx.density(G_pred):.3f}"
+                f"Density: {nx.density(G_pred):.3f}\n"
+                f"Accuracy: {accuracy:.1f}%"
             )
             ax_pred.text(
                 0.02,
