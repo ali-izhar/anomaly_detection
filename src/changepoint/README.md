@@ -28,7 +28,7 @@ In **change detection**, we construct a **test martingale** from sequentially co
 We use the **power martingale** update rule:
 
 $$
-M_n = M_{n-1} \times \epsilon \times (p_n)^{\,(\epsilon - 1)}
+M_n = M_{n-1} \times \epsilon \times (p_n)^{(\epsilon - 1)}
 $$
 
 where
@@ -70,10 +70,10 @@ where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conform
 ## Single-View vs. Multi-View Detection
 
 1. **Single-View**: We have a single stream $\{X_t\}$. For each point, we compute strangeness, then p-value, then update one martingale $M_n$.
-2. **Multi-View** (or multi-feature): Suppose we have $d$ different features or “views,” each producing its own martingale $M_j(n)$. Then we can **combine** them (often by summation) to get a global statistic:
-   $$
-     M_{\mathrm{total}}(n) = \sum_{j=1}^{d} M_j(n).
-   $$
+2. **Multi-View** (or multi-feature): Suppose we have $d$ different features or "views," each producing its own martingale $M_j(n)$. Then we can **combine** them (often by summation) to get a global statistic:
+
+   $$M_{\mathrm{total}}(n) = \sum_{j=1}^{d} M_j(n)$$
+
    If $M_{\mathrm{total}}(n)$ exceeds $\tau$, we declare a global change point.
 
 ## Step-by-Step Algorithm
@@ -81,9 +81,9 @@ where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conform
 1. **Compute Strangeness**: For each new observation (or network snapshot), compute a numeric measure of how unusual it is.
 2. **Compute P-value**: Compare that strangeness to the empirical distribution of past strangeness, per conformal prediction.
 3. **Update Martingale**: 
-   $$
-     M_n = M_{n-1} \times \epsilon \times \bigl(p_n\bigr)^{(\epsilon - 1)}
-   $$
+
+   $$M_n = M_{n-1} \times \epsilon \times \bigl(p_n\bigr)^{(\epsilon - 1)}$$
+
 4. **Threshold**: If $M_n > \tau$, flag a change point and optionally reset.
 
 **Advantages**:

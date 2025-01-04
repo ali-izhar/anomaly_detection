@@ -42,6 +42,8 @@ $$
 - **Social networks** where "popular" individuals (high degree) attract more new connections over time.
 - **Citation networks** where papers that already have many citations are more likely to receive new citations.
 
+---
+
 ### 2. Watts-Strogatz (WS) Model
 - Begin with a ring of $n$ nodes, each connected to its $k_\mathrm{nearest}$ immediate neighbors.  
 - Rewire each edge with probability $p$ to a random node, introducing shortcuts.  
@@ -57,6 +59,8 @@ keeping the ring-lattice structure otherwise.
 - **Friend-of-a-friend** social networks with occasional "long-distance" ties (small-world effect).
 - **Neural networks** in the brain, where most connections are local but a few are global "shortcuts."
 
+---
+
 ### 3. Erdős-Rényi (ER) Model
 - Given $n$ nodes, each possible edge appears **independently** with probability $p$.  
 - Generates binomial $G(n,p)$ graphs with a **Poisson-like degree distribution** for large $n$.
@@ -68,6 +72,8 @@ $$
 **Examples**:  
 - **Random communication links** among devices (each link formed with some probability).
 - **Chemical reaction networks** where each potential reaction has a uniform activation probability.
+
+---
 
 ### 4. Stochastic Block Model (SBM)
 - Partition $n$ nodes into $k$ blocks (communities).  
@@ -86,6 +92,8 @@ $$
 - **Social communities** (people in the same group are more likely to connect).
 - **Protein-protein interaction** networks with functional modules.
 
+---
+
 ### 5. Random Core-Periphery (RCP)
 - Divide nodes into a **core** (densely interconnected) and a **periphery** (sparse or no internal edges).  
 - The probability of an edge depends on whether the nodes are both in the core, both in the periphery, or cross core/periphery.
@@ -100,6 +108,8 @@ $$
 
 **Examples**:  
 - **Corporate structure** with a core leadership team that interacts frequently, and peripheral departments that are less interconnected.
+
+---
 
 ### 6. LFR Benchmark (LFR)
 - Generates **benchmark networks** with **power-law** degree distribution and **power-law** community size distribution.  
