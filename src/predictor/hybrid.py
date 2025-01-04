@@ -1,391 +1,403 @@
-"""Hybrid network prediction.
+"""Hybrid predictor that combines weighted prediction with structural role preservation.
 
-This module implements network prediction using a hybrid approach that
-integrates multiple prediction strategies within a single model. The core
-idea is to combine spectral, structural, temporal, and feature-based
-predictions in a unified framework.
-
-Mathematical Foundation:
-----------------------
-Given a network state A(t), we combine:
-
-1. Spectral Component:
-   P_s(t+1) = U(t)Σ'(t)V(t)ᵀ
-   where Σ' is predicted singular values
-
-2. Structural Component:
-   P_g(t+1) = f(Z(t))
-   where Z(t) are node embeddings
-
-3. Temporal Component:
-   P_t(t+1) = W·A(t) + b
-   using learned dynamics
-
-4. Unified Prediction:
-   A(t+1) = α·P_s + β·P_g + γ·P_t
-   where α, β, γ are learned weights
-
-5. Optimization:
-   min L = ||A_true - A_pred||² + R(α,β,γ)
-   where R is a regularization term
+Uses weighted predictor as base for global properties (degree/density), then enhances
+local structure properties while preserving node roles and BA evolution principles.
 """
 
 import numpy as np
 import networkx as nx
-from typing import List, Dict, Any, Optional, Tuple
-from scipy.optimize import minimize
-from scipy.sparse.linalg import eigsh
+from typing import List, Dict, Any, Optional, Set, Tuple
+from collections import defaultdict
 from .base import BasePredictor
+from .weighted import WeightedPredictor
+from graph.features import NetworkFeatureExtractor
 
 
 class HybridPredictor(BasePredictor):
-    """Predicts network evolution using hybrid approach.
-
-    Parameters
-    ----------
-    n_components : int, optional
-        Number of components for spectral part, by default 32
-    embedding_dim : int, optional
-        Dimension for structural embeddings, by default 32
-    learning_rate : float, optional
-        Learning rate for parameters, by default 0.01
-    regularization : float, optional
-        Regularization strength, by default 0.1
-    threshold : float, optional
-        Threshold for binary predictions, by default 0.5
-    """
+    """Hybrid predictor that preserves both global and local network properties."""
 
     def __init__(
         self,
-        n_components: int = 32,
-        embedding_dim: int = 32,
-        learning_rate: float = 0.01,
-        regularization: float = 0.1,
-        threshold: float = 0.5,
+        n_history: int = 3,
+        weights: Optional[np.ndarray] = None,
+        adaptive: bool = True,
+        model_type: str = "ba",
     ):
-        """Initialize the hybrid predictor."""
-        self.n_components = n_components
-        self.embedding_dim = embedding_dim
-        self.learning_rate = learning_rate
-        self.regularization = regularization
-        self.threshold = threshold
+        # Initialize weighted predictor as base
+        self.weighted_predictor = WeightedPredictor(
+            n_history=n_history, weights=weights, adaptive=adaptive
+        )
 
-        # Component weights
-        self.spectral_weight = 1 / 3
-        self.structural_weight = 1 / 3
-        self.temporal_weight = 1 / 3
+        # For computing network metrics
+        self.feature_extractor = NetworkFeatureExtractor()
 
-        # Component parameters
-        self.singular_values_history: List[np.ndarray] = []
-        self.left_vectors_history: List[np.ndarray] = []
-        self.right_vectors_history: List[np.ndarray] = []
-        self.embedding_history: List[np.ndarray] = []
-        self.temporal_matrix: Optional[np.ndarray] = None
-        self.temporal_bias: Optional[np.ndarray] = None
+        # Model parameters
+        self.model_type = model_type
+        self.base_m = 3 if model_type == "ba" else None
+
+        # Role identification thresholds
+        self.hub_threshold = 0.8  # Top 20% by degree
+        self.bridge_threshold = 0.8  # Top 20% by betweenness
+        self.cluster_threshold = 0.7  # Top 30% by clustering
+
+        # Cache for performance
+        self._cache = {}
+
+    def _identify_node_roles(self, G: nx.Graph) -> Tuple[Set[int], Set[int], Set[int]]:
+        """Identify hub nodes, bridge nodes, and cluster nodes."""
+        n = G.number_of_nodes()
+
+        # Get node metrics
+        degrees = dict(G.degree())
+        betweenness = nx.betweenness_centrality(G)
+        clustering = nx.clustering(G)
+
+        # Identify hubs (high degree nodes)
+        degree_threshold = sorted(degrees.values(), reverse=True)[
+            int(n * (1 - self.hub_threshold))
+        ]
+        hub_nodes = {node for node, deg in degrees.items() if deg >= degree_threshold}
+
+        # Identify bridges (high betweenness nodes)
+        betw_threshold = sorted(betweenness.values(), reverse=True)[
+            int(n * (1 - self.bridge_threshold))
+        ]
+        bridge_nodes = {node for node, b in betweenness.items() if b >= betw_threshold}
+
+        # Identify cluster nodes (high clustering coefficient)
+        clust_values = [
+            v for v in clustering.values() if v > 0
+        ]  # Exclude zero clustering
+        if clust_values:
+            clust_threshold = sorted(clust_values, reverse=True)[
+                int(len(clust_values) * (1 - self.cluster_threshold))
+            ]
+            cluster_nodes = {
+                node for node, c in clustering.items() if c >= clust_threshold
+            }
+        else:
+            cluster_nodes = set()
+
+        return hub_nodes, bridge_nodes, cluster_nodes
+
+    def _compute_role_preservation_score(
+        self,
+        G: nx.Graph,
+        node_i: int,
+        node_j: int,
+        hub_nodes: Set[int],
+        bridge_nodes: Set[int],
+        cluster_nodes: Set[int],
+    ) -> float:
+        """Compute score based on node role preservation."""
+        score = 0.0
+        count = 0
+
+        # Hub role preservation
+        if node_i in hub_nodes or node_j in hub_nodes:
+            hub_score = 0.8  # High score for hub connections
+            if node_i in hub_nodes and node_j in hub_nodes:
+                hub_score = 1.0  # Maximum for hub-hub connections
+            score += hub_score
+            count += 1
+
+        # Bridge role preservation
+        if node_i in bridge_nodes or node_j in bridge_nodes:
+            bridge_score = 0.7
+            if abs(G.degree(node_i) - G.degree(node_j)) > 2:
+                bridge_score = 0.9  # Higher score for connecting different degree nodes
+            score += bridge_score
+            count += 1
+
+        # Cluster role preservation
+        if node_i in cluster_nodes or node_j in cluster_nodes:
+            common_neighbors = len(set(G.neighbors(node_i)) & set(G.neighbors(node_j)))
+            cluster_score = min(
+                1.0, common_neighbors / max(G.degree(node_i), G.degree(node_j))
+            )
+            score += cluster_score
+            count += 1
+
+        return score / max(1, count)
+
+    def _compute_local_structure_score(
+        self,
+        G: nx.Graph,
+        node_i: int,
+        node_j: int,
+        communities: Optional[List[Set[int]]] = None,
+    ) -> float:
+        """Compute score based on local structure preservation."""
+        # Get neighborhoods
+        neighbors_i = set(G.neighbors(node_i))
+        neighbors_j = set(G.neighbors(node_j))
+
+        # Common neighbors (triangle formation)
+        common = neighbors_i & neighbors_j
+        triangle_score = len(common) / max(1, min(len(neighbors_i), len(neighbors_j)))
+
+        # Path length score
+        try:
+            path_length = nx.shortest_path_length(G, node_i, node_j)
+            path_score = 1.0 / (1.0 + path_length)
+        except:
+            path_score = 0.0
+
+        # Community score
+        if communities:
+            node_comm = {n: idx for idx, comm in enumerate(communities) for n in comm}
+            comm_score = 1.0 if node_comm.get(node_i) == node_comm.get(node_j) else 0.3
+        else:
+            comm_score = 0.5
+
+        # Combine scores
+        return 0.4 * triangle_score + 0.3 * path_score + 0.3 * comm_score
+
+    def _compute_ba_evolution_score(
+        self, G: nx.Graph, node_i: int, node_j: int, hub_nodes: Set[int]
+    ) -> float:
+        """Compute score based on BA evolution principles."""
+        n = G.number_of_nodes()
+        deg_i = G.degree(node_i)
+        deg_j = G.degree(node_j)
+
+        # Preferential attachment score
+        pa_score = (deg_i + deg_j) / (2 * n * self.base_m)
+
+        # Hub evolution score
+        if node_i in hub_nodes or node_j in hub_nodes:
+            hub_score = max(deg_i, deg_j) / (n * self.base_m)
+        else:
+            hub_score = 0.5
+
+        # Power law preservation score
+        power_law_score = np.log(1 + max(deg_i, deg_j)) / np.log(n)
+
+        return 0.4 * pa_score + 0.3 * hub_score + 0.3 * power_law_score
+
+    def _compute_temporal_consistency(
+        self, history: List[Dict[str, Any]], node_i: int, node_j: int
+    ) -> float:
+        """Compute temporal consistency score based on edge history."""
+        if len(history) < 2:
+            return 0.5
+
+        # Check edge stability in recent history
+        recent_states = history[-3:]  # Look at last 3 states
+        edge_presence = []
+
+        for state in recent_states:
+            adj = state["adjacency"]
+            edge_presence.append(adj[node_i, node_j])
+
+        # Compute trend
+        if len(edge_presence) >= 2:
+            changes = sum(
+                abs(edge_presence[i] - edge_presence[i - 1])
+                for i in range(1, len(edge_presence))
+            )
+            stability = 1.0 / (1.0 + changes)
+        else:
+            stability = 0.5
+
+        # Weight recent states more
+        weighted_presence = sum(
+            w * p for w, p in zip([0.5, 0.3, 0.2], reversed(edge_presence))
+        )
+
+        return 0.7 * stability + 0.3 * weighted_presence
+
+    def _compute_spectral_score(self, G: nx.Graph, node_i: int, node_j: int) -> float:
+        """Compute score based on spectral properties."""
+        try:
+            # Get local subgraph
+            neighbors = set(G.neighbors(node_i)) | set(G.neighbors(node_j))
+            subgraph = G.subgraph(neighbors | {node_i, node_j})
+
+            # Compute Laplacian spectrum
+            L = nx.laplacian_matrix(subgraph).todense()
+            eigenvals = np.linalg.eigvalsh(L)
+
+            # Fiedler value (algebraic connectivity)
+            fiedler = eigenvals[1] if len(eigenvals) > 1 else 0
+
+            # Spectral gap
+            gap = eigenvals[-1] - eigenvals[-2] if len(eigenvals) > 2 else 0
+
+            return 0.6 * (1 - np.exp(-fiedler)) + 0.4 * (1 - np.exp(-gap))
+        except:
+            return 0.5
+
+    def _enhance_prediction(
+        self,
+        base_pred: np.ndarray,
+        current_adj: np.ndarray,
+        history: List[Dict[str, Any]],
+    ) -> np.ndarray:
+        """Enhance base prediction while preserving both global and local properties."""
+        G_current = nx.from_numpy_array(current_adj)
+        n = len(G_current)
+
+        # Identify node roles with adjusted thresholds
+        self.hub_threshold = 0.85  # More selective hubs (top 15%)
+        self.bridge_threshold = 0.85  # More selective bridges (top 15%)
+        self.cluster_threshold = 0.8  # More selective clusters (top 20%)
+        hub_nodes, bridge_nodes, cluster_nodes = self._identify_node_roles(G_current)
+
+        # Get communities and spectral properties
+        try:
+            communities = nx.community.louvain_communities(G_current)
+        except:
+            communities = None
+
+        # Initialize edge scores with historical consistency
+        edge_scores = []
+        current_edges = set(
+            (i, j) for i, j in zip(*np.where(current_adj == 1)) if i < j
+        )
+
+        # Compute scores for potential edges
+        for i in range(n):
+            for j in range(i + 1, n):
+                # Start with base prediction probability
+                score = base_pred[i, j]
+
+                # Skip unlikely edges for efficiency
+                if (
+                    score < 0.05
+                    and (i, j) not in current_edges
+                    and i not in hub_nodes
+                    and i not in bridge_nodes
+                    and j not in hub_nodes
+                    and j not in bridge_nodes
+                ):
+                    continue
+
+                # Compute component scores
+                role_score = self._compute_role_preservation_score(
+                    G_current, i, j, hub_nodes, bridge_nodes, cluster_nodes
+                )
+
+                local_score = self._compute_local_structure_score(
+                    G_current, i, j, communities
+                )
+
+                ba_score = self._compute_ba_evolution_score(G_current, i, j, hub_nodes)
+
+                temporal_score = self._compute_temporal_consistency(history, i, j)
+
+                spectral_score = self._compute_spectral_score(G_current, i, j)
+
+                # Adaptive score combination based on node roles
+                if i in hub_nodes or j in hub_nodes:
+                    # Hub connections: favor BA evolution and temporal consistency
+                    final_score = (
+                        0.2 * score
+                        + 0.2 * role_score
+                        + 0.1 * local_score
+                        + 0.3 * ba_score
+                        + 0.1 * spectral_score
+                        + 0.1 * temporal_score
+                    )
+                elif i in bridge_nodes or j in bridge_nodes:
+                    # Bridge connections: favor spectral properties and role preservation
+                    final_score = (
+                        0.2 * score
+                        + 0.25 * role_score
+                        + 0.15 * local_score
+                        + 0.1 * ba_score
+                        + 0.2 * spectral_score
+                        + 0.1 * temporal_score
+                    )
+                elif i in cluster_nodes or j in cluster_nodes:
+                    # Cluster connections: favor local structure
+                    final_score = (
+                        0.2 * score
+                        + 0.15 * role_score
+                        + 0.3 * local_score
+                        + 0.1 * ba_score
+                        + 0.15 * spectral_score
+                        + 0.1 * temporal_score
+                    )
+                else:
+                    # Regular connections: balanced weights
+                    final_score = (
+                        0.2 * score
+                        + 0.2 * role_score
+                        + 0.2 * local_score
+                        + 0.15 * ba_score
+                        + 0.15 * spectral_score
+                        + 0.1 * temporal_score
+                    )
+
+                # Boost score for existing edges to promote stability
+                if (i, j) in current_edges:
+                    final_score *= 1.2
+
+                edge_scores.append(((i, j), final_score))
+
+        # Sort edges by score
+        edge_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Create final prediction while preserving global properties
+        target_edges = int(base_pred.sum() / 2)
+        final_pred = np.zeros_like(base_pred)
+        edges_added = 0
+
+        # Track degree changes
+        degree_changes = defaultdict(int)
+
+        # Add edges while respecting constraints
+        for (i, j), score in edge_scores:
+            if edges_added >= target_edges:
+                break
+
+            # Compute allowed degree change based on node role
+            max_change_i = 3 if i in hub_nodes else (2 if i in bridge_nodes else 1)
+            max_change_j = 3 if j in hub_nodes else (2 if j in bridge_nodes else 1)
+
+            # Check degree constraints
+            if degree_changes[i] < max_change_i and degree_changes[j] < max_change_j:
+                final_pred[i, j] = final_pred[j, i] = 1
+                edges_added += 1
+                degree_changes[i] += 1
+                degree_changes[j] += 1
+
+        return final_pred
 
     def predict(
-        self,
-        history: List[Dict[str, Any]],
-        horizon: int = 1,
-        **kwargs,
+        self, history: List[Dict[str, Any]], horizon: int = 1
     ) -> List[np.ndarray]:
-        """Predict future network states using hybrid approach.
-
-        Parameters
-        ----------
-        history : List[Dict[str, Any]]
-            Historical network states
-        horizon : int, optional
-            Number of steps to predict forward, by default 1
-
-        Returns
-        -------
-        List[np.ndarray]
-            Predicted adjacency matrices
-        """
-        # Get historical adjacency matrices
-        adj_matrices = [state["adjacency"] for state in history]
-
-        # Update component histories
-        for adj in adj_matrices:
-            self._update_histories(adj)
-
-        # Learn temporal dynamics if not already learned
-        if self.temporal_matrix is None:
-            self._learn_temporal_dynamics(adj_matrices)
-
-        # Current state
-        current_adj = adj_matrices[-1]
+        """Generate predictions using weighted predictor with structural enhancements."""
         predictions = []
+        current_history = list(history)
 
-        # Predict future states
-        for step in range(horizon):
-            # Get component predictions
-            spectral_pred = self._predict_spectral(current_adj)
-            structural_pred = self._predict_structural(current_adj)
-            temporal_pred = self._predict_temporal(current_adj)
+        for _ in range(horizon):
+            # Get base prediction from weighted predictor
+            base_pred = self.weighted_predictor.predict(current_history, horizon=1)[0]
 
-            # Combine predictions
-            combined_adj = (
-                self.spectral_weight * spectral_pred
-                + self.structural_weight * structural_pred
-                + self.temporal_weight * temporal_pred
-            )
+            if len(history) > 1:
+                # Enhance prediction while preserving structure
+                final_pred = self._enhance_prediction(
+                    base_pred, history[-1]["adjacency"], current_history
+                )
+            else:
+                final_pred = base_pred
 
-            # Threshold and symmetrize
-            combined_adj = (combined_adj + combined_adj.T) / 2
-            combined_adj = (combined_adj > self.threshold).astype(float)
-
-            # Store prediction
-            predictions.append(combined_adj)
-
-            # Update current state
-            current_adj = combined_adj
-            self._update_histories(current_adj)
+            # Update for next iteration
+            predictions.append(final_pred)
+            current_history.append({"adjacency": final_pred})
 
         return predictions
 
-    def _update_histories(self, adj_matrix: np.ndarray) -> None:
-        """Update component histories with new state.
+    def _get_metrics(self, state: Dict[str, Any]) -> Dict[str, float]:
+        """Extract relevant metrics from graph state."""
+        G = nx.from_numpy_array(state["adjacency"])
+        metrics = self.feature_extractor.get_all_metrics(G)
 
-        Parameters
-        ----------
-        adj_matrix : np.ndarray
-            New adjacency matrix
-        """
-        # Spectral decomposition
-        U, S, Vt = np.linalg.svd(adj_matrix)
-        if self.n_components:
-            U = U[:, : self.n_components]
-            S = S[: self.n_components]
-            Vt = Vt[: self.n_components, :]
-
-        self.singular_values_history.append(S)
-        self.left_vectors_history.append(U)
-        self.right_vectors_history.append(Vt)
-
-        # Structural embedding
-        embedding = self._compute_embedding(adj_matrix)
-        self.embedding_history.append(embedding)
-
-    def _compute_embedding(self, adj_matrix: np.ndarray) -> np.ndarray:
-        """Compute structural embeddings.
-
-        Parameters
-        ----------
-        adj_matrix : np.ndarray
-            Input adjacency matrix
-
-        Returns
-        -------
-        np.ndarray
-            Node embeddings
-        """
-        # Normalized Laplacian
-        deg = np.sum(adj_matrix, axis=1)
-        D_inv_sqrt = np.diag(1.0 / np.sqrt(np.maximum(deg, 1e-12)))
-        L_norm = np.eye(adj_matrix.shape[0]) - D_inv_sqrt @ adj_matrix @ D_inv_sqrt
-
-        # Compute smallest eigenvectors
-        _, vectors = eigsh(-L_norm, k=self.embedding_dim, which="LA")
-        return vectors
-
-    def _learn_temporal_dynamics(self, adj_matrices: List[np.ndarray]) -> None:
-        """Learn temporal dynamics from adjacency matrix sequence.
-
-        Parameters
-        ----------
-        adj_matrices : List[np.ndarray]
-            Historical adjacency matrices
-        """
-        if len(adj_matrices) < 2:
-            return
-
-        # Convert to array and flatten matrices
-        X = np.array([adj.flatten() for adj in adj_matrices[:-1]], dtype=np.float64)
-        Y = np.array([adj.flatten() for adj in adj_matrices[1:]], dtype=np.float64)
-
-        # Initialize parameters if not exists
-        n = adj_matrices[0].shape[0]
-        if self.temporal_matrix is None:
-            self.temporal_matrix = np.random.normal(0, 0.01, size=(n * n, n * n))
-            self.temporal_bias = np.zeros(n * n)
-
-        # Scale data to [0, 1] range
-        X_max = np.max(np.abs(X))
-        Y_max = np.max(np.abs(Y))
-        scale = max(X_max, Y_max)
-        if scale > 0:
-            X = X / scale
-            Y = Y / scale
-
-        # Gradient descent iterations
-        for _ in range(100):
-            # Forward pass
-            pred = X @ self.temporal_matrix.T + self.temporal_bias
-
-            # Compute gradients with clipping
-            error = Y - pred
-            grad_W = np.clip(error.T @ X, -1, 1)
-            grad_b = np.clip(np.mean(error, axis=0), -1, 1)
-
-            # Update parameters with gradient clipping
-            self.temporal_matrix += self.learning_rate * grad_W
-            self.temporal_bias += self.learning_rate * grad_b
-
-            # Add numerical stability through parameter bounds
-            self.temporal_matrix = np.clip(self.temporal_matrix, -1, 1)
-            self.temporal_bias = np.clip(self.temporal_bias, -1, 1)
-
-    def _predict_spectral(self, current_adj: np.ndarray) -> np.ndarray:
-        """Make spectral-based prediction.
-
-        Parameters
-        ----------
-        current_adj : np.ndarray
-            Current adjacency matrix
-
-        Returns
-        -------
-        np.ndarray
-            Predicted adjacency matrix
-        """
-        if len(self.singular_values_history) < 2:
-            return current_adj
-
-        # Predict singular values
-        S_future = self.singular_values_history[-1] + np.mean(
-            [
-                s2 - s1
-                for s1, s2 in zip(
-                    self.singular_values_history[:-1], self.singular_values_history[1:]
-                )
-            ],
-            axis=0,
-        )
-
-        # Use current vectors
-        U = self.left_vectors_history[-1]
-        Vt = self.right_vectors_history[-1]
-
-        # Reconstruct
-        return U @ np.diag(S_future) @ Vt
-
-    def _predict_structural(self, current_adj: np.ndarray) -> np.ndarray:
-        """Make structural prediction.
-
-        Parameters
-        ----------
-        current_adj : np.ndarray
-            Current adjacency matrix
-
-        Returns
-        -------
-        np.ndarray
-            Predicted adjacency matrix
-        """
-        if len(self.embedding_history) < 2:
-            return current_adj
-
-        # Predict next embedding
-        Z_current = self.embedding_history[-1]
-        Z_future = Z_current + np.mean(
-            [
-                z2 - z1
-                for z1, z2 in zip(
-                    self.embedding_history[:-1], self.embedding_history[1:]
-                )
-            ],
-            axis=0,
-        )
-
-        # Convert to adjacency
-        similarity = Z_future @ Z_future.T
-        adj_pred = 1 / (1 + np.exp(-similarity))
-
-        return adj_pred
-
-    def _predict_temporal(self, current_adj: np.ndarray) -> np.ndarray:
-        """Make temporal prediction.
-
-        Parameters
-        ----------
-        current_adj : np.ndarray
-            Current adjacency matrix
-
-        Returns
-        -------
-        np.ndarray
-            Predicted adjacency matrix
-        """
-        if self.temporal_matrix is None:
-            return current_adj
-
-        # Flatten input
-        x = current_adj.flatten()
-
-        # Make prediction
-        pred = x @ self.temporal_matrix.T + self.temporal_bias
-
-        # Reshape to matrix
-        pred = pred.reshape(current_adj.shape)
-
-        # Ensure symmetry and bounds
-        pred = (pred + pred.T) / 2
-        pred = np.clip(pred, 0, 1)
-
-        return pred
-
-    def optimize_weights(
-        self,
-        validation_history: List[Dict[str, Any]],
-    ) -> None:
-        """Optimize component weights using validation data.
-
-        Parameters
-        ----------
-        validation_history : List[Dict[str, Any]]
-            Validation data for optimization
-        """
-        if len(validation_history) < 2:
-            return
-
-        # Define objective function
-        def objective(weights):
-            self.spectral_weight = weights[0]
-            self.structural_weight = weights[1]
-            self.temporal_weight = weights[2]
-
-            # Make predictions
-            preds = self.predict(
-                validation_history[:-1],
-                validation_history[-2]["time"],
-                1,
-            )
-            pred_adj = preds[0]["adjacency"]
-            true_adj = validation_history[-1]["adjacency"]
-
-            return np.mean((true_adj - pred_adj) ** 2)
-
-        # Constraints
-        constraints = [
-            {"type": "eq", "fun": lambda w: np.sum(w) - 1},  # sum to 1
-        ]
-        bounds = [(0, 1) for _ in range(3)]  # non-negative
-
-        # Initial weights
-        w0 = np.array([1 / 3, 1 / 3, 1 / 3])
-
-        # Optimize
-        result = minimize(
-            objective,
-            w0,
-            method="SLSQP",
-            constraints=constraints,
-            bounds=bounds,
-        )
-
-        # Update weights
-        self.spectral_weight = result.x[0]
-        self.structural_weight = result.x[1]
-        self.temporal_weight = result.x[2]
+        return {
+            "clustering": metrics.clustering,
+            "avg_betweenness": metrics.avg_betweenness,
+            "spectral_gap": metrics.spectral_gap,
+            "algebraic_connectivity": metrics.algebraic_connectivity,
+        }

@@ -19,11 +19,6 @@ from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
 from predictor import (
     WeightedPredictor,
-    SpectralPredictor,
-    EmbeddingPredictor,
-    DynamicalPredictor,
-    EnsemblePredictor,
-    AdaptivePredictor,
     HybridPredictor,
     Visualizer,
 )
@@ -39,21 +34,16 @@ logger = logging.getLogger(__name__)
 # Define predictor mapping
 PREDICTOR_MAP = {
     "weighted": WeightedPredictor,
-    "spectral": SpectralPredictor,
-    "embedding": EmbeddingPredictor,
-    "dynamical": DynamicalPredictor,
-    "ensemble": EnsemblePredictor,
-    "adaptive": AdaptivePredictor,
     "hybrid": HybridPredictor,
 }
 
 # Define recommended predictors for each model
 MODEL_PREDICTOR_RECOMMENDATIONS = {
-    "ba": ["spectral", "dynamical"],
-    "er": ["spectral", "dynamical"],
-    "ws": ["embedding", "hybrid"],
-    "sbm": ["embedding", "spectral"],
-    "rcp": ["embedding", "spectral"],
+    "ba": ["weighted", "hybrid"],
+    "er": ["weighted", "hybrid"],
+    "ws": ["weighted", "hybrid"],
+    "sbm": ["weighted", "hybrid"],
+    "rcp": ["weighted", "hybrid"],
 }
 
 
@@ -363,29 +353,29 @@ def main():
 
     # 1. Metric evolution plot
     plt.figure(figsize=(12, 8))
-    visualizer.plot_metric_evolution(network_series, predictions, min_history)
+    visualizer.plot_metric_evolution(
+        network_series, predictions, min_history, model_type=args.model
+    )
     plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # 2. Network snapshots at key points
     plt.figure(figsize=(15, 5))
     visualizer.plot_network_snapshots(
-        network_series, predictions, [min_history, len(predictions) // 2, -1]
+        network_series,
+        predictions,
+        [min_history, len(predictions) // 2, -1],
+        model_type=args.model,
     )
     plt.savefig(output_dir / "network_snapshots.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 3. Adjacency matrix comparison
-    plt.figure(figsize=(15, 5))
-    # Get first change point from the series
-    change_points = [
-        i
-        for i, state in enumerate(network_series)
-        if state.get("is_change_point", False)
-    ]
-    change_point = change_points[0] if change_points else len(network_series) // 2
-    visualizer.plot_adjacency_comparison(network_series, predictions, change_point)
-    plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
+    # 3. Advanced Adjacency Analysis
+    plt.figure(figsize=(15, 10))
+    visualizer.plot_adjacency_analysis(
+        network_series, predictions, model_type=args.model
+    )
+    plt.savefig(output_dir / "adjacency_analysis.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Analyze prediction accuracy

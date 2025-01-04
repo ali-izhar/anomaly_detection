@@ -9,8 +9,47 @@ from typing import List, Dict, Any, Tuple, Optional
 import networkx as nx
 from graph.features import NetworkFeatureExtractor
 import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 feature_extractor = NetworkFeatureExtractor()
+
+
+def calculate_prediction_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> Dict[str, float]:
+    """Calculate custom prediction metrics that better reflect our over-prediction strategy.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True adjacency matrix (upper triangle)
+    y_pred : np.ndarray
+        Predicted adjacency matrix (upper triangle)
+
+    Returns
+    -------
+    Dict[str, float]
+        Dictionary containing the following metrics:
+        - edge_coverage: Percentage of actual edges we successfully predicted
+        - prediction_efficiency: Percentage of our predictions that were correct
+        - over_prediction_ratio: Ratio of predicted edges to actual edges
+    """
+    true_edges = np.sum(y_true)
+    pred_edges = np.sum(y_pred)
+
+    # True positives (correctly predicted edges)
+    true_positives = np.sum((y_true == 1) & (y_pred == 1))
+
+    # Calculate metrics
+    edge_coverage = true_positives / true_edges if true_edges > 0 else 0.0
+    prediction_efficiency = true_positives / pred_edges if pred_edges > 0 else 0.0
+    over_prediction_ratio = pred_edges / true_edges if true_edges > 0 else float("inf")
+
+    return {
+        "edge_coverage": edge_coverage,
+        "prediction_efficiency": prediction_efficiency,
+        "over_prediction_ratio": over_prediction_ratio,
+    }
 
 
 class PlotStyle:
@@ -34,11 +73,11 @@ class PlotStyle:
             color="#d63031", linestyle="--", linewidth=1, alpha=0.7
         ),  # Red
         "change_point": dict(
-            color="#fdcb6e", linestyle="--", linewidth=1, alpha=0.3
-        ),  # Orange
-        "history": dict(
-            color="#00b894", linestyle="-", linewidth=1, alpha=0.7
+            color="#00b894", linestyle="--", linewidth=1, alpha=0.3
         ),  # Green
+        "history": dict(
+            color="#fdcb6e", linestyle="-", linewidth=1, alpha=0.7
+        ),  # Orange
     }
 
     # Node and edge styles
@@ -106,6 +145,7 @@ class Visualizer:
         actual_series: List[Dict[str, Any]],
         predictions: List[Dict[str, Any]],
         time_points: List[int],
+        model_type: str = "Unknown",
         figsize: Tuple[int, int] = (15, 6),
     ) -> None:
         """Plot network structure snapshots at specified time points."""
@@ -114,8 +154,13 @@ class Visualizer:
         gs = fig.add_gridspec(2, n_points, height_ratios=[1, 1], hspace=0.3, wspace=0.3)
 
         # Add more padding between title and plots
+        model_name = (
+            "Barabási-Albert"
+            if model_type.lower() == "ba"
+            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
+        )
         fig.suptitle(
-            "Network Structure Evolution",
+            f"Network Structure Evolution - {model_name} Model",
             fontsize=PlotStyle.LARGE_SIZE,
             y=1.02,  # Increased from 0.95
             color=PlotStyle.TEXT_COLOR,
@@ -181,22 +226,24 @@ class Visualizer:
                 G_pred, pos, ax=ax_pred, **PlotStyle.NODE_STYLES["predicted"]
             )
 
-            # Calculate accuracy metrics
+            # Calculate metrics
             actual_adj = nx.to_numpy_array(G_actual)
             pred_adj = nx.to_numpy_array(G_pred)
             triu_indices = np.triu_indices_from(actual_adj, k=1)
-            total_positions = len(triu_indices[0])
-            correct_predictions = total_positions - np.sum(
-                actual_adj[triu_indices] != pred_adj[triu_indices]
-            )
-            accuracy = (correct_predictions / total_positions) * 100
+            y_true = actual_adj[triu_indices]
+            y_pred = pred_adj[triu_indices]
+
+            # Calculate custom metrics
+            metrics = calculate_prediction_metrics(y_true, y_pred)
 
             # Add network stats with consistent style
             stats_pred = (
                 f"Nodes: {G_pred.number_of_nodes():,d}\n"
                 f"Edges: {G_pred.number_of_edges():,d}\n"
                 f"Density: {nx.density(G_pred):.3f}\n"
-                f"Accuracy: {accuracy:.1f}%"
+                f"Edge Coverage: {metrics['edge_coverage']:.1%}\n"  # Percentage of actual edges found
+                f"Prediction Efficiency: {metrics['prediction_efficiency']:.1%}\n"  # Percentage of predictions that were correct
+                f"Over-prediction: {metrics['over_prediction_ratio']:.1f}x"  # How many times more edges we predicted
             )
             ax_pred.text(
                 0.02,
@@ -226,6 +273,7 @@ class Visualizer:
         actual_series: List[Dict[str, Any]],
         predictions: List[Dict[str, Any]],
         min_history: int,
+        model_type: str = "Unknown",
         figsize: Tuple[int, int] = (12, 10),
     ) -> None:
         """Plot the evolution of multiple network metrics over time."""
@@ -248,13 +296,18 @@ class Visualizer:
         fig.patch.set_facecolor("white")
 
         # Create main title with more padding
+        model_name = (
+            "Barabási-Albert"
+            if model_type.lower() == "ba"
+            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
+        )
         fig.suptitle(
-            "Evolution of Network Metrics Over Time",
+            f"Evolution of Network Metrics Over Time - {model_name} Model",
             fontsize=PlotStyle.LARGE_SIZE,
             color=PlotStyle.TEXT_COLOR,
             weight="bold",
             y=1.02,
-        )  # Increased from 0.95
+        )
 
         # Create GridSpec for plots with reduced spacing
         gs = fig.add_gridspec(
@@ -410,6 +463,7 @@ class Visualizer:
         change_point: Optional[int] = None,
         window: int = 1,
         figsize: Tuple[int, int] = (15, 5),
+        model_type: str = "Unknown",
     ) -> None:
         """Plot comparison of actual vs predicted adjacency matrices around a change point."""
         # Get single change point
@@ -429,10 +483,15 @@ class Visualizer:
         fig.patch.set_facecolor(PlotStyle.BACKGROUND_COLOR)
 
         # Main title with larger font and more padding
+        model_name = (
+            "Barabási-Albert"
+            if model_type.lower() == "ba"
+            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
+        )
         fig.suptitle(
-            f"Network Structure Around Change Point (t={cp})",
+            f"Network Structure Around Change Point (t={cp}) - {model_name} Model",
             fontsize=PlotStyle.LARGE_SIZE,
-            y=1.08,  # Increased from 1.05
+            y=1.08,
             color=PlotStyle.TEXT_COLOR,
             weight="bold",
         )
@@ -489,20 +548,19 @@ class Visualizer:
 
             # Calculate errors (only upper triangle to avoid counting twice)
             triu_indices = np.triu_indices_from(adj_actual, k=1)
+            y_true = adj_actual[triu_indices]
+            y_pred = adj_pred[triu_indices]
+
+            # Calculate custom metrics
+            metrics = calculate_prediction_metrics(y_true, y_pred)
+
             error_mask = np.zeros_like(adj_actual, dtype=bool)
-            error_mask[triu_indices] = (
-                adj_actual[triu_indices] != adj_pred[triu_indices]
-            )
+            error_mask[triu_indices] = y_true != y_pred
             error_mask = error_mask | error_mask.T
 
-            # Count edges and calculate accuracy
-            actual_edges = int(np.sum(adj_actual[triu_indices]))
-            pred_edges = int(np.sum(adj_pred[triu_indices]))
-            total_positions = len(triu_indices[0])
-            correct_predictions = total_positions - np.sum(
-                adj_actual[triu_indices] != adj_pred[triu_indices]
-            )
-            accuracy = (correct_predictions / total_positions) * 100
+            # Count edges
+            actual_edges = int(np.sum(y_true))
+            pred_edges = int(np.sum(y_pred))
 
             # Plot matrices with error overlay
             im_actual = ax_actual.imshow(adj_actual, cmap=PlotStyle.CMAP)
@@ -554,9 +612,13 @@ class Visualizer:
                         alpha=0.3,
                     )
 
-            # Add simplified stats for predicted with consistent style
+            # Add metrics for predicted with consistent style
             stats_pred = (
-                f"t = {t}\n" f"Edges = {pred_edges:,d}\n" f"Accuracy = {accuracy:.1f}%"
+                f"t = {t}\n"
+                f"Edges = {pred_edges:,d}\n"
+                f"Edge Coverage: {metrics['edge_coverage']:.1%}\n"
+                f"Prediction Efficiency: {metrics['prediction_efficiency']:.1%}\n"
+                f"Over-prediction: {metrics['over_prediction_ratio']:.1f}x"
             )
             ax_pred.text(
                 0.02,
@@ -590,3 +652,303 @@ class Visualizer:
             )
 
         plt.tight_layout()
+
+    def plot_all_adjacency_matrices(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        model_type: str = "Unknown",
+        max_matrices: int = 10,
+        figsize: Tuple[int, int] = (15, 8),
+    ) -> None:
+        """Plot all adjacency matrices for comparison.
+
+        Parameters
+        ----------
+        actual_series : List[Dict[str, Any]]
+            The actual network time series
+        predictions : List[Dict[str, Any]]
+            The predicted network time series
+        model_type : str, optional
+            The type of network model used, by default "Unknown"
+        max_matrices : int, optional
+            Maximum number of matrices to plot, by default 10
+        figsize : Tuple[int, int], optional
+            Figure size, by default (15, 8)
+        """
+        # Sample time points if there are too many
+        total_points = len(actual_series)
+        if total_points > max_matrices:
+            step = total_points // max_matrices
+            time_points = list(range(0, total_points, step))
+            if time_points[-1] != total_points - 1:
+                time_points.append(total_points - 1)
+        else:
+            time_points = list(range(total_points))
+
+        n_points = len(time_points)
+        n_cols = min(5, n_points)
+        n_rows = (n_points + n_cols - 1) // n_cols * 2  # *2 for actual and predicted
+
+        # Create figure
+        fig = plt.figure(figsize=figsize)
+        model_name = (
+            "Barabási-Albert"
+            if model_type.lower() == "ba"
+            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
+        )
+        fig.suptitle(
+            f"Network Evolution Over Time - {model_name} Model",
+            fontsize=PlotStyle.LARGE_SIZE,
+            y=1.02,
+            color=PlotStyle.TEXT_COLOR,
+            weight="bold",
+        )
+
+        gs = fig.add_gridspec(n_rows, n_cols, hspace=0.4, wspace=0.3)
+
+        for idx, t in enumerate(time_points):
+            row = (idx // n_cols) * 2
+            col = idx % n_cols
+
+            # Plot actual
+            ax_actual = fig.add_subplot(gs[row, col])
+            adj_actual = actual_series[t]["adjacency"]
+            im_actual = ax_actual.imshow(adj_actual, cmap=PlotStyle.CMAP)
+            ax_actual.set_title(f"Actual t={t}", fontsize=PlotStyle.SMALL_SIZE)
+            ax_actual.set_xticks([])
+            ax_actual.set_yticks([])
+
+            # Plot predicted
+            ax_pred = fig.add_subplot(gs[row + 1, col])
+            pred_idx = t - len(actual_series) + len(predictions)
+            adj_pred = predictions[pred_idx]["adjacency"]
+            im_pred = ax_pred.imshow(adj_pred, cmap=PlotStyle.CMAP)
+
+            # Calculate metrics
+            triu_indices = np.triu_indices_from(adj_actual, k=1)
+            y_true = adj_actual[triu_indices]
+            y_pred = adj_pred[triu_indices]
+            metrics = calculate_prediction_metrics(y_true, y_pred)
+
+            ax_pred.set_title(
+                f"Predicted t={t}\n"
+                f"Coverage={metrics['edge_coverage']:.1%}\n"
+                f"Efficiency={metrics['prediction_efficiency']:.1%}",
+                fontsize=PlotStyle.SMALL_SIZE,
+            )
+            ax_pred.set_xticks([])
+            ax_pred.set_yticks([])
+
+            # Add colorbar
+            plt.colorbar(im_actual, ax=ax_actual, fraction=0.046, pad=0.04)
+            plt.colorbar(im_pred, ax=ax_pred, fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+
+    def plot_adjacency_analysis(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        model_type: str = "Unknown",
+        figsize: Tuple[int, int] = (15, 10),
+    ) -> None:
+        """Create an advanced analysis plot of adjacency predictions.
+
+        This visualization combines multiple views to show:
+        1. Edge prediction frequency heatmap
+        2. Edge stability analysis
+        3. Prediction success patterns
+        4. Time-based edge evolution
+
+        Inspired by the Les Misérables co-occurrence matrix visualization technique.
+        """
+        # Create figure with subplots
+        fig = plt.figure(figsize=figsize)
+        model_name = (
+            "Barabási-Albert"
+            if model_type.lower() == "ba"
+            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
+        )
+        fig.suptitle(
+            f"Network Prediction Analysis - {model_name} Model",
+            fontsize=PlotStyle.LARGE_SIZE,
+            y=0.95,
+            color=PlotStyle.TEXT_COLOR,
+            weight="bold",
+        )
+
+        # Create GridSpec for flexible subplot layout
+        gs = fig.add_gridspec(
+            2, 2, width_ratios=[1.5, 1], height_ratios=[1, 1], hspace=0.3, wspace=0.3
+        )
+
+        # 1. Edge Prediction Success Heatmap (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
+        self._plot_prediction_success_heatmap(actual_series, predictions, ax1)
+
+        # 2. Edge Evolution Timeline (bottom left)
+        ax2 = fig.add_subplot(gs[1, 0])
+        self._plot_edge_evolution_timeline(actual_series, predictions, ax2)
+
+        # 3. Prediction Statistics (top right)
+        ax3 = fig.add_subplot(gs[0, 1])
+        self._plot_prediction_statistics(actual_series, predictions, ax3)
+
+        # 4. Edge Stability Analysis (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        self._plot_edge_stability_analysis(actual_series, predictions, ax4)
+
+        plt.tight_layout()
+
+    def _plot_prediction_success_heatmap(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        ax: plt.Axes,
+    ) -> None:
+        """Plot heatmap showing prediction success patterns."""
+        # Get dimensions
+        n_nodes = actual_series[0]["adjacency"].shape[0]
+        n_time = len(predictions)
+
+        # Create success rate matrix
+        success_matrix = np.zeros((n_nodes, n_nodes))
+        total_predictions = np.zeros((n_nodes, n_nodes))
+
+        for t, (actual, pred) in enumerate(
+            zip(actual_series[len(actual_series) - len(predictions) :], predictions)
+        ):
+            actual_adj = actual["adjacency"]
+            pred_adj = pred["adjacency"]
+            success_matrix += actual_adj == pred_adj
+            total_predictions += 1
+
+        success_rate = success_matrix / total_predictions
+
+        # Plot heatmap
+        im = ax.imshow(success_rate, cmap="RdYlGn", vmin=0, vmax=1)
+        ax.set_title("Edge Prediction Success Rate", pad=10)
+        plt.colorbar(im, ax=ax, label="Success Rate")
+        ax.set_xlabel("Node Index")
+        ax.set_ylabel("Node Index")
+
+    def _plot_edge_evolution_timeline(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        ax: plt.Axes,
+    ) -> None:
+        """Plot timeline of edge count and prediction metrics."""
+        times = range(len(predictions))
+
+        # Calculate metrics over time
+        edge_coverage = []
+        pred_efficiency = []
+        over_pred_ratio = []
+
+        for actual, pred in zip(
+            actual_series[len(actual_series) - len(predictions) :], predictions
+        ):
+            triu_indices = np.triu_indices_from(actual["adjacency"], k=1)
+            y_true = actual["adjacency"][triu_indices]
+            y_pred = pred["adjacency"][triu_indices]
+            metrics = calculate_prediction_metrics(y_true, y_pred)
+
+            edge_coverage.append(metrics["edge_coverage"])
+            pred_efficiency.append(metrics["prediction_efficiency"])
+            over_pred_ratio.append(metrics["over_prediction_ratio"])
+
+        # Plot metrics
+        ax.plot(
+            times,
+            edge_coverage,
+            label="Edge Coverage",
+            color=PlotStyle.LINE_STYLES["actual"]["color"],
+        )
+        ax.plot(
+            times,
+            pred_efficiency,
+            label="Prediction Efficiency",
+            color=PlotStyle.LINE_STYLES["predicted"]["color"],
+        )
+        ax.plot(
+            times,
+            over_pred_ratio,
+            label="Over-prediction Ratio",
+            color=PlotStyle.LINE_STYLES["change_point"]["color"],
+        )
+
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Metric Value")
+        ax.set_title("Edge Prediction Metrics Over Time")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    def _plot_prediction_statistics(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        ax: plt.Axes,
+    ) -> None:
+        """Plot statistical analysis of prediction patterns."""
+        # Calculate overall metrics
+        all_edge_coverage = []
+        all_pred_efficiency = []
+        all_over_pred = []
+
+        for actual, pred in zip(
+            actual_series[len(actual_series) - len(predictions) :], predictions
+        ):
+            triu_indices = np.triu_indices_from(actual["adjacency"], k=1)
+            y_true = actual["adjacency"][triu_indices]
+            y_pred = pred["adjacency"][triu_indices]
+            metrics = calculate_prediction_metrics(y_true, y_pred)
+
+            all_edge_coverage.append(metrics["edge_coverage"])
+            all_pred_efficiency.append(metrics["prediction_efficiency"])
+            all_over_pred.append(metrics["over_prediction_ratio"])
+
+        # Create box plots
+        data = [all_edge_coverage, all_pred_efficiency, all_over_pred]
+        labels = ["Edge\nCoverage", "Prediction\nEfficiency", "Over-prediction\nRatio"]
+
+        bp = ax.boxplot(data, labels=labels, patch_artist=True)
+
+        # Style boxes
+        colors = [
+            PlotStyle.LINE_STYLES[style]["color"]
+            for style in ["actual", "predicted", "change_point"]
+        ]
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.6)
+
+        ax.set_title("Distribution of Prediction Metrics")
+        ax.grid(True, alpha=0.3)
+
+    def _plot_edge_stability_analysis(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        ax: plt.Axes,
+    ) -> None:
+        """Plot analysis of edge prediction stability."""
+        # Calculate edge stability
+        n_nodes = actual_series[0]["adjacency"].shape[0]
+        edge_changes = np.zeros((n_nodes, n_nodes))
+
+        for t in range(1, len(predictions)):
+            prev_pred = predictions[t - 1]["adjacency"]
+            curr_pred = predictions[t]["adjacency"]
+            edge_changes += np.abs(curr_pred - prev_pred)
+
+        # Normalize by number of time steps
+        edge_stability = 1 - (edge_changes / (len(predictions) - 1))
+
+        # Plot heatmap
+        im = ax.imshow(edge_stability, cmap="viridis")
+        ax.set_title("Edge Prediction Stability")
+        plt.colorbar(im, ax=ax, label="Stability (higher is more stable)")
+        ax.set_xlabel("Node Index")
+        ax.set_ylabel("Node Index")

@@ -95,7 +95,20 @@ class CentralityMetricsExtractor(BaseFeatureExtractor):
             }
 
         betweenness = nx.betweenness_centrality(graph)  # dict: node -> centrality
-        eigenvector = nx.eigenvector_centrality(graph, max_iter=1000)
+
+        # Compute eigenvector centrality using numpy's eigenvalue solver (more robust than power iteration)
+        adj_matrix = nx.to_numpy_array(graph, nodelist=sorted(graph.nodes()))
+        eigenvalues, eigenvectors = np.linalg.eigh(adj_matrix)
+        # Get the eigenvector corresponding to the largest eigenvalue
+        largest_eigenvalue_idx = np.argmax(eigenvalues)
+        eigenvector_values = np.abs(eigenvectors[:, largest_eigenvalue_idx])
+        # Normalize to sum to 1 for consistency with networkx
+        eigenvector_values = eigenvector_values / eigenvector_values.sum()
+        # Convert to dict format like other centrality measures
+        eigenvector = {
+            node: float(value) for node, value in enumerate(eigenvector_values)
+        }
+
         closeness = nx.closeness_centrality(graph)
 
         return {
