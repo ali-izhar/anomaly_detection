@@ -94,25 +94,25 @@ def get_args():
     parser.add_argument(
         "--min-changes",
         type=int,
-        default=2,
+        default=1,
         help="Minimum number of change points",
     )
     parser.add_argument(
         "--max-changes",
         type=int,
-        default=5,
+        default=3,
         help="Maximum number of change points",
     )
     parser.add_argument(
         "--min-segment",
         type=int,
-        default=20,
+        default=30,
         help="Minimum length between changes",
     )
     parser.add_argument(
         "--prediction-window",
         type=int,
-        default=5,
+        default=3,
         help="Number of steps to predict ahead",
     )
     parser.add_argument(
