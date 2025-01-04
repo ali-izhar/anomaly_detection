@@ -1,63 +1,163 @@
-# Graph Models
+# Graph Generator for Dynamic Graph Sequences
 
-Built on top of [NetworkX](https://networkx.org/), this module supports multiple graph models:
+This modules provides a **framework** for generating **dynamic graph sequences** using various **NetworkX** models. Each model has adjustable parameters that can evolve over time (through random or systematic changes), creating segments of graphs with distinct structural characteristics.  
 
-### Barabási-Albert (BA)
-- **Mathematics**: Grows by adding nodes with $m$ edges, connecting to existing nodes with probability $\Pi(k_i) \sim k_i^{\alpha}$ where $k_i$ is node degree
-- **Properties**: Power-law degree distribution $P(k) \sim k^{-\gamma}$ where $\gamma \approx 3$
-- **Real-world Example**: World Wide Web, citation networks, protein interaction networks
+## Overview of the Generator
 
-### Erdős-Rényi (ER)
-- **Mathematics**: Each edge exists with independent probability $p$
-- **Properties**: Poisson degree distribution $P(k) = \frac{e^{-\lambda}\lambda^k}{k!}$ where $\lambda = p(n-1)$
-- **Real-world Example**: Random connections in social networks, random chemical reactions
+**Key Features**  
+1. **Generic Interface**: A single class, `GraphGenerator`, can produce dynamic sequences using multiple built-in graph models (e.g., Barabási-Albert, Erdős-Rényi, Watts-Strogatz, etc.).  
+2. **Parameter Evolution**: Many parameters can change slightly at each time step (controlled by standard deviation fields ending in `_std`), simulating **gradual** structural changes.  
+3. **Sudden Changes (Anomalies)**: You can specify **minimum** and **maximum** bounds for certain parameters (`min_*`, `max_*`), enabling **jump** changes at random "change points."  
+4. **Consistent Node Labeling**: Generated graphs keep a consistent labeling strategy $0, 1, \ldots, n-1$.  
+5. **Metadata**: Each sequence return includes **metadata** describing the parameter changes, detected segments, etc.
 
-### Watts-Strogatz (WS)
-- **Mathematics**: Start with ring lattice, rewire edges with probability $p$
-- **Properties**: High clustering coefficient and low average path length
-- **Real-world Example**: Neural networks, power grids, actor collaboration networks
+**Typical Workflow**  
+1. **Define** the **model** (e.g., `"barabasi_albert"`, `"erdos_renyi"`, etc.).  
+2. **Create** parameter objects (e.g., `BAParams`, `ERParams`) specifying:
+   - The total sequence length.
+   - The number of nodes $n$.
+   - Ranges for anomaly injection (`min_*`, `max_*`).
+   - Standard deviations for gradual evolution (`*_std`).
+3. **Generate** a graph sequence by calling `generate_sequence()`.  
+4. Get a dictionary of results including:
+   - `graphs`: A list of adjacency matrices for each time step.
+   - `change_points`: The time indices where parameters jump to new values.
+   - `parameters`: The parameter sets actually used in each segment.
+   - `metadata`: Additional info (e.g., evolving parameters).
 
-### Random Regular (RR)
-- **Mathematics**: Each node has exactly $d$ random connections
-- **Properties**: Uniform degree distribution $P(k) = \delta_{k,d}$
-- **Real-world Example**: Peer-to-peer networks, certain types of computer architectures
+## Graph Models
 
-### Random Geometric (RG)
-- **Mathematics**: Nodes connect if Euclidean distance $< r$ in $d$-dimensional space
-- **Properties**: High clustering, spatial dependency
-- **Real-world Example**: Wireless sensor networks, ecological interaction networks
+Below are the **core** graph models currently supported.
 
-### Stochastic Block Model (SBM)
-- **Mathematics**: Nodes in same block connect with probability $p_{in}$, different blocks with $p_{out}$
-- **Properties**: Community structure with $p_{in} > p_{out}$
-- **Real-world Example**: Social communities, protein-protein interaction networks
+### 1. Barabási-Albert (BA) Model
+- Start with a small seed network of $m_0$ nodes.  
+- Each new node is added with $m$ edges, **preferentially** attaching to existing nodes with probability proportional to their degree.  
+- Yields a **scale-free** network (power-law degree distribution).
 
-### Random Core-Periphery (RCP)
-- **Mathematics**: Dense core with probability $p_{core}$, sparse periphery with $p_{periph}$
-- **Properties**: Hierarchical structure with $p_{core} > p_{core-periph} > p_{periph}$
-- **Real-world Example**: Financial networks, transportation hubs
+$$
+\text{Prob}(\text{new node connects to node } i) = \frac{\deg(i)}{\sum_j \deg(j)}
+$$
 
-### Complete Graph (CG)
-- **Mathematics**: Every node connects to every other node, with edge removal probability $p$
-- **Properties**: Maximum density, degree $k = n-1$ for all nodes
-- **Real-world Example**: Fully connected computer networks, complete social groups
+**Examples**:  
+- **Social networks** where "popular" individuals (high degree) attract more new connections over time.
+- **Citation networks** where papers that already have many citations are more likely to receive new citations.
 
-### Dense Random Geometric (DRG)
-- **Mathematics**: Similar to RG but with larger radius $r$ ensuring high density
-- **Properties**: High clustering, high density, spatial correlation
-- **Real-world Example**: Dense wireless networks, close-range communication systems
+### 2. Watts-Strogatz (WS) Model
+- Begin with a ring of $n$ nodes, each connected to its $k_\mathrm{nearest}$ immediate neighbors.  
+- Rewire each edge with probability $p$ to a random node, introducing shortcuts.  
+- Produces **small-world** networks: high clustering + short path lengths.
 
-### Newman-Watts (NW)
-- **Mathematics**: Ring lattice with additional random shortcuts probability $p$
-- **Properties**: Small-world properties with preserved local structure
-- **Real-world Example**: Social networks with both local and long-range connections
+$$
+\text{Rewire each edge with probability }p
+$$
 
-### Holme-Kim (HK)
-- **Mathematics**: BA model with added triangle formation probability $p_{triad}$
-- **Properties**: Scale-free with high clustering
-- **Real-world Example**: Social media networks, scientific collaboration networks
+keeping the ring-lattice structure otherwise.
 
-### LFR Benchmark
-- **Mathematics**: Communities with power-law degree ($\tau_1$) and size ($\tau_2$) distributions, mixing parameter $\mu$
-- **Properties**: Realistic community structure with heterogeneous degree and community sizes
-- **Real-world Example**: Large social networks, online communities with varying sizes
+**Examples**:  
+- **Friend-of-a-friend** social networks with occasional "long-distance" ties (small-world effect).
+- **Neural networks** in the brain, where most connections are local but a few are global "shortcuts."
+
+### 3. Erdős-Rényi (ER) Model
+- Given $n$ nodes, each possible edge appears **independently** with probability $p$.  
+- Generates binomial $G(n,p)$ graphs with a **Poisson-like degree distribution** for large $n$.
+
+$$
+\text{Edge}(i,j)\text{ exists with probability }p\text{, i.i.d.}
+$$
+
+**Examples**:  
+- **Random communication links** among devices (each link formed with some probability).
+- **Chemical reaction networks** where each potential reaction has a uniform activation probability.
+
+### 4. Stochastic Block Model (SBM)
+- Partition $n$ nodes into $k$ blocks (communities).  
+- Edges within each block appear with probability $p_\mathrm{intra}$.  
+- Edges across different blocks appear with probability $p_\mathrm{inter}$.  
+
+$$
+P(A_{ij} = 1) = 
+\begin{cases}
+p_\mathrm{intra}, & \text{if } i,j \text{ in same block}, \\
+p_\mathrm{inter}, & \text{otherwise}.
+\end{cases}
+$$
+
+**Examples**:  
+- **Social communities** (people in the same group are more likely to connect).
+- **Protein-protein interaction** networks with functional modules.
+
+### 5. Random Core-Periphery (RCP)
+- Divide nodes into a **core** (densely interconnected) and a **periphery** (sparse or no internal edges).  
+- The probability of an edge depends on whether the nodes are both in the core, both in the periphery, or cross core/periphery.
+
+$$
+\begin{aligned}
+&p(\text{edge within core}) = p_\mathrm{core},\\
+&p(\text{edge within periphery}) = p_\mathrm{periph},\\
+&p(\text{edge across core-periphery}) = p_\mathrm{core\_periph}.
+\end{aligned}
+$$
+
+**Examples**:  
+- **Corporate structure** with a core leadership team that interacts frequently, and peripheral departments that are less interconnected.
+
+### 6. LFR Benchmark (LFR)
+- Generates **benchmark networks** with **power-law** degree distribution and **power-law** community size distribution.  
+- Controlled by the **mixing parameter** $\mu$ which sets fraction of edges crossing communities.
+
+**Examples**:  
+- Synthetic data for testing **community detection** algorithms where both node degrees and community sizes follow heavy-tailed distributions.
+
+## Sequence Generation & Parameter Evolution
+
+1. **Sequence Length**: Each sequence has `seq_len` graphs.  
+2. **Change Points**: We choose up to `max_changes` times to "jump" the parameter values (randomly within `[min_*, max_*]`).  
+3. **Gradual Evolution**: At each time step, parameters with `_std` are **perturbed** via a normal distribution. For instance, if `m_std=1.0`, then the Barabási-Albert `m` parameter might fluctuate by $\pm1$ each step (bounded by user-defined constraints).
+
+**Hence** each segment is generated from distinct parameter values, allowing the graphs to drift or jump over time.
+
+## Example Usage
+
+```python
+from graph.generator import GraphGenerator
+from graph.params import BAParams
+
+# 1. Create the generator
+gen = GraphGenerator()
+
+# 2. Configure BA parameters
+params = BAParams(
+    n=100,         # 100 nodes
+    seq_len=50,    # 50 time steps
+    min_segment=5, # each segment must be at least 5 steps long
+    min_changes=1, # at least 1 jump change
+    max_changes=3, # up to 3 jumps
+    m=2,           # attach 2 edges per new node
+    min_m=1,
+    max_m=5,
+    m_std=0.2,     # small fluctuations at each step
+)
+
+# 3. Generate the sequence
+result = gen.generate_sequence(model="barabasi_albert", params=params, seed=42)
+
+# 4. Access results
+graphs = result["graphs"]          # list of adjacency matrices
+change_points = result["change_points"]
+param_history = result["parameters"]
+metadata = result["metadata"]
+
+print("Number of graphs:", len(graphs))
+print("Change points at:", change_points)
+print("First segment params:", param_history[0])
+print("First metadata block:", metadata[0])
+```
+
+## References
+
+- Barabási–Albert Model: Barabási, A.-L., & Albert, R. (1999). Emergence of scaling in random networks. Science, 286(5439).
+- Watts–Strogatz Model: Watts, D. J., & Strogatz, S. H. (1998). Collective dynamics of small-world networks. Nature, 393(6684).
+- Erdős–Rényi Model: Erdős, P., & Rényi, A. (1959). On random graphs I. Publ. Math. Debrecen, 6.
+- Stochastic Block Model: Holland, P. W., Laskey, K. B., & Leinhardt, S. (1983). Stochastic blockmodels. J. of the American Statistical Association, 76(373).
+- Core-Periphery Structure: Borgatti, S. P., & Everett, M. G. (2000). Models of core/periphery structures. Social Networks, 21.
+- LFR Benchmark: Lancichinetti, A., Fortunato, S., & Radicchi, F. (2008). Benchmark graphs for testing community detection algorithms. Physical Review E, 78(4).

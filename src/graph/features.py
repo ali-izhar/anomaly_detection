@@ -1,33 +1,11 @@
 # src/graph/features.py
 
-"""Feature extraction module for dynamic graphs.
-
-This module provides functions to extract various graph features and embeddings:
-
-Categories:
-1. Basic Metrics:
-   - Average degree, density, clustering
-   - Maximum degree, spectral properties
-2. Centrality Features:
-   - Degree, betweenness, eigenvector, closeness
-3. Structural Features:
-   - Embeddings (SVD, LSVD)
-   - Community structure
-4. Temporal Features:
-   - Link prediction
-   - Evolution patterns
-5. Advanced Features:
-   - Strangeness scores
-   - Link prediction metrics
-"""
-
 import networkx as nx
 import numpy as np
 import logging
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from sklearn.cluster import KMeans
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -36,7 +14,34 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 @dataclass
 class NetworkMetrics:
-    """Container for network metrics."""
+    """Container for a set of network metrics.
+
+    Attributes
+    ----------
+    avg_degree : float
+        The mean node degree: sum of all degrees / number of nodes.
+    max_degree : float
+        The largest node degree in the graph.
+    density : float
+        Ratio of actual edges to the maximum possible edges.
+    clustering : float
+        Average clustering coefficient.
+    avg_betweenness : float
+        Mean of node betweenness centrality values.
+    max_betweenness : float
+        Maximum node betweenness centrality value.
+    avg_eigenvector : float
+        Mean of node eigenvector centrality values.
+    max_eigenvector : float
+        Maximum node eigenvector centrality value.
+    avg_closeness : float
+        Mean of node closeness centrality values.
+    spectral_gap : float
+        Difference between the largest and second-largest singular values
+        of the adjacency matrix.
+    algebraic_connectivity : float
+        The Fiedler value (second-smallest eigenvalue) of the Laplacian matrix.
+    """
 
     avg_degree: float
     max_degree: float
@@ -52,66 +57,118 @@ class NetworkMetrics:
 
 
 class BaseFeatureExtractor(ABC):
-    """Abstract base class for feature extractors."""
+    """Abstract base class for feature extractors, each returning a dict of metrics."""
 
     @abstractmethod
     def extract(self, graph: nx.Graph) -> Dict[str, float]:
-        """Extract features from a graph."""
+        """Extract features from the given graph."""
         pass
 
 
 class BasicMetricsExtractor(BaseFeatureExtractor):
-    """Extracts basic network metrics."""
+    """Extracts basic network metrics (avg_degree, density, clustering, max_degree)."""
 
     def extract(self, graph: nx.Graph) -> Dict[str, float]:
         """Extract basic network metrics."""
+        degrees = [deg for _, deg in graph.degree()]
         return {
-            "avg_degree": np.mean([d for _, d in graph.degree()]),
+            "avg_degree": float(np.mean(degrees)) if degrees else 0.0,
             "density": nx.density(graph),
             "clustering": nx.average_clustering(graph),
-            "max_degree": max(dict(graph.degree()).values()),
+            "max_degree": float(max(degrees)) if degrees else 0.0,
         }
 
 
 class CentralityMetricsExtractor(BaseFeatureExtractor):
-    """Extracts centrality-based metrics."""
+    """Extracts centrality-based metrics (avg_betweenness, max_betweenness, avg_eigenvector, max_eigenvector, avg_closeness)."""
 
     def extract(self, graph: nx.Graph) -> Dict[str, float]:
         """Extract centrality metrics."""
-        betweenness = nx.betweenness_centrality(graph)
+        if graph.number_of_nodes() == 0:
+            # Return zeros if graph is empty
+            return {
+                "avg_betweenness": 0.0,
+                "max_betweenness": 0.0,
+                "avg_eigenvector": 0.0,
+                "max_eigenvector": 0.0,
+                "avg_closeness": 0.0,
+            }
+
+        betweenness = nx.betweenness_centrality(graph)  # dict: node -> centrality
         eigenvector = nx.eigenvector_centrality(graph, max_iter=1000)
         closeness = nx.closeness_centrality(graph)
 
         return {
-            "avg_betweenness": np.mean(list(betweenness.values())),
-            "max_betweenness": max(betweenness.values()),
-            "avg_eigenvector": np.mean(list(eigenvector.values())),
-            "max_eigenvector": max(eigenvector.values()),
-            "avg_closeness": np.mean(list(closeness.values())),
+            "avg_betweenness": float(np.mean(list(betweenness.values()))),
+            "max_betweenness": float(np.max(list(betweenness.values()))),
+            "avg_eigenvector": float(np.mean(list(eigenvector.values()))),
+            "max_eigenvector": float(np.max(list(eigenvector.values()))),
+            "avg_closeness": float(np.mean(list(closeness.values()))),
         }
 
 
 class SpectralMetricsExtractor(BaseFeatureExtractor):
-    """Extracts spectral metrics."""
+    """Extracts spectral metrics of the graph:
+    - spectral_gap: difference between the first two largest singular values of adjacency.
+    - algebraic_connectivity: second-smallest eigenvalue of Laplacian (Fiedler value).
+    """
 
     def extract(self, graph: nx.Graph) -> Dict[str, float]:
-        """Extract spectral metrics."""
-        adj_matrix = nx.to_numpy_array(graph)
-        _, S, _ = np.linalg.svd(adj_matrix)
-        laplacian = nx.laplacian_matrix(graph).toarray()
-        _, L_S, _ = np.linalg.svd(laplacian)
+        """Extract spectral metrics from adjacency and Laplacian.
+
+        - spectral_gap = S[0] - S[1], where S are the singular values of the adjacency matrix
+                        in descending order.
+        - algebraic_connectivity = second-smallest eigenvalue of the Laplacian
+                                  (also called the Fiedler value).
+
+        Complexity
+        ----------
+        - SVD of adjacency: O(n^3) for an n x n dense matrix.
+        - eigen-decomposition for Laplacian also ~O(n^3).
+
+        Returns
+        -------
+        Dict[str, float]
+            Keys: "spectral_gap", "algebraic_connectivity".
+        """
+        n = graph.number_of_nodes()
+        if n == 0:
+            return {"spectral_gap": 0.0, "algebraic_connectivity": 0.0}
+        if n == 1:
+            # Single node => adjacency is [ [0] ], no edges => SVD => singular values = [0]
+            # Laplacian => also zero => second-smallest doesn't exist => 0.0
+            return {"spectral_gap": 0.0, "algebraic_connectivity": 0.0}
+
+        # 1. Adjacency-based spectral gap
+        A = nx.to_numpy_array(graph, nodelist=sorted(graph.nodes()))
+        U, S, Vt = np.linalg.svd(A, full_matrices=False)
+        # S is sorted descending by convention. If length>1, gap = S[0]-S[1], else S[0].
+        spectral_gap = S[0] - S[1] if len(S) > 1 else S[0]
+
+        # 2. Algebraic connectivity (Fiedler value)
+        #   If the graph is unconnected, the second-smallest eigenvalue is 0.0.
+        L = nx.laplacian_matrix(graph, nodelist=sorted(graph.nodes())).todense()
+        # We use eigh() or eigvalsh() for real symmetric
+        lap_eigs = np.linalg.eigvalsh(L)  # sorted ascending by default
+        # For an n x n Laplacian, lap_eigs[0] should be ~0, second-smallest is lap_eigs[1]
+        # If graph is disconnected, lap_eigs[1] can be 0.0 as well.
+        if len(lap_eigs) > 1:
+            algebraic_connectivity = float(lap_eigs[1])
+        else:
+            # If n=1, or something degenerate
+            algebraic_connectivity = 0.0
 
         return {
-            "spectral_gap": S[0] - S[1] if len(S) > 1 else S[0],
-            "algebraic_connectivity": L_S[1],
+            "spectral_gap": float(spectral_gap),
+            "algebraic_connectivity": algebraic_connectivity,
         }
 
 
 class NetworkFeatureExtractor:
-    """Main class for extracting network features."""
+    """Main class for extracting network features from a given graph."""
 
     def __init__(self):
-        """Initialize feature extractors."""
+        """Initialize with default extractors: basic, centrality, spectral."""
         self.extractors = {
             "basic": BasicMetricsExtractor(),
             "centrality": CentralityMetricsExtractor(),
@@ -119,26 +176,28 @@ class NetworkFeatureExtractor:
         }
 
     def get_all_metrics(self, graph: nx.Graph) -> NetworkMetrics:
-        """Get all network metrics in a structured format."""
-        metrics = {}
+        """Get all network metrics in a structured format as a NetworkMetrics instance."""
+        # Gather all metrics from each extractor
+        combined = {}
         for extractor in self.extractors.values():
-            metrics.update(extractor.extract(graph))
+            combined.update(extractor.extract(graph))
 
-        return NetworkMetrics(**metrics)
+        # Convert to a typed NetworkMetrics object
+        return NetworkMetrics(**combined)
 
     def get_metrics(
         self, graph: nx.Graph, metric_types: Optional[List[str]] = None
     ) -> Dict[str, float]:
-        """Get specific network metrics."""
+        """Get a selected subset of metrics by specifying which extractors to run."""
         if metric_types is None:
             metric_types = list(self.extractors.keys())
 
         metrics = {}
-        for metric_type in metric_types:
-            if metric_type in self.extractors:
-                metrics.update(self.extractors[metric_type].extract(graph))
+        for mtype in metric_types:
+            if mtype in self.extractors:
+                metrics.update(self.extractors[mtype].extract(graph))
             else:
-                logger.warning(f"Unknown metric type: {metric_type}")
+                logger.warning(f"Unknown metric type requested: {mtype}")
 
         return metrics
 
@@ -146,22 +205,31 @@ class NetworkFeatureExtractor:
 def calculate_error_metrics(
     actual_metrics: Dict[str, float], predicted_metrics: Dict[str, float]
 ) -> Dict[str, float]:
-    """Calculate error metrics between actual and predicted network properties.
+    """Calculate absolute errors for each metric in 'actual_metrics' vs. 'predicted_metrics'.
 
     Parameters
     ----------
     actual_metrics : Dict[str, float]
-        Dictionary of actual network metrics
+        Dictionary of reference (true) metric values.
     predicted_metrics : Dict[str, float]
-        Dictionary of predicted network metrics
+        Dictionary of predicted metric values.
 
     Returns
     -------
     Dict[str, float]
-        Dictionary containing absolute errors for each metric
+        For each metric key in 'actual_metrics' that also exists in 'predicted_metrics',
+        returns abs(actual - predicted).
+
+    Examples
+    --------
+    >>> actual = {"avg_degree": 2.0, "density": 0.05}
+    >>> pred = {"avg_degree": 1.8, "density": 0.06, "extra": 10.0}
+    >>> errs = calculate_error_metrics(actual, pred)
+    >>> print(errs)
+    {"avg_degree": 0.2, "density": 0.01}
     """
     return {
         key: abs(actual_metrics[key] - predicted_metrics[key])
-        for key in actual_metrics.keys()
+        for key in actual_metrics
         if key in predicted_metrics
     }

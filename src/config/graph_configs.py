@@ -13,11 +13,7 @@ def get_ba_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Barabási-Albert network.
-
-    Returns evolving preferential attachment network with occasional
-    structural changes through m parameter.
-    """
+    """Get configuration for Barabási-Albert network."""
     return {
         "model": "barabasi_albert",
         "params": BAParams(
@@ -45,11 +41,7 @@ def get_ws_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Watts-Strogatz network.
-
-    Returns evolving small-world network with changes in both
-    connectivity (k) and rewiring probability (p).
-    """
+    """Get configuration for Watts-Strogatz network."""
     return {
         "model": "watts_strogatz",
         "params": WSParams(
@@ -81,10 +73,7 @@ def get_er_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Erdős-Rényi network.
-
-    Returns evolving random network with changes in edge probability.
-    """
+    """Get configuration for Erdős-Rényi network."""
     return {
         "model": "erdos_renyi",
         "params": ERParams(
@@ -112,11 +101,7 @@ def get_sbm_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Stochastic Block Model network.
-
-    Returns evolving community structure with changes in both
-    intra and inter-community connection probabilities.
-    """
+    """Get configuration for Stochastic Block Model network."""
     return {
         "model": "stochastic_block_model",
         "params": SBMParams(
@@ -152,11 +137,7 @@ def get_rcp_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Random Core-Periphery network.
-
-    Returns evolving core-periphery structure with changes in
-    core size and connection probabilities.
-    """
+    """Get configuration for Random Core-Periphery network."""
     return {
         "model": "random_core_periphery",
         "params": RCPParams(
@@ -190,11 +171,7 @@ def get_lfr_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for LFR Benchmark network.
-
-    Returns evolving community structure with power-law degree
-    distribution and community sizes.
-    """
+    """Get configuration for LFR Benchmark network."""
     return {
         "model": "lfr_benchmark",
         "params": LFRParams(
@@ -224,14 +201,14 @@ def get_lfr_config(
 
 # Dictionary mapping model names to their config functions
 GRAPH_CONFIGS = {
-    # Full names
+    # Full model names
     "barabasi_albert": get_ba_config,
     "watts_strogatz": get_ws_config,
     "erdos_renyi": get_er_config,
     "stochastic_block_model": get_sbm_config,
     "random_core_periphery": get_rcp_config,
     "lfr_benchmark": get_lfr_config,
-    # Short names
+    # Short aliases
     "ba": get_ba_config,
     "ws": get_ws_config,
     "er": get_er_config,

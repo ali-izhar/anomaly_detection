@@ -1,18 +1,5 @@
 # src/graph/generator.py
 
-"""Graph Generator for Dynamic Graph Sequences.
-
-This module provides a flexible framework for generating sequences of dynamic graphs
-using various NetworkX models. It supports both sparse and dense graph types with
-configurable parameters that can change over time.
-
-Key Features:
-- Generic interface for various NetworkX-compatible graph models
-- Generates sequences with controlled parameter changes
-- Maintains consistent node labeling across sequences
-- Provides metadata about changes and parameters
-"""
-
 import logging
 from typing import Dict, List, Optional, Callable, Type, Tuple
 import numpy as np
@@ -33,29 +20,32 @@ logger = logging.getLogger(__name__)
 
 
 def graph_to_adjacency(G: nx.Graph) -> np.ndarray:
-    """Convert NetworkX graph to adjacency matrix with consistent node ordering.
+    """Convert a NetworkX graph to a NumPy adjacency matrix with nodes labeled from 0 to n-1.
 
-    Args:
-        G: NetworkX graph
+    Parameters
+    ----------
+    G : nx.Graph
+        The input graph.
 
-    Returns:
-        Adjacency matrix with nodes ordered from 0 to n-1
+    Returns
+    -------
+    np.ndarray
+        An (n x n) adjacency matrix (dense) in NumPy format.
+
+    Notes
+    -----
+    - Relabels nodes to ensure ordering from 0..n-1.
+    - Return dtype is float (0.0 or 1.0 entries).
     """
-    # Ensure nodes are labeled 0 to n-1
     G = nx.convert_node_labels_to_integers(G)
     return nx.to_numpy_array(G)
 
 
 class GraphGenerator:
-    """Generator for dynamic graph sequences.
-
-    This class provides a generic interface to generate sequences of graphs with:
-    1. Gradual evolution through _std parameters
-    2. Sudden changes through min/max parameters at change points
-    """
+    """Generator for dynamic graph sequences."""
 
     def __init__(self):
-        """Initialize the graph generator with all supported models."""
+        """Initialize the generator with all supported models registered."""
         self._generators: Dict[str, Dict] = {}
 
         # Register Barabási-Albert model
@@ -66,7 +56,7 @@ class GraphGenerator:
             param_mutation_func=self.ba_param_mutation,
             metadata_func=self.ba_metadata,
         )
-        # Also register with short name
+        # Short alias
         self._generators["ba"] = self._generators["barabasi_albert"]
 
         # Register Watts-Strogatz model
@@ -117,14 +107,22 @@ class GraphGenerator:
         param_mutation_func: Optional[Callable[[Dict], Dict]] = None,
         metadata_func: Optional[Callable[[Dict], Dict]] = None,
     ) -> None:
-        """Register a new graph model.
+        """Register a new graph model with associated utilities.
 
-        Args:
-            name: Identifier for the model
-            generator_func: NetworkX-compatible graph generator function
-            param_class: Parameter class for this model type
-            param_mutation_func: Function to mutate parameters for sequence generation
-            metadata_func: Function to compute model-specific metadata
+        Parameters
+        ----------
+        name : str
+            Identifier for the model (e.g., "barabasi_albert").
+        generator_func : Callable
+            A function that, given model-specific parameters, returns a
+            NetworkX graph (e.g., `nx.barabasi_albert_graph`).
+        param_class : Type[BaseParams]
+            A dataclass describing model-specific parameters.
+        param_mutation_func : Callable[[Dict], Dict], optional
+            Function that modifies parameters during anomaly injection. If not
+            provided, `_default_param_mutation` is used.
+        metadata_func : Callable[[Dict], Dict], optional
+            Function that returns metadata for the model. Defaults to `_default_metadata`.
         """
         if name in self._generators:
             logger.warning(f"Overwriting existing model: {name}")
@@ -143,48 +141,69 @@ class GraphGenerator:
         params: BaseParams,
         seed: Optional[int] = None,
     ) -> Dict:
-        """Generate a sequence of graphs with changing parameters.
+        """Generate a sequence of graph snapshots with optional random change points.
 
-        Args:
-            model: Name of the registered graph model to use
-            params: Parameters for graph generation
-            seed: Random seed for reproducibility
+        Parameters
+        ----------
+        model : str
+            Name (or alias) of the registered graph model (e.g., "ba", "er", "ws").
+        params : BaseParams
+            A dataclass instance describing the generation parameters (seq_len,
+            min_segment, min_changes, etc., plus model-specific fields).
+        seed : int, optional
+            Random seed for reproducibility across runs.
 
-        Returns:
-            Dictionary containing:
-            - graphs: List of adjacency matrices
-            - change_points: List of indices where parameters change
-            - params: List of parameters used in each segment
-            - metadata: Additional model-specific information
+        Returns
+        -------
+        Dict
+            A dictionary containing:
+            - **graphs**: List of adjacency matrices (np.ndarray).
+            - **change_points**: List of indices where parameters changed.
+            - **parameters**: List of parameter dictionaries for each segment.
+            - **metadata**: List of metadata objects from each segment.
+            - **model**: The model name used.
+            - **num_changes**: How many change points were inserted.
+            - **n**: Number of nodes in each graph (as per `params.n`).
+            - **sequence_length**: The total `seq_len`.
+
+        Raises
+        ------
+        ValueError
+            If the requested model is not registered or if `params` is the wrong type.
+
+        Notes
+        -----
+        1. We generate up to `max_changes` abrupt shifts in parameters, each
+           ensuring at least `min_segment` steps per segment.
+        2. Between steps, parameters can evolve gradually if there are fields
+           ending in `_std` (e.g., `m_std` for Barabási-Albert).
         """
         if model not in self._generators:
-            raise ValueError(
-                f"Model {model} not registered. Use register_model() first."
-            )
+            raise ValueError(f"Model {model} not registered.")
 
         if not isinstance(params, self._generators[model]["param_class"]):
             raise TypeError(
-                f"Parameters must be instance of {self._generators[model]['param_class'].__name__}"
+                f"Parameters must be instance of "
+                f"{self._generators[model]['param_class'].__name__}"
             )
 
         if seed is not None:
             np.random.seed(seed)
 
         try:
-            # Generate change points
+            # 1. Generate random change points
             change_points, num_changes = self._generate_change_points(params)
             logger.info(f"Generated {num_changes} change points at: {change_points}")
 
-            # Generate parameter sets for each segment
+            # 2. Generate parameter sets for each segment
             param_sets = self._generate_parameter_sets(
                 model, params, num_changes, self._generators[model]["mutate"]
             )
             logger.debug(f"Generated parameters for {num_changes + 1} segments")
 
-            # Generate graph segments
+            # 3. Generate graphs for each segment
             all_graphs = []
             metadata = []
-
             for i in range(len(change_points) + 1):
                 start = change_points[i - 1] if i > 0 else 0
                 end = change_points[i] if i < len(change_points) else params.seq_len
@@ -201,7 +220,7 @@ class GraphGenerator:
 
                     all_graphs.extend(segment)
                     metadata.append(meta)
-                    logger.debug(f"Generated segment {i} with {len(segment)} graphs")
+                    logger.debug(f"Segment {i} => {len(segment)} graphs")
                 except Exception as e:
                     msg = f"Failed to generate segment {i}"
                     logger.error(msg, exc_info=True)
@@ -218,9 +237,7 @@ class GraphGenerator:
                 "sequence_length": params.seq_len,
             }
 
-            logger.info(
-                f"Successfully generated sequence with {len(all_graphs)} graphs"
-            )
+            logger.info(f"Generated sequence with {len(all_graphs)} total graphs")
             return result
 
         except Exception as e:
@@ -233,18 +250,35 @@ class GraphGenerator:
         params: Dict,
         length: int,
     ) -> List[np.ndarray]:
-        """Generate a sequence of graphs with evolving parameters."""
+        """Produce a list of adjacency matrices by calling the model's generator
+        repeatedly, evolving parameters after each graph if `_std` fields
+        are present.
+
+        Parameters
+        ----------
+        model : str
+            Model name or alias.
+        params : Dict
+            Model-specific parameter dictionary (keys/values).
+        length : int
+            Number of graphs to generate in this segment.
+
+        Returns
+        -------
+        List[np.ndarray]
+            A list of adjacency matrices for the segment.
+        """
         graphs = []
         generator = self._generators[model]["generator"]
         current_params = params.copy()
 
         for _ in range(length):
-            # Generate graph with current parameters
+            # Generate graph
             G = generator(**current_params)
             adj_matrix = graph_to_adjacency(G)
             graphs.append(adj_matrix)
 
-            # Evolve parameters for next iteration
+            # Evolve parameters for the next step
             current_params = self._evolve_parameters(current_params)
 
         return graphs
@@ -253,49 +287,63 @@ class GraphGenerator:
         self,
         params: BaseParams,
     ) -> Tuple[List[int], int]:
-        """Generate random change points for the sequence.
+        """Randomly generate valid change points for the sequence.
 
-        Args:
-            params: Graph generation parameters
+        Parameters
+        ----------
+        params : BaseParams
+            A dataclass specifying `seq_len`, `min_segment`, `min_changes`, `max_changes`.
 
-        Returns:
-            Tuple of (change points list, number of changes)
+        Returns
+        -------
+        (List[int], int)
+            A tuple of (the sorted list of change point indices, number_of_changes).
+
+        Raises
+        ------
+        RuntimeError
+            If valid change points cannot be found in 100 attempts.
+
+        Notes
+        -----
+        - Each segment must be at least `min_segment` in length.
+        - We sample `num_changes` from [min_changes, max_changes].
+        - Then we pick that many points from the valid positions that keep
+          every segment >= min_segment in size.
         """
         seq_len = params.seq_len
         min_segment = params.min_segment
         min_changes = params.min_changes
         max_changes = params.max_changes
 
-        # Validate parameters
+        # Max possible changes if each segment is min_segment length
         max_possible_changes = (seq_len - min_segment) // min_segment
         if max_changes > max_possible_changes:
             max_changes = max_possible_changes
         if min_changes > max_changes:
             min_changes = max_changes
 
-        # Try to generate valid change points
         max_attempts = 100
         for _ in range(max_attempts):
-            # Generate random number of changes
             num_changes = np.random.randint(min_changes, max_changes + 1)
 
-            # Create valid positions for change points
+            # All valid positions spaced by min_segment
             valid_positions = []
             current_pos = min_segment
             while current_pos <= seq_len - min_segment:
                 valid_positions.append(current_pos)
                 current_pos += min_segment
 
-            # If we don't have enough valid positions, try again with fewer changes
+            # If not enough valid positions, reduce changes
             if len(valid_positions) < num_changes:
                 continue
 
-            # Select change points from valid positions
+            # Randomly select a sorted subset
             points = sorted(
                 np.random.choice(valid_positions, size=num_changes, replace=False)
             )
 
-            # Verify all segments meet minimum length
+            # Verify each segment >= min_segment
             valid = True
             prev_point = 0
             for point in points + [seq_len]:
@@ -305,10 +353,9 @@ class GraphGenerator:
                 prev_point = point
 
             if valid:
-                logger.info(f"Generated {num_changes} change points at: {points}")
                 return points, num_changes
 
-        msg = f"Failed to generate valid change points after {max_attempts} attempts"
+        msg = f"Failed to generate valid change points after {max_attempts} tries"
         logger.error(msg)
         raise RuntimeError(msg)
 
@@ -319,12 +366,29 @@ class GraphGenerator:
         num_changes: int,
         mutation_func: Callable[[Dict], Dict],
     ) -> List[Dict]:
-        """Generate parameter sets for each segment, including both evolution and anomaly changes."""
+        """Build a list of parameter dictionaries, one per segment,
+        by applying anomaly (mutation) between segments.
+
+        Parameters
+        ----------
+        model : str
+            The model name (unused here, but reserved for future special handling).
+        params : BaseParams
+            The original dataclass with the base parameter values.
+        num_changes : int
+            How many segments transitions (and hence how many anomaly injections).
+        mutation_func : Callable[[Dict], Dict]
+            A function that randomizes or shifts the parameters for an anomaly.
+
+        Returns
+        -------
+        List[Dict]
+            A list of parameter dictionaries, of length num_changes+1.
+        """
         param_dict = asdict(params)
         param_sets = [param_dict]
 
         for _ in range(num_changes):
-            # Apply anomaly changes through mutation function
             new_params = mutation_func(param_dict.copy())
             param_sets.append(new_params)
             param_dict = new_params
@@ -333,14 +397,22 @@ class GraphGenerator:
 
     @staticmethod
     def _default_param_mutation(params: Dict) -> Dict:
-        """Default parameter mutation strategy for anomaly injection.
+        """Default anomaly injection: for each param with `min_foo` and `max_foo`,
+        pick a random new value in [min_foo, max_foo].
 
-        For each parameter with min/max bounds, generates a random value
-        between those bounds. Evolution parameters (_std) are preserved.
+        Parameters
+        ----------
+        params : Dict
+            Current parameter dictionary.
+
+        Returns
+        -------
+        Dict
+            A new parameter dictionary with potential random jumps in relevant fields.
         """
         new_params = params.copy()
 
-        # Find all parameter pairs with min/max bounds
+        # Identify all param pairs: min_foo, max_foo
         param_bounds = {}
         for key in params:
             if key.startswith("min_"):
@@ -349,44 +421,93 @@ class GraphGenerator:
                 if max_key in params:
                     param_bounds[base_key] = (params[key], params[max_key])
 
-        # Generate new random values within bounds
-        for base_key, (min_val, max_val) in param_bounds.items():
-            if isinstance(min_val, int):
-                new_params[base_key] = np.random.randint(min_val, max_val + 1)
+        # Jump each base_key into [min, max]
+        for base_key, (mn, mx) in param_bounds.items():
+            if isinstance(mn, int):
+                new_params[base_key] = np.random.randint(mn, mx + 1)
             else:
-                new_params[base_key] = np.random.uniform(min_val, max_val)
+                new_params[base_key] = np.random.uniform(mn, mx)
 
         return new_params
 
     @staticmethod
     def _default_metadata(params: Dict) -> Dict:
-        """Default metadata generation."""
+        """Default metadata is simply a copy of the parameter dictionary.
+
+        Parameters
+        ----------
+        params : Dict
+            Current parameter dictionary.
+
+        Returns
+        -------
+        Dict
+            A dictionary with key "params" storing the original params.
+        """
         return {"params": params.copy()}
 
     def generate_ba_network(self, n: int, m: int, **kwargs) -> nx.Graph:
-        """Generate Barabási-Albert preferential attachment network."""
+        """Generate a Barabási-Albert (BA) scale-free network.
+
+        Parameters
+        ----------
+        n : int
+            Number of nodes (>= m+1 recommended).
+        m : int
+            Number of edges each new node brings.
+        """
         return nx.barabasi_albert_graph(n=n, m=m)
 
     def generate_ws_network(
         self, n: int, k_nearest: int, rewire_prob: float, **kwargs
     ) -> nx.Graph:
-        """Generate Watts-Strogatz small-world network."""
+        """Generate a Watts-Strogatz small-world network.
+
+        Parameters
+        ----------
+        n : int
+            Number of nodes.
+        k_nearest : int
+            Each node is connected to k_nearest neighbors on each side.
+        rewire_prob : float
+            Probability to rewire each edge to a random node (in [0,1]).
+        """
         return nx.watts_strogatz_graph(n=n, k=k_nearest, p=rewire_prob)
 
     def generate_er_network(self, n: int, prob: float, **kwargs) -> nx.Graph:
-        """Generate Erdős-Rényi random network."""
+        """Generate an Erdős-Rényi random network G(n, p).
+
+        Parameters
+        ----------
+        n : int
+            Number of nodes.
+        prob : float
+            Edge probability in [0,1].
+        """
         return nx.erdos_renyi_graph(n=n, p=prob)
 
     def generate_sbm_network(
         self, n: int, num_blocks: int, intra_prob: float, inter_prob: float, **kwargs
     ) -> nx.Graph:
-        """Generate Stochastic Block Model network."""
-        # Calculate block sizes
+        """Generate a Stochastic Block Model (SBM) network.
+
+        Parameters
+        ----------
+        n : int
+            Total number of nodes.
+        num_blocks : int
+            Number of communities.
+        intra_prob : float
+            Probability of edges within the same block.
+        inter_prob : float
+            Probability of edges across blocks.
+        """
+        # Derive block sizes
         block_size = n // num_blocks
         sizes = [block_size] * (num_blocks - 1)
-        sizes.append(n - sum(sizes))  # Last block gets remaining nodes
+        sizes.append(n - sum(sizes))  # last block gets remainder
 
-        # Create probability matrix
+        # Probability matrix
         probs = np.full((num_blocks, num_blocks), inter_prob)
         np.fill_diagonal(probs, intra_prob)
 
@@ -401,25 +522,40 @@ class GraphGenerator:
         core_periph_prob: float,
         **kwargs,
     ) -> nx.Graph:
-        """Generate Random Core-Periphery network."""
+        """Generate a Random Core-Periphery (RCP) network.
+
+        Parameters
+        ----------
+        n : int
+            Total number of nodes.
+        core_size : int
+            Number of nodes in the core.
+        core_prob : float
+            Probability of edges among core nodes.
+        periph_prob : float
+            Probability of edges among periphery nodes.
+        core_periph_prob : float
+            Probability of edges across core and periphery.
+        """
         G = nx.Graph()
         G.add_nodes_from(range(n))
 
-        # Add core edges
         core_nodes = list(range(core_size))
+        periph_nodes = list(range(core_size, n))
+
+        # Core subgraph
         for i in range(core_size):
             for j in range(i + 1, core_size):
                 if np.random.random() < core_prob:
                     G.add_edge(i, j)
 
-        # Add periphery edges
-        periph_nodes = list(range(core_size, n))
+        # Periphery subgraph
         for i in range(core_size, n):
             for j in range(i + 1, n):
                 if np.random.random() < periph_prob:
                     G.add_edge(i, j)
 
-        # Add core-periphery edges
+        # Cross core-periphery
         for i in core_nodes:
             for j in periph_nodes:
                 if np.random.random() < core_periph_prob:
@@ -439,41 +575,39 @@ class GraphGenerator:
         max_community: int,
         **kwargs,
     ) -> nx.Graph:
-        """Generate LFR benchmark network.
+        """Generate an LFR (Lancichinetti-Fortunato-Radicchi) benchmark network.
 
         Parameters
         ----------
         n : int
-            Number of nodes
+            Total number of nodes.
         avg_degree : int
-            Average degree
+            Average node degree.
         max_degree : int
-            Maximum degree
+            Maximum node degree.
         mu : float
-            Mixing parameter
+            Mixing parameter in [0,1]. Higher => more inter-community edges.
         tau1 : float
-            Node degree distribution power law exponent
+            Exponent for degree distribution.
         tau2 : float
-            Community size distribution power law exponent
+            Exponent for community size distribution.
         min_community : int
-            Minimum community size
+            Minimum size of any community.
         max_community : int
-            Maximum community size
+            Maximum size of any community.
         """
-        # Generate base scale-free network
-        # Use configuration model with power law degree sequence
+        # 1. Generate a power-law degree sequence
         degrees = [min(max_degree, int(d)) for d in nx.utils.powerlaw_sequence(n, tau1)]
-        # Ensure minimum degree and even sum
+        # Ensure min average degree / even sum
         degrees = [max(avg_degree // 2, d) for d in degrees]
         if sum(degrees) % 2 == 1:
             degrees[0] += 1
 
+        # Construct via configuration model
         G = nx.configuration_model(degrees)
+        G = nx.Graph(G)  # remove parallel edges/self loops
 
-        # Remove self-loops and parallel edges
-        G = nx.Graph(G)
-
-        # Generate community sizes following power law
+        # 2. Generate community sizes via power-law
         remaining_nodes = n
         communities = []
         while remaining_nodes > 0:
@@ -487,30 +621,28 @@ class GraphGenerator:
             communities.append(size)
             remaining_nodes -= size
 
-        # Assign nodes to communities
+        # 3. Assign nodes to communities
         node_communities = []
         start_idx = 0
         for size in communities:
             node_communities.extend([start_idx] * size)
             start_idx += 1
 
-        # Rewire edges to match mixing parameter
         edges = list(G.edges())
         np.random.shuffle(edges)
 
-        # Calculate target number of inter-community edges
-        target_inter = int(mu * len(edges))
+        # Current fraction of inter-community edges
         current_inter = sum(
             1 for u, v in edges if node_communities[u] != node_communities[v]
         )
+        target_inter = int(mu * len(edges))
 
-        # Rewire edges to achieve target mixing
+        # 4. Rewire edges to reach target mixing
         while current_inter != target_inter:
             if current_inter < target_inter:
-                # Need more inter-community edges
+                # Need more inter edges
                 for u, v in edges:
                     if node_communities[u] == node_communities[v]:
-                        # Find a node from different community
                         candidates = [
                             w
                             for w in range(n)
@@ -527,10 +659,9 @@ class GraphGenerator:
                             if current_inter == target_inter:
                                 break
             else:
-                # Need more intra-community edges
+                # Need more intra edges
                 for u, v in edges:
                     if node_communities[u] != node_communities[v]:
-                        # Find a node from same community
                         candidates = [
                             w
                             for w in range(n)
@@ -547,20 +678,32 @@ class GraphGenerator:
                             if current_inter == target_inter:
                                 break
 
-        # Store community information
+        # Store community info
         nx.set_node_attributes(
-            G,
-            {i: {"community": c} for i, c in enumerate(node_communities)},
+            G, {i: {"community": c} for i, c in enumerate(node_communities)}
         )
 
         return G
 
     def ba_param_mutation(self, params: Dict) -> Dict:
-        """Parameter mutation for BA networks, supporting both evolution and anomalies."""
-        # First apply standard anomaly mutation
+        """Specialized parameter mutation for Barabási-Albert networks.
+        In addition to the default jumps in [min_m, max_m], we preserve
+        the standard deviation fields for gradual evolution.
+
+        Parameters
+        ----------
+        params : Dict
+            Current parameter dictionary (e.g., containing m, min_m, max_m, m_std).
+
+        Returns
+        -------
+        Dict
+            A new parameter dictionary after random jumps in `[min_m, max_m]`.
+        """
+        # Default injection
         new_params = self._default_param_mutation(params)
 
-        # Preserve evolution parameters
+        # Keep _std fields same as old
         for key in params:
             if key.endswith("_std"):
                 new_params[key] = params[key]
@@ -568,7 +711,20 @@ class GraphGenerator:
         return new_params
 
     def ba_metadata(self, params: Dict) -> Dict:
-        """Metadata for BA networks."""
+        """Create metadata for Barabási-Albert segments, listing evolving parameters.
+
+        Parameters
+        ----------
+        params : Dict
+            Current BA parameter dictionary.
+
+        Returns
+        -------
+        Dict
+            A metadata dictionary with keys:
+            - "params": a copy of all params
+            - "evolving_parameters": list of param names that have _std set
+        """
         meta = {"params": params.copy()}
         evolving_params = [
             k[:-4] for k in params if k.endswith("_std") and params[k] is not None
@@ -578,11 +734,24 @@ class GraphGenerator:
         return meta
 
     def _evolve_parameters(self, params: Dict) -> Dict:
-        """Evolve parameters based on their standard deviations.
+        """Evolve parameters by applying a Gaussian step for each param that has
+        a corresponding `_std` field.
 
-        For each parameter with a corresponding _std suffix, generates a new value
-        from a normal distribution with the current value as mean and _std as
-        standard deviation. Ensures numeric constraints (e.g., non-negative values).
+        - If key = X and key_std = X_std in params:
+          new_value ~ Normal( old_value, X_std )
+        - For integer fields, the result is rounded and clipped to >= 1.
+        - For float fields that contain "prob", we clip to [0,1].
+        - Otherwise, we clip to >= 0 if that makes sense (e.g., for degrees).
+
+        Parameters
+        ----------
+        params : Dict
+            Parameter dictionary containing both values and optional `_std` fields.
+
+        Returns
+        -------
+        Dict
+            Updated parameter dictionary after small random evolutions.
         """
         evolved_params = params.copy()
 
@@ -590,21 +759,17 @@ class GraphGenerator:
             std_key = f"{key}_std"
             if std_key in params and params[std_key] is not None:
                 std_value = params[std_key]
-
-                # Generate new value from normal distribution
                 new_value = np.random.normal(value, std_value)
 
-                # Apply constraints based on parameter type
                 if isinstance(value, int):
+                    # Round and ensure positive
                     new_value = int(round(new_value))
-                    # Ensure non-negative for most parameters
                     if key not in ["min_changes", "max_changes"]:
                         new_value = max(1, new_value)
                 elif isinstance(value, float):
-                    # Probabilities should be between 0 and 1
+                    # If param name has "prob", clip to [0,1]
                     if "prob" in key:
-                        new_value = np.clip(new_value, 0.0, 1.0)
-                    # Other float parameters should be non-negative
+                        new_value = float(np.clip(new_value, 0.0, 1.0))
                     else:
                         new_value = max(0.0, new_value)
 
