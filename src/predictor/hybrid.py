@@ -1,16 +1,15 @@
-"""Hybrid predictor that combines weighted prediction with structural role preservation.
+# src/predictor/hybrid.py
 
-Uses weighted predictor as base for global properties (degree/density), then enhances
-local structure properties while preserving node roles and BA evolution principles.
-"""
+"""Hybrid (Weighted + Local Structure) predictor."""
 
 import numpy as np
 import networkx as nx
 from typing import List, Dict, Any, Optional, Set, Tuple
 from collections import defaultdict
+
+from graph.features import NetworkFeatureExtractor
 from .base import BasePredictor
 from .weighted import WeightedPredictor
-from graph.features import NetworkFeatureExtractor
 
 
 class HybridPredictor(BasePredictor):

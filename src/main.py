@@ -1,10 +1,6 @@
-"""Example script demonstrating network forecasting capabilities.
+# src/main.py
 
-This script shows how to use the graph_forecasting package to:
-1. Generate evolving network time series for different graph types
-2. Predict future network states
-3. Visualize and analyze prediction accuracy
-"""
+"""Main script for network forecasting."""
 
 import sys
 from pathlib import Path

@@ -1,11 +1,6 @@
 # src/predictor/weighted.py
 
-"""
-Weighted average network predictor.
-
-This module implements a predictor that uses weighted averaging of recent
-network states (adjacency matrices) to forecast future states.
-"""
+"""Weighted average network predictor."""
 
 import networkx as nx
 import numpy as np

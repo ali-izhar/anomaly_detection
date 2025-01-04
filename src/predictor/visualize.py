@@ -1,55 +1,13 @@
-"""Visualization utilities for network forecasting.
-
-This module provides functions for visualizing network metrics,
-prediction results, and evolution of network properties.
-"""
+# src/predictor/visualize.py
 
 import matplotlib.pyplot as plt
 from typing import List, Dict, Any, Tuple, Optional
 import networkx as nx
-from graph.features import NetworkFeatureExtractor
 import numpy as np
-from sklearn.metrics import precision_score, recall_score, f1_score
+
+from graph.features import NetworkFeatureExtractor
 
 feature_extractor = NetworkFeatureExtractor()
-
-
-def calculate_prediction_metrics(
-    y_true: np.ndarray, y_pred: np.ndarray
-) -> Dict[str, float]:
-    """Calculate custom prediction metrics that better reflect our over-prediction strategy.
-
-    Parameters
-    ----------
-    y_true : np.ndarray
-        True adjacency matrix (upper triangle)
-    y_pred : np.ndarray
-        Predicted adjacency matrix (upper triangle)
-
-    Returns
-    -------
-    Dict[str, float]
-        Dictionary containing the following metrics:
-        - edge_coverage: Percentage of actual edges we successfully predicted
-        - prediction_efficiency: Percentage of our predictions that were correct
-        - over_prediction_ratio: Ratio of predicted edges to actual edges
-    """
-    true_edges = np.sum(y_true)
-    pred_edges = np.sum(y_pred)
-
-    # True positives (correctly predicted edges)
-    true_positives = np.sum((y_true == 1) & (y_pred == 1))
-
-    # Calculate metrics
-    edge_coverage = true_positives / true_edges if true_edges > 0 else 0.0
-    prediction_efficiency = true_positives / pred_edges if pred_edges > 0 else 0.0
-    over_prediction_ratio = pred_edges / true_edges if true_edges > 0 else float("inf")
-
-    return {
-        "edge_coverage": edge_coverage,
-        "prediction_efficiency": prediction_efficiency,
-        "over_prediction_ratio": over_prediction_ratio,
-    }
 
 
 class PlotStyle:
@@ -131,6 +89,44 @@ class PlotStyle:
                 "ytick.color": cls.TEXT_COLOR,
             }
         )
+
+
+def calculate_prediction_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> Dict[str, float]:
+    """Calculate custom prediction metrics that better reflect our over-prediction strategy.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True adjacency matrix (upper triangle)
+    y_pred : np.ndarray
+        Predicted adjacency matrix (upper triangle)
+
+    Returns
+    -------
+    Dict[str, float]
+        Dictionary containing the following metrics:
+        - edge_coverage: Percentage of actual edges we successfully predicted
+        - prediction_efficiency: Percentage of our predictions that were correct
+        - over_prediction_ratio: Ratio of predicted edges to actual edges
+    """
+    true_edges = np.sum(y_true)
+    pred_edges = np.sum(y_pred)
+
+    # True positives (correctly predicted edges)
+    true_positives = np.sum((y_true == 1) & (y_pred == 1))
+
+    # Calculate metrics
+    edge_coverage = true_positives / true_edges if true_edges > 0 else 0.0
+    prediction_efficiency = true_positives / pred_edges if pred_edges > 0 else 0.0
+    over_prediction_ratio = pred_edges / true_edges if true_edges > 0 else float("inf")
+
+    return {
+        "edge_coverage": edge_coverage,
+        "prediction_efficiency": prediction_efficiency,
+        "over_prediction_ratio": over_prediction_ratio,
+    }
 
 
 class Visualizer:
