@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 - `src/changepoint/`: Core change detection algorithms
 - `src/graph/`: Graph generation and analysis
-- `src/models/`: Model implementations
+- `src/predictor/`: Model implementations
 - `src/utils/`: Helper functions
 - `experiments/`: Experiment suite
 

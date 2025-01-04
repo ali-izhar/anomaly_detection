@@ -1,15 +1,4 @@
-"""Network prediction module.
-
-This module provides various predictors for network evolution forecasting:
-
-1. WeightedPredictor: Uses weighted averaging of recent states
-2. SpectralPredictor: Uses spectral decomposition patterns
-3. EmbeddingPredictor: Uses node embedding evolution
-4. DynamicalPredictor: Models network as dynamical system
-5. EnsemblePredictor: Combines multiple base predictors
-6. AdaptivePredictor: Dynamically adjusts ensemble weights
-7. HybridPredictor: Integrates multiple prediction strategies
-"""
+# src/predictor/__init__.py
 
 from .base import BasePredictor
 from .weighted import WeightedPredictor
