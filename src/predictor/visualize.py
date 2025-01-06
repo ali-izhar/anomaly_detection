@@ -358,3 +358,162 @@ class Visualizer:
             # Remove ticks but keep frame
             ax_pred.set_xticks([])
             ax_pred.set_yticks([])
+
+    def plot_node_degree_evolution(
+        self,
+        network_series: List[Dict[str, Any]],
+        output_path: str = None,
+        figsize: Tuple[int, int] = (15, 10),
+    ) -> None:
+        """Plot the evolution of node degrees over time with multiple views.
+
+        Parameters
+        ----------
+        network_series : List[Dict]
+            List of network states over time
+        output_path : str, optional
+            Path to save the plot. If None, display only.
+        figsize : Tuple[int, int], optional
+            Figure size (width, height) in inches
+        """
+        # Extract number of nodes from first graph
+        n_nodes = len(network_series[0]["graph"].nodes())
+        n_timesteps = len(network_series)
+
+        # Initialize degree matrix: rows are timesteps, columns are nodes
+        degree_matrix = np.zeros((n_timesteps, n_nodes))
+
+        # Fill the matrix with degrees
+        for t, state in enumerate(network_series):
+            degrees = dict(state["graph"].degree())
+            for node in range(n_nodes):
+                degree_matrix[t, node] = degrees[node]
+
+        # Create figure with subplots
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(2, 2, height_ratios=[2, 1], hspace=0.3, wspace=0.2)
+
+        # 1. Main evolution plot (top left)
+        ax1 = fig.add_subplot(gs[0, 0])
+
+        # Plot each node's degree evolution
+        for node in range(n_nodes):
+            ax1.plot(
+                range(n_timesteps),
+                degree_matrix[:, node],
+                alpha=0.2,
+                linewidth=0.5,
+                color="gray",
+            )
+
+        # Plot mean degree evolution
+        mean_degree = np.mean(degree_matrix, axis=1)
+        ax1.plot(
+            range(n_timesteps), mean_degree, "r-", linewidth=2, label="Mean Degree"
+        )
+
+        # Add quartiles
+        q1 = np.percentile(degree_matrix, 25, axis=1)
+        q3 = np.percentile(degree_matrix, 75, axis=1)
+        ax1.fill_between(
+            range(n_timesteps), q1, q3, color="red", alpha=0.2, label="25-75 percentile"
+        )
+
+        # Plot change points if they exist
+        change_points = [
+            i
+            for i, state in enumerate(network_series)
+            if state.get("is_change_point", False)
+        ]
+        for cp in change_points:
+            ax1.axvline(
+                x=cp,
+                color="green",
+                linestyle="--",
+                alpha=0.5,
+                label="Change Point" if cp == change_points[0] else None,
+            )
+
+        ax1.set_xlabel("Time Step")
+        ax1.set_ylabel("Node Degree")
+        ax1.set_title("Node Degree Evolution")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Heatmap of degree distribution over time (top right)
+        ax2 = fig.add_subplot(gs[0, 1])
+        max_degree = int(np.max(degree_matrix))
+        degree_counts = np.zeros((n_timesteps, max_degree + 1))
+        for t in range(n_timesteps):
+            degrees = degree_matrix[t]
+            for d in range(max_degree + 1):
+                degree_counts[t, d] = np.sum(degrees == d)
+
+        # Normalize by number of nodes
+        degree_counts = degree_counts / n_nodes
+
+        im = ax2.imshow(
+            degree_counts.T,
+            aspect="auto",
+            origin="lower",
+            cmap="YlOrRd",
+            interpolation="nearest",
+        )
+        ax2.set_xlabel("Time Step")
+        ax2.set_ylabel("Degree")
+        ax2.set_title("Degree Distribution Evolution")
+        plt.colorbar(im, ax=ax2, label="Fraction of Nodes")
+
+        # Add change points to heatmap
+        for cp in change_points:
+            ax2.axvline(x=cp, color="green", linestyle="--", alpha=0.5)
+
+        # 3. Top-k highest degree nodes (bottom left)
+        ax3 = fig.add_subplot(gs[1, 0])
+        k = 5  # Number of top nodes to track
+
+        # Find k nodes with highest average degree
+        avg_degrees = np.mean(degree_matrix, axis=0)
+        top_k_nodes = np.argsort(avg_degrees)[-k:]
+
+        for node in top_k_nodes:
+            ax3.plot(
+                range(n_timesteps),
+                degree_matrix[:, node],
+                alpha=0.7,
+                linewidth=1.5,
+                label=f"Node {node}",
+            )
+
+        ax3.set_xlabel("Time Step")
+        ax3.set_ylabel("Node Degree")
+        ax3.set_title(f"Top {k} Highest Degree Nodes")
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. Degree statistics (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+
+        # Calculate various statistics
+        max_degrees = np.max(degree_matrix, axis=1)
+        min_degrees = np.min(degree_matrix, axis=1)
+        std_degrees = np.std(degree_matrix, axis=1)
+
+        ax4.plot(range(n_timesteps), max_degrees, "b-", label="Max Degree")
+        ax4.plot(range(n_timesteps), min_degrees, "g-", label="Min Degree")
+        ax4.plot(range(n_timesteps), std_degrees, "r-", label="Std Dev")
+
+        ax4.set_xlabel("Time Step")
+        ax4.set_ylabel("Value")
+        ax4.set_title("Degree Statistics")
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        # Add overall title
+        fig.suptitle(
+            "Network Degree Analysis Over Time", fontsize=PlotStyle.LARGE_SIZE, y=0.95
+        )
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            plt.close()

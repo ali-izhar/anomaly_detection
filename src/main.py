@@ -377,6 +377,11 @@ def main():
     plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
     plt.close()
 
+    # 4. Node degree evolution plot
+    visualizer.plot_node_degree_evolution(
+        network_series, output_path=output_dir / "node_degree_evolution.png"
+    )
+
     # Analyze prediction accuracy
     print(f"\nPrediction Performance Summary for {args.model}:")
     print("-" * 50)
