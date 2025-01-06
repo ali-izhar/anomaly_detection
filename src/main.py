@@ -33,13 +33,27 @@ PREDICTOR_MAP = {
     "hybrid": HybridPredictor,
 }
 
+# Define all available graph models
+GRAPH_MODELS = {
+    # Full names
+    "barabasi_albert": "ba",
+    "watts_strogatz": "ws",
+    "erdos_renyi": "er",
+    "stochastic_block_model": "sbm",
+    "random_core_periphery": "rcp",
+    "lfr_benchmark": "lfr",
+    # Short aliases
+    "ba": "ba",
+    "ws": "ws",
+    "er": "er",
+    "sbm": "sbm",
+    "rcp": "rcp",
+    "lfr": "lfr",
+}
+
 # Define recommended predictors for each model
 MODEL_PREDICTOR_RECOMMENDATIONS = {
-    "ba": ["weighted", "hybrid"],
-    "er": ["weighted", "hybrid"],
-    "ws": ["weighted", "hybrid"],
-    "sbm": ["weighted", "hybrid"],
-    "rcp": ["weighted", "hybrid"],
+    model: ["weighted", "hybrid"] for model in GRAPH_MODELS.values()
 }
 
 
@@ -51,7 +65,7 @@ def get_args():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["ba", "er", "ws", "sbm", "rcp"],
+        choices=list(GRAPH_MODELS.keys()),
         default="ba",
         help="Type of network model to use",
     )
@@ -116,6 +130,9 @@ def get_args():
 
     args = parser.parse_args()
 
+    # Convert model name to standard format
+    args.model = GRAPH_MODELS[args.model]
+
     # If predictor not specified, use the recommended one
     if args.predictor is None:
         args.predictor = MODEL_PREDICTOR_RECOMMENDATIONS[args.model][0]
@@ -151,7 +168,7 @@ def generate_network_series(
     generator = GraphGenerator()
     feature_extractor = NetworkFeatureExtractor()
 
-    # Generate sequence
+    # Generate sequence with model-specific parameters
     result = generator.generate_sequence(
         model=config["model"], params=config["params"], seed=seed
     )
@@ -189,24 +206,7 @@ def analyze_prediction_phases(
     min_history: int,
     output_dir: Path,
 ) -> Dict[str, Any]:
-    """Analyze prediction accuracy across different phases.
-
-    Parameters
-    ----------
-    predictions : List[Dict[str, Any]]
-        Prediction results
-    actual_series : List[Dict[str, Any]]
-        Actual network series
-    min_history : int
-        Minimum history used
-    output_dir : Path
-        Directory to save results
-
-    Returns
-    -------
-    Dict[str, Any]
-        Dictionary containing analysis results
-    """
+    """Analyze prediction accuracy across different phases."""
     # Initialize feature extractor
     feature_extractor = NetworkFeatureExtractor()
 
@@ -286,11 +286,7 @@ def main():
     output_dir = Path(f"results/{args.model}_{args.predictor}_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize components
-    generator = GraphGenerator()
-    predictor = PREDICTOR_MAP[args.predictor]()
-
-    # Save configuration
+    # Get model-specific configuration
     config = GRAPH_CONFIGS[args.model](
         n=args.n_nodes,
         seq_len=args.seq_len,
@@ -298,6 +294,15 @@ def main():
         min_changes=args.min_changes,
         max_changes=args.max_changes,
     )
+
+    # Initialize predictor with model-specific config
+    if args.predictor == "hybrid":
+        predictor = PREDICTOR_MAP[args.predictor](model_type=args.model, config=config)
+    else:
+        # For non-hybrid predictors (e.g., weighted)
+        predictor = PREDICTOR_MAP[args.predictor]()
+
+    # Save configuration
     with open(output_dir / "config.json", "w") as f:
         json.dump(
             {
@@ -305,6 +310,13 @@ def main():
                 "parameters": {
                     k: str(v) if isinstance(v, Path) else v
                     for k, v in vars(args).items()
+                },
+                "model_config": {
+                    "model": config["model"],
+                    "params": {
+                        k: v if isinstance(v, (int, float, str, bool)) else str(v)
+                        for k, v in vars(config["params"]).items()
+                    },
                 },
             },
             f,

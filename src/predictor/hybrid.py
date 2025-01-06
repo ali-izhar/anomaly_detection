@@ -2,15 +2,15 @@
 
 import networkx as nx
 import numpy as np
-from typing import List, Dict, Any, Set, Optional, Tuple
-import community  # python-louvain package
+from typing import List, Dict, Any, Optional
+import community
 
 from .weighted import WeightedPredictor
 from graph.features import NetworkFeatureExtractor
 
 
 class HybridPredictor:
-    """Hybrid predictor combining WeightedPredictor with SBM block structure."""
+    """Hybrid predictor combining weighted averaging with structural role preservation."""
 
     def __init__(
         self,
@@ -35,47 +35,118 @@ class HybridPredictor:
             binary=False,  # We want probabilities, not binary
         )
 
-        # Initialize default SBM parameters
-        self.sbm_params = {
-            "num_blocks": 3,
-            "min_block_size": 25,
-            "max_block_size": 50,
-            "intra_prob": 0.7,
-            "inter_prob": 0.01,
+        # Initialize model-specific parameters
+        self.model_params = self._initialize_model_params()
+
+    def _initialize_model_params(self) -> Dict:
+        """Initialize parameters based on model type."""
+        if not self.config or "params" not in self.config:
+            return self._get_default_params()
+
+        params = self.config["params"]
+        model_params = {}
+
+        if self.model_type == "sbm":
+            # SBM-specific parameters
+            model_params.update(
+                {
+                    "num_blocks": getattr(params, "num_blocks", 3),
+                    "min_block_size": getattr(params, "min_block_size", 25),
+                    "max_block_size": getattr(params, "max_block_size", 50),
+                    "intra_prob": getattr(params, "intra_prob", 0.7),
+                    "inter_prob": getattr(params, "inter_prob", 0.01),
+                    "min_intra_prob": getattr(params, "min_intra_prob", 0.6),
+                    "max_intra_prob": getattr(params, "max_intra_prob", 0.8),
+                    "min_inter_prob": getattr(params, "min_inter_prob", 0.005),
+                    "max_inter_prob": getattr(params, "max_inter_prob", 0.015),
+                    "prob_tolerance": getattr(params, "intra_prob_std", 0.005) * 2,
+                }
+            )
+        elif self.model_type == "ba":
+            # BA-specific parameters
+            model_params.update(
+                {
+                    "m": getattr(params, "m", 3),
+                    "min_m": getattr(params, "min_m", 2),
+                    "max_m": getattr(params, "max_m", 4),
+                    "preferential_exp": getattr(params, "preferential_exp", 1.0),
+                    "prob_tolerance": 0.1,
+                }
+            )
+        elif self.model_type == "er":
+            # ER-specific parameters
+            model_params.update(
+                {
+                    "prob": getattr(params, "prob", 0.15),
+                    "min_prob": getattr(params, "min_prob", 0.1),
+                    "max_prob": getattr(params, "max_prob", 0.2),
+                    "prob_tolerance": getattr(params, "prob_std", 0.01) * 2,
+                }
+            )
+        elif self.model_type == "ws":
+            # WS-specific parameters
+            model_params.update(
+                {
+                    "k": getattr(params, "k_nearest", 6),
+                    "min_k": getattr(params, "min_k", 4),
+                    "max_k": getattr(params, "max_k", 8),
+                    "rewire_prob": getattr(params, "rewire_prob", 0.1),
+                    "min_rewire_prob": getattr(params, "min_prob", 0.05),
+                    "max_rewire_prob": getattr(params, "max_prob", 0.15),
+                    "prob_tolerance": getattr(params, "prob_std", 0.01) * 2,
+                }
+            )
+        elif self.model_type == "rcp":
+            # RCP-specific parameters
+            model_params.update(
+                {
+                    "core_size": getattr(params, "core_size", params.n // 5),
+                    "min_core_size": getattr(params, "min_core_size", params.n // 6),
+                    "max_core_size": getattr(params, "max_core_size", params.n // 4),
+                    "core_prob": getattr(params, "core_prob", 0.8),
+                    "periph_prob": getattr(params, "periph_prob", 0.05),
+                    "core_periph_prob": getattr(params, "core_periph_prob", 0.2),
+                    "prob_tolerance": getattr(params, "core_prob_std", 0.02) * 2,
+                }
+            )
+        else:
+            # Default parameters for other models
+            model_params = self._get_default_params()
+
+        return model_params
+
+    def _get_default_params(self) -> Dict:
+        """Get default parameters for unknown model types."""
+        return {
             "prob_tolerance": 0.05,
+            "community_resolution": 1.2,
+            "min_edge_prob": 0.01,
+            "max_edge_prob": 0.9,
         }
 
-        # Update parameters from config if provided
-        if config and "params" in config:
-            params = config["params"]
-            if hasattr(params, "num_blocks"):
-                self.sbm_params["num_blocks"] = params.num_blocks
-            if hasattr(params, "min_block_size"):
-                self.sbm_params["min_block_size"] = params.min_block_size
-            if hasattr(params, "max_block_size"):
-                self.sbm_params["max_block_size"] = params.max_block_size
-            if hasattr(params, "intra_prob"):
-                self.sbm_params["intra_prob"] = params.intra_prob
-            if hasattr(params, "inter_prob"):
-                self.sbm_params["inter_prob"] = params.inter_prob
-            if hasattr(params, "min_intra_prob"):
-                self.sbm_params["min_intra_prob"] = params.min_intra_prob
-            if hasattr(params, "max_intra_prob"):
-                self.sbm_params["max_intra_prob"] = params.max_intra_prob
-            if hasattr(params, "min_inter_prob"):
-                self.sbm_params["min_inter_prob"] = params.min_inter_prob
-            if hasattr(params, "max_inter_prob"):
-                self.sbm_params["max_inter_prob"] = params.max_inter_prob
-
-            # Set tolerance based on probability ranges
-            if hasattr(params, "intra_prob_std"):
-                self.sbm_params["prob_tolerance"] = params.intra_prob_std * 2
-
     def _detect_communities(self, G: nx.Graph) -> Dict[int, int]:
-        """Detect communities using Louvain method with higher resolution."""
+        """Detect communities using method appropriate for the model type."""
         try:
-            # Use higher resolution to detect more compact communities
-            return community.best_partition(G, resolution=1.2)
+            if self.model_type == "sbm":
+                # Use higher resolution for SBM
+                return community.best_partition(G, resolution=1.2)
+            elif self.model_type == "rcp":
+                # For RCP, try to identify core-periphery structure
+                degrees = dict(G.degree())
+                sorted_nodes = sorted(
+                    degrees.keys(), key=lambda x: degrees[x], reverse=True
+                )
+                core_size = self.model_params["core_size"]
+                return {
+                    node: 0 if i < core_size else 1
+                    for i, node in enumerate(sorted_nodes)
+                }
+            elif self.model_type == "ba":
+                # For BA, use degree-based communities
+                return community.best_partition(G, resolution=0.8)
+            else:
+                # Default community detection
+                return community.best_partition(G, resolution=1.0)
         except:
             # Fallback to connected components
             components = nx.connected_components(G)
@@ -84,7 +155,8 @@ class HybridPredictor:
     def _analyze_block_structure(
         self, G: nx.Graph, communities: Dict[int, int]
     ) -> Dict[str, Any]:
-        """Analyze current block structure with enhanced metrics."""
+        """Analyze network structure based on model type."""
+        # Basic structure analysis
         n_blocks = max(communities.values()) + 1
         block_sizes = {}
         intra_edges = {}
@@ -98,7 +170,7 @@ class HybridPredictor:
             node_degrees[block] = node_degrees.get(block, [])
             node_degrees[block].append(G.degree(node))
 
-        # Count edges with enhanced tracking
+        # Count edges with model-specific tracking
         for i, j in G.edges():
             bi, bj = communities[i], communities[j]
             if bi == bj:
@@ -107,28 +179,51 @@ class HybridPredictor:
                 key = tuple(sorted([bi, bj]))
                 inter_edges[key] = inter_edges.get(key, 0) + 1
 
-        # Calculate enhanced metrics
+        # Calculate basic metrics
         intra_densities = {}
         avg_degrees = {}
         degree_stds = {}
 
         for block, size in block_sizes.items():
-            # Intra-block density
             possible = size * (size - 1) / 2
             if possible > 0:
                 intra_densities[block] = intra_edges.get(block, 0) / possible
-
-            # Degree statistics per block
             if block in node_degrees and node_degrees[block]:
                 avg_degrees[block] = np.mean(node_degrees[block])
                 degree_stds[block] = np.std(node_degrees[block])
 
-        # Inter-block density with enhanced metrics
+        # Calculate inter-block densities
         inter_densities = {}
         for (b1, b2), edges in inter_edges.items():
             possible = block_sizes[b1] * block_sizes[b2]
             if possible > 0:
                 inter_densities[(b1, b2)] = edges / possible
+
+        # Model-specific metrics
+        model_specific = {}
+        if self.model_type == "ba":
+            # Add BA-specific metrics (degree distribution, hubs)
+            model_specific["degree_distribution"] = np.array(
+                list(dict(G.degree()).values())
+            )
+            model_specific["hub_nodes"] = [
+                n
+                for n, d in G.degree()
+                if d
+                > np.mean(list(dict(G.degree()).values()))
+                + np.std(list(dict(G.degree()).values()))
+            ]
+        elif self.model_type == "ws":
+            # Add WS-specific metrics (clustering, path length)
+            model_specific["clustering"] = nx.average_clustering(G)
+            try:
+                model_specific["avg_path_length"] = nx.average_shortest_path_length(G)
+            except:
+                model_specific["avg_path_length"] = float("inf")
+        elif self.model_type == "rcp":
+            # Add RCP-specific metrics (core density, periphery density)
+            core_nodes = [n for n, c in communities.items() if c == 0]
+            model_specific["core_density"] = nx.density(G.subgraph(core_nodes))
 
         return {
             "block_sizes": block_sizes,
@@ -142,12 +237,13 @@ class HybridPredictor:
             "avg_inter_density": (
                 np.mean(list(inter_densities.values())) if inter_densities else 0
             ),
+            "model_specific": model_specific,
         }
 
     def predict(
         self, history: List[Dict[str, Any]], horizon: int = 1
     ) -> List[np.ndarray]:
-        """Predict future states using enhanced hybrid approach."""
+        """Predict future states using model-aware hybrid approach."""
         if len(history) < self.n_history:
             raise ValueError(
                 f"Not enough history. Need {self.n_history}, got {len(history)}."
@@ -164,136 +260,103 @@ class HybridPredictor:
             current_G = current_history[-1]["graph"]
             n = current_G.number_of_nodes()
 
-            # 1. Get weighted prediction probabilities
+            # Get weighted prediction probabilities
             weighted_pred = self.base_predictor._compute_weighted_average(
                 [st["adjacency"] for st in current_history[-self.n_history :]]
             )
 
-            # 2. Detect and analyze communities
+            # Detect and analyze structure
             communities = self._detect_communities(current_G)
-            block_analysis = self._analyze_block_structure(current_G, communities)
+            structure_analysis = self._analyze_block_structure(current_G, communities)
 
-            # 3. Adaptive thresholds based on block analysis
-            intra_threshold = min(
-                self.sbm_params.get("max_intra_prob", self.sbm_params["intra_prob"]),
-                max(
-                    self.sbm_params.get(
-                        "min_intra_prob", self.sbm_params["intra_prob"] * 0.8
-                    ),
-                    block_analysis["avg_intra_density"] * 1.1,
-                ),
-            )
-            inter_threshold = min(
-                self.sbm_params.get(
-                    "max_inter_prob", self.sbm_params["inter_prob"] * 1.5
-                ),
-                max(
-                    self.sbm_params.get(
-                        "min_inter_prob", self.sbm_params["inter_prob"] * 0.5
-                    ),
-                    block_analysis["avg_inter_density"] * 0.9,
-                ),
-            )
-
-            # 4. Calculate target edges with density trend and block structure
-            current_edges = current_G.number_of_edges()
-            base_density = nx.density(current_G)
-
-            # Adjust density based on block structure
-            if self.model_type == "sbm":
-                num_blocks = self.sbm_params["num_blocks"]
-                expected_intra_edges = sum(
-                    size * (size - 1) / 2 * self.sbm_params["intra_prob"]
-                    for size in block_analysis["block_sizes"].values()
-                )
-                total_possible = n * (n - 1) / 2
-                target_density = (expected_intra_edges / total_possible) + density_trend
+            # Calculate target density based on model type
+            if self.model_type == "ba":
+                # BA models tend to become denser over time
+                m = self.model_params["m"]
+                target_density = min(0.3, (2 * m * (n - m)) / (n * (n - 1)))
+            elif self.model_type == "er":
+                # ER models maintain relatively stable density
+                target_density = self.model_params["prob"]
+            elif self.model_type == "ws":
+                # WS models maintain average degree
+                k = self.model_params["k"]
+                target_density = k / (n - 1)
+            elif self.model_type == "rcp":
+                # RCP models have distinct core/periphery densities
+                core_size = self.model_params["core_size"]
+                target_density = (
+                    core_size * (core_size - 1) * self.model_params["core_prob"]
+                    + (n - core_size)
+                    * (n - core_size - 1)
+                    * self.model_params["periph_prob"]
+                    + 2
+                    * core_size
+                    * (n - core_size)
+                    * self.model_params["core_periph_prob"]
+                ) / (n * (n - 1))
             else:
-                target_density = base_density + density_trend
+                # Default density evolution
+                target_density = nx.density(current_G) + density_trend
 
-            # Ensure density stays within reasonable bounds
             target_density = max(0.01, min(0.95, target_density))
             target_edges = int(target_density * (n * (n - 1) / 2))
 
-            # 5. Enhanced edge probability calculation with configuration awareness
+            # Calculate edge probabilities based on model type
             edge_probs = []
             for i in range(n):
                 for j in range(i + 1, n):
-                    ci, cj = communities[i], communities[j]
                     base_prob = weighted_pred[i, j]
+                    ci, cj = communities[i], communities[j]
 
-                    if ci == cj:  # Same community
-                        block_density = block_analysis["intra_densities"].get(ci, 0)
-                        if current_G.has_edge(i, j):
-                            # Use max_intra_prob as ceiling for existing edges
+                    if self.model_type == "ba":
+                        # BA: Consider degree preferential attachment
+                        deg_i, deg_j = current_G.degree(i), current_G.degree(j)
+                        pref_prob = (deg_i * deg_j) / sum(
+                            dict(current_G.degree()).values()
+                        ) ** 2
+                        prob = (base_prob + pref_prob) / 2
+                    elif self.model_type == "rcp":
+                        # RCP: Consider core-periphery structure
+                        if ci == cj == 0:  # Both in core
+                            prob = max(base_prob, self.model_params["core_prob"] * 0.8)
+                        elif ci == cj == 1:  # Both in periphery
                             prob = min(
-                                self.sbm_params.get("max_intra_prob", 0.8),
-                                max(base_prob, block_density) * 1.2,
+                                base_prob, self.model_params["periph_prob"] * 1.2
                             )
-                        else:
-                            # Use min_intra_prob as floor for new edges
+                        else:  # Core-periphery connection
+                            prob = self.model_params["core_periph_prob"]
+                    else:
+                        # Default probability calculation
+                        if ci == cj:  # Same community
                             prob = max(
-                                self.sbm_params.get("min_intra_prob", 0.4),
-                                min(base_prob * 1.1, block_density * 0.9),
+                                base_prob, structure_analysis["avg_intra_density"]
                             )
-                    else:  # Different communities
-                        block_key = tuple(sorted([ci, cj]))
-                        block_density = block_analysis["inter_densities"].get(
-                            block_key, 0
-                        )
-                        if current_G.has_edge(i, j):
-                            # Use max_inter_prob as ceiling for existing edges
+                        else:  # Different communities
                             prob = min(
-                                self.sbm_params.get("max_inter_prob", 0.2),
-                                max(base_prob * 0.8, block_density),
-                            )
-                        else:
-                            # Use min_inter_prob as floor for new edges
-                            prob = max(
-                                self.sbm_params.get("min_inter_prob", 0.005),
-                                min(base_prob * 0.5, block_density * 0.7),
+                                base_prob, structure_analysis["avg_inter_density"]
                             )
 
                     edge_probs.append((prob, i, j))
 
-            # 6. Create prediction matrix with enhanced edge selection
+            # Create prediction matrix
             predicted = np.zeros((n, n))
             edges_added = 0
 
-            # First maintain existing high-density intra-community edges
+            # Add edges based on probabilities
             for prob, i, j in sorted(edge_probs, reverse=True):
                 if edges_added >= target_edges:
                     break
 
-                ci, cj = communities[i], communities[j]
-                if ci == cj and current_G.has_edge(i, j):
-                    if prob > intra_threshold * 0.8:
+                if current_G.has_edge(
+                    i, j
+                ):  # Maintain existing edges with high probability
+                    if prob > 0.5:
                         predicted[i, j] = predicted[j, i] = 1
                         edges_added += 1
-
-            # Then add new high-probability intra-community edges
-            if edges_added < target_edges:
-                for prob, i, j in sorted(edge_probs, reverse=True):
-                    if edges_added >= target_edges:
-                        break
-
-                    ci, cj = communities[i], communities[j]
-                    if ci == cj and not predicted[i, j]:
-                        if prob > intra_threshold:
-                            predicted[i, j] = predicted[j, i] = 1
-                            edges_added += 1
-
-            # Finally add essential inter-community edges
-            if edges_added < target_edges:
-                for prob, i, j in sorted(edge_probs, reverse=True):
-                    if edges_added >= target_edges:
-                        break
-
-                    ci, cj = communities[i], communities[j]
-                    if ci != cj and current_G.has_edge(i, j):
-                        if prob > inter_threshold * 0.9:
-                            predicted[i, j] = predicted[j, i] = 1
-                            edges_added += 1
+                else:  # Add new edges conservatively
+                    if prob > 0.7:
+                        predicted[i, j] = predicted[j, i] = 1
+                        edges_added += 1
 
             predictions.append(predicted)
             current_history.append(
