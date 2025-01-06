@@ -355,23 +355,26 @@ def main():
     plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Network snapshots at key points
+    # 2. Network structure comparison
     plt.figure(figsize=(15, 5))
-    visualizer.plot_network_snapshots(
+    visualizer.plot_network_comparison(
         network_series,
         predictions,
         [min_history, len(predictions) // 2, -1],
         model_type=args.model,
     )
-    plt.savefig(output_dir / "network_snapshots.png", dpi=300, bbox_inches="tight")
+    plt.savefig(output_dir / "network_comparison.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 3. Advanced Adjacency Analysis
-    plt.figure(figsize=(15, 10))
-    visualizer.plot_adjacency_analysis(
-        network_series, predictions, model_type=args.model
+    # 3. Adjacency matrix comparison
+    plt.figure(figsize=(15, 5))
+    visualizer.plot_adjacency_matrices(
+        network_series,
+        predictions,
+        [min_history, len(predictions) // 2, -1],
+        model_type=args.model,
     )
-    plt.savefig(output_dir / "adjacency_analysis.png", dpi=300, bbox_inches="tight")
+    plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Analyze prediction accuracy
