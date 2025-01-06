@@ -2,7 +2,7 @@
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Union
 import networkx as nx
 import numpy as np
 
@@ -78,6 +78,232 @@ class Visualizer:
         """Initialize visualizer with consistent style."""
         PlotStyle.apply_style()
 
+    def _create_figure_with_suptitle(
+        self,
+        title: str,
+        model_type: str = None,
+        figsize: Tuple[int, int] = (20, 15),
+    ) -> Tuple[plt.Figure, str]:
+        """Create a figure with a formatted super title."""
+        fig = plt.figure(figsize=figsize)
+        fig.patch.set_facecolor("white")
+
+        model_name = None
+        if model_type:
+            model_name = {
+                "ba": "Barabási-Albert",
+                "er": "Erdős-Rényi",
+                "ws": "Watts-Strogatz",
+                "sbm": "Stochastic Block Model",
+                "rcp": "Random Core-Periphery",
+                "lfr": "LFR Benchmark",
+            }.get(model_type.lower(), model_type)
+
+            title = f"{title} - {model_name} Model"
+
+        fig.suptitle(title, fontsize=PlotStyle.LARGE_SIZE + 2, y=0.95, weight="bold")
+
+        return fig, model_name
+
+    def _add_legend_to_figure(
+        self,
+        fig: plt.Figure,
+        elements: List[Tuple[str, str, float]],
+        title: str,
+        position: List[float] = [0.88, 0.4, 0.12, 0.25],
+    ) -> None:
+        """Add a legend to the figure."""
+        legend_ax = fig.add_axes(position)
+        legend_ax.axis("off")
+
+        legend_patches = [
+            Patch(facecolor=color, alpha=alpha, label=label)
+            for color, label, alpha in elements
+        ]
+
+        legend = legend_ax.legend(
+            handles=legend_patches,
+            loc="center",
+            title=title,
+            fontsize=PlotStyle.MEDIUM_SIZE,
+        )
+        legend.get_title().set_fontweight("bold")
+        legend.get_title().set_fontsize(PlotStyle.MEDIUM_SIZE)
+
+    def _add_prediction_legend(
+        self,
+        fig: plt.Figure,
+        position: List[float] = [0.87, 0.4, 0.12, 0.2],
+        title: str = "Prediction Types",
+    ) -> None:
+        """Add prediction legend with consistent styling."""
+        elements = [
+            ("green", "Correct Prediction", 0.7),
+            ("red", "False Positive", 0.7),
+            ("gray", "Missed Edge", 0.3),
+        ]
+        self._add_legend_to_figure(fig, elements, title, position)
+
+    def _add_metric_textbox(
+        self,
+        ax: plt.Axes,
+        text: str,
+        position: Tuple[float, float],
+        va: str = "bottom",
+        fontsize: int = None,
+    ) -> None:
+        """Add a metric textbox to an axis."""
+        if fontsize is None:
+            fontsize = PlotStyle.SMALL_SIZE
+
+        ax.text(
+            position[0],
+            position[1],
+            text,
+            transform=ax.transAxes,
+            fontsize=fontsize,
+            ha="right",
+            va=va,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3),
+        )
+
+    def _setup_axis_with_grid(
+        self,
+        ax: plt.Axes,
+        title: str,
+        xlabel: str = None,
+        ylabel: str = None,
+    ) -> None:
+        """Set up an axis with consistent styling."""
+        ax.grid(True, alpha=0.2, linestyle="--", color=PlotStyle.GRID_COLOR)
+        ax.set_facecolor(PlotStyle.BACKGROUND_COLOR)
+
+        ax.set_title(title, pad=20, fontsize=PlotStyle.MEDIUM_SIZE + 2, weight="bold")
+
+        if xlabel:
+            ax.set_xlabel(xlabel, fontsize=PlotStyle.MEDIUM_SIZE)
+        if ylabel:
+            ax.set_ylabel(ylabel, fontsize=PlotStyle.MEDIUM_SIZE)
+
+        ax.tick_params(labelsize=PlotStyle.SMALL_SIZE)
+
+    def _calculate_network_metrics(
+        self,
+        G_actual: nx.Graph,
+        G_pred: nx.Graph,
+    ) -> Tuple[List, List, List, Dict[str, Union[int, float]]]:
+        """Calculate network comparison metrics."""
+        correct_edges = []
+        false_positive_edges = []
+        missed_edges = []
+
+        for e in G_pred.edges():
+            if G_actual.has_edge(*e):
+                correct_edges.append(e)
+            else:
+                false_positive_edges.append(e)
+
+        for e in G_actual.edges():
+            if not G_pred.has_edge(*e):
+                missed_edges.append(e)
+
+        total_actual = len(G_actual.edges())
+        total_predicted = len(G_pred.edges())
+        correct_count = len(correct_edges)
+        false_positive_count = len(false_positive_edges)
+        missed_count = len(missed_edges)
+
+        coverage = correct_count / total_actual if total_actual > 0 else 0
+        fpr = false_positive_count / total_predicted if total_predicted > 0 else 0
+
+        metrics = {
+            "total_actual": total_actual,
+            "total_predicted": total_predicted,
+            "correct_count": correct_count,
+            "false_positive_count": false_positive_count,
+            "missed_count": missed_count,
+            "coverage": coverage,
+            "fpr": fpr,
+        }
+
+        return correct_edges, false_positive_edges, missed_edges, metrics
+
+    def _calculate_adjacency_metrics(
+        self, adj_actual: np.ndarray, adj_pred: np.ndarray
+    ) -> Dict[str, Union[int, float]]:
+        """Calculate coverage, FPR, and related counts for adjacency matrices."""
+        true_links = np.sum(adj_actual)
+        correct_pred = np.sum((adj_actual == 1) & (adj_pred == 1))  # True positives
+        false_pos = np.sum((adj_actual == 0) & (adj_pred == 1))  # False positives
+        missed = np.sum((adj_actual == 1) & (adj_pred == 0))  # Missed links
+        total_pred = np.sum(adj_pred)
+
+        coverage = correct_pred / true_links if true_links > 0 else 0
+        fpr = false_pos / total_pred if total_pred > 0 else 0
+
+        return {
+            "coverage": coverage,
+            "fpr": fpr,
+            "correct_count": int(correct_pred),
+            "false_positive_count": int(false_pos),
+            "missed_count": int(missed),
+            "total_actual": int(true_links),
+            "total_predicted": int(total_pred),
+        }
+
+    def _create_colored_pred_matrix(
+        self, adj_actual: np.ndarray, adj_pred: np.ndarray
+    ) -> np.ndarray:
+        """Create an RGB array highlighting correct predictions (green) and false positives (red)."""
+        colored_pred = np.zeros((*adj_pred.shape, 3))
+
+        correct_mask = (adj_actual == 1) & (adj_pred == 1)
+        colored_pred[correct_mask] = [0, 1, 0]  # Green
+
+        false_pos_mask = (adj_actual == 0) & (adj_pred == 1)
+        colored_pred[false_pos_mask] = [1, 0, 0]  # Red
+
+        return colored_pred
+
+    def _draw_color_coded_edges(
+        self,
+        G: nx.Graph,
+        pos: Dict[int, Tuple[float, float]],
+        ax: plt.Axes,
+        correct_edges: List,
+        false_positive_edges: List,
+        missed_edges: List,
+    ) -> None:
+        """Draw edges with different colors for correct, false positives, and missed edges."""
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            ax=ax,
+            edgelist=correct_edges,
+            edge_color="green",
+            alpha=0.7,
+            width=0.5,
+        )
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            ax=ax,
+            edgelist=false_positive_edges,
+            edge_color="red",
+            alpha=0.7,
+            width=0.5,
+        )
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            ax=ax,
+            edgelist=missed_edges,
+            edge_color="gray",
+            alpha=0.3,
+            width=0.5,
+            style="dashed",
+        )
+
     def plot_metric_evolution(
         self,
         actual_series: List[Dict[str, Any]],
@@ -86,21 +312,7 @@ class Visualizer:
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (20, 15),
     ) -> None:
-        """Create an enhanced visualization of network metric evolution over time.
-
-        Parameters
-        ----------
-        actual_series : List[Dict]
-            List of actual network states
-        predictions : List[Dict]
-            List of predicted network states
-        min_history : int
-            Minimum history length before predictions start
-        model_type : str
-            Type of network model being analyzed
-        figsize : Tuple[int, int]
-            Figure size (width, height) in inches
-        """
+        """Create an enhanced visualization of network metric evolution over time."""
         # Calculate metrics
         actual_metrics = [
             feature_extractor.get_all_metrics(net["graph"]).__dict__
@@ -119,20 +331,10 @@ class Visualizer:
         ]
 
         # Create figure with GridSpec for better layout
-        fig = plt.figure(figsize=figsize)
-        fig.patch.set_facecolor("white")
+        fig, model_name = self._create_figure_with_suptitle(
+            "Evolution of Network Metrics", model_type, figsize
+        )
 
-        # Create title with model name formatting
-        model_name = {
-            "ba": "Barabási-Albert",
-            "er": "Erdős-Rényi",
-            "ws": "Watts-Strogatz",
-            "sbm": "Stochastic Block Model",
-            "rcp": "Random Core-Periphery",
-            "lfr": "LFR Benchmark",
-        }.get(model_type.lower(), model_type)
-
-        # Create GridSpec with space for title and legend
         gs = fig.add_gridspec(
             3,
             2,
@@ -141,13 +343,6 @@ class Visualizer:
             hspace=0.25,
             wspace=0.25,
             top=0.85,
-        )
-
-        fig.suptitle(
-            f"Evolution of Network Metrics - {model_name} Model",
-            fontsize=PlotStyle.LARGE_SIZE + 2,
-            y=0.95,
-            weight="bold",
         )
 
         # Define metrics to plot with descriptions
@@ -170,45 +365,24 @@ class Visualizer:
 
         times = list(range(len(actual_series)))
 
-        # Create legend axes on the right
-        legend_ax = fig.add_axes([0.88, 0.4, 0.12, 0.25])  # Moved back to the right
-        legend_ax.axis("off")
+        # Create legend axes
+        actual_style = PlotStyle.LINE_STYLES["actual"]
+        pred_style = PlotStyle.LINE_STYLES["predicted"]
+        change_style = PlotStyle.LINE_STYLES["change_point"]
         legend_elements = [
-            Patch(
-                facecolor=PlotStyle.LINE_STYLES["actual"]["color"],
-                alpha=PlotStyle.LINE_STYLES["actual"]["alpha"],
-                label="Actual",
-            ),
-            Patch(
-                facecolor=PlotStyle.LINE_STYLES["predicted"]["color"],
-                alpha=PlotStyle.LINE_STYLES["predicted"]["alpha"],
-                label="Predicted",
-            ),
-            Patch(
-                facecolor=PlotStyle.LINE_STYLES["change_point"]["color"],
-                alpha=PlotStyle.LINE_STYLES["change_point"]["alpha"],
-                label="Change Point",
-            ),
-            Patch(facecolor="#95a5a6", alpha=0.5, label="Prediction Start"),
+            (actual_style["color"], "Actual", actual_style["alpha"]),
+            (pred_style["color"], "Predicted", pred_style["alpha"]),
+            (change_style["color"], "Change Point", change_style["alpha"]),
+            ("#95a5a6", "Prediction Start", 0.5),
         ]
-        legend = legend_ax.legend(
-            handles=legend_elements,
-            loc="center",
-            title="Series Types",
-            fontsize=PlotStyle.MEDIUM_SIZE,
-        )
-        legend.get_title().set_fontweight("bold")
-        legend.get_title().set_fontsize(PlotStyle.MEDIUM_SIZE)
+        self._add_legend_to_figure(fig, legend_elements, "Series Types")
 
-        # Plot each metric with enhanced styling
+        # Plot each metric
         for idx, (metric_name, title, description) in enumerate(metrics):
             ax = fig.add_subplot(gs[idx // 2, idx % 2])
+            self._setup_axis_with_grid(ax, title)
 
-            # Add subtle background grid
-            ax.grid(True, alpha=0.2, linestyle="--", color=PlotStyle.GRID_COLOR)
-            ax.set_facecolor(PlotStyle.BACKGROUND_COLOR)
-
-            # Plot change points with enhanced visibility
+            # Plot change points
             for cp in change_points:
                 ax.axvline(
                     x=cp,
@@ -216,19 +390,15 @@ class Visualizer:
                     **PlotStyle.LINE_STYLES["change_point"],
                 )
 
-            # Extract metric values
             actual_values = [m[metric_name] for m in actual_metrics]
             pred_values = [m[metric_name] for m in pred_metrics]
 
-            # Plot actual values with confidence interval
             ax.plot(
                 times,
                 actual_values,
                 label="Actual" if idx == 0 else "",
                 **PlotStyle.LINE_STYLES["actual"],
             )
-
-            # Plot predicted values
             ax.plot(
                 pred_times,
                 pred_values,
@@ -236,7 +406,7 @@ class Visualizer:
                 **PlotStyle.LINE_STYLES["predicted"],
             )
 
-            # Add min history marker
+            # Mark start of prediction
             ax.axvline(
                 x=min_history,
                 color="#95a5a6",
@@ -245,27 +415,10 @@ class Visualizer:
                 label="Prediction Start" if idx == 0 else "",
             )
 
-            # Enhanced title and labels
-            ax.set_title(
-                title, pad=10, fontsize=PlotStyle.MEDIUM_SIZE + 2, weight="bold"
-            )
-            ax.set_xlabel("Time Step", fontsize=PlotStyle.MEDIUM_SIZE)
-            ax.set_ylabel("Value", fontsize=PlotStyle.MEDIUM_SIZE)
+            # Add metric description
+            self._add_metric_textbox(ax, description, (0.98, 0.02))
 
-            # Add metric description as text box
-            ax.text(
-                0.98,
-                0.02,
-                description,
-                transform=ax.transAxes,
-                fontsize=PlotStyle.SMALL_SIZE,
-                style="italic",
-                ha="right",
-                va="bottom",
-                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3),
-            )
-
-            # Calculate and display error metrics for predictions
+            # Calculate and display error metrics
             if len(pred_values) > 0:
                 actual_pred_range = actual_values[min_history:][: len(pred_values)]
                 if len(actual_pred_range) > 0:
@@ -279,23 +432,8 @@ class Visualizer:
                     )
 
                     error_text = f"MAE: {mae:.3f}\nRMSE: {rmse:.3f}"
-                    ax.text(
-                        0.98,
-                        0.98,
-                        error_text,
-                        transform=ax.transAxes,
-                        fontsize=PlotStyle.SMALL_SIZE,
-                        ha="right",
-                        va="top",
-                        bbox=dict(
-                            facecolor="white", alpha=0.8, edgecolor="none", pad=3
-                        ),
-                    )
+                    self._add_metric_textbox(ax, error_text, (0.98, 0.98))
 
-            # Customize tick labels
-            ax.tick_params(labelsize=PlotStyle.SMALL_SIZE)
-
-        # Adjust layout
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
     def plot_network_comparison(
@@ -309,23 +447,14 @@ class Visualizer:
         """Plot network structure comparison at specified time points."""
         n_points = len(time_points)
 
-        # Create figure with space for title
-        fig = plt.figure(figsize=figsize)
+        # Create figure
+        fig, model_name = self._create_figure_with_suptitle(
+            "Network Structure Comparison", model_type, figsize
+        )
+
         gs = fig.add_gridspec(2, n_points, hspace=0.4, wspace=0.3, top=0.85)
 
-        model_name = (
-            "Barabási-Albert"
-            if model_type.lower() == "ba"
-            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
-        )
-        fig.suptitle(
-            f"Network Structure Comparison - {model_name} Model",
-            fontsize=PlotStyle.LARGE_SIZE,
-            y=0.95,
-            weight="bold",
-        )
-
-        # Create legend axes on the right
+        # Create legend for edges
         legend_ax = fig.add_axes([0.87, 0.4, 0.1, 0.2])
         legend_ax.axis("off")
         legend_elements = [
@@ -343,7 +472,7 @@ class Visualizer:
             if t < 0:
                 t = len(predictions) + t
 
-            # Plot actual network
+            # Actual network
             ax_actual = fig.add_subplot(gs[0, i])
             G_actual = actual_series[t]["graph"]
             pos = nx.spring_layout(G_actual, seed=42)
@@ -354,85 +483,33 @@ class Visualizer:
             nx.draw_networkx_edges(
                 G_actual, pos, ax=ax_actual, edge_color="gray", alpha=0.4, width=0.5
             )
-
             ax_actual.set_title(f"Actual (t={t})")
             ax_actual.axis("off")
 
-            # Plot predicted network with color-coded edges
+            # Predicted network
             ax_pred = fig.add_subplot(gs[1, i])
             pred_idx = t - len(actual_series) + len(predictions)
             G_pred = predictions[pred_idx]["graph"]
 
-            # Draw nodes
             nx.draw_networkx_nodes(
                 G_pred, pos, ax=ax_pred, **PlotStyle.NODE_STYLES["predicted"]
             )
 
-            # Color-code edges based on prediction accuracy
-            correct_edges = []
-            false_positive_edges = []
-            missed_edges = []
-
-            # Find correct and false positive edges
-            for e in G_pred.edges():
-                if G_actual.has_edge(*e):
-                    correct_edges.append(e)
-                else:
-                    false_positive_edges.append(e)
-
-            # Find missed edges
-            for e in G_actual.edges():
-                if not G_pred.has_edge(*e):
-                    missed_edges.append(e)
-
-            # Draw edges with different colors
-            nx.draw_networkx_edges(
-                G_pred,
-                pos,
-                ax=ax_pred,
-                edgelist=correct_edges,
-                edge_color="green",
-                alpha=0.7,
-                width=0.5,
+            # Color-coded edges
+            correct_edges, false_positive_edges, missed_edges, metrics = (
+                self._calculate_network_metrics(G_actual, G_pred)
             )
-            nx.draw_networkx_edges(
-                G_pred,
-                pos,
-                ax=ax_pred,
-                edgelist=false_positive_edges,
-                edge_color="red",
-                alpha=0.7,
-                width=0.5,
-            )
-            nx.draw_networkx_edges(
-                G_pred,
-                pos,
-                ax=ax_pred,
-                edgelist=missed_edges,
-                edge_color="gray",
-                alpha=0.3,
-                width=0.5,
-                style="dashed",
+            self._draw_color_coded_edges(
+                G_pred, pos, ax_pred, correct_edges, false_positive_edges, missed_edges
             )
 
-            # Calculate metrics
-            total_actual = len(G_actual.edges())
-            total_predicted = len(G_pred.edges())
-            correct_count = len(correct_edges)
-            false_positive_count = len(false_positive_edges)
-            missed_count = len(missed_edges)
-
-            coverage = correct_count / total_actual if total_actual > 0 else 0
-            fpr = false_positive_count / total_predicted if total_predicted > 0 else 0
-
-            # Add metrics as text
             metrics_text = (
                 f"Predicted (t={t})\n"
-                f"Coverage: {coverage:.1%}\n"
-                f"FPR: {fpr:.1%}\n"
-                f"Correct: {correct_count}\n"
-                f"False+: {false_positive_count}\n"
-                f"Missed: {missed_count}"
+                f"Coverage: {metrics['coverage']:.1%}\n"
+                f"FPR: {metrics['fpr']:.1%}\n"
+                f"Correct: {metrics['correct_count']}\n"
+                f"FP: {metrics['false_positive_count']}\n"
+                f"Missed: {metrics['missed_count']}"
             )
             ax_pred.set_title(metrics_text, pad=2, fontsize=PlotStyle.SMALL_SIZE)
             ax_pred.axis("off")
@@ -445,46 +522,29 @@ class Visualizer:
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (12, 10),
     ) -> None:
-        """Plot adjacency matrix comparison at specified time points.
-
-        Color coding for predicted matrix:
-        - Green: Correctly predicted links (true positives)
-        - Red: Incorrectly predicted links (false positives)
-        - White: No link predicted
-        """
+        """Plot adjacency matrix comparison at specified time points."""
         n_points = len(time_points)
 
-        # Create figure with space for title and legend
-        fig = plt.figure(figsize=figsize)
+        # Create figure
+        fig, model_name = self._create_figure_with_suptitle(
+            "Adjacency Matrix Comparison", model_type, figsize
+        )
 
-        # Create GridSpec with minimal spacing
         gs = fig.add_gridspec(
             n_points,
-            2,  # n_points rows, 2 columns (actual & predicted side by side)
+            2,
             height_ratios=[1] * n_points,
             width_ratios=[1, 1],
             left=0.1,
             right=0.85,
             bottom=0.05,
             top=0.9,
-            hspace=0.15,  # Reduced vertical spacing
-            wspace=0.05,  # Minimal horizontal spacing
+            hspace=0.15,
+            wspace=0.05,
         )
 
-        model_name = (
-            "Barabási-Albert"
-            if model_type.lower() == "ba"
-            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
-        )
-        fig.suptitle(
-            f"Adjacency Matrix Comparison - {model_name} Model",
-            fontsize=PlotStyle.LARGE_SIZE,
-            y=0.98,
-            weight="bold",
-        )
-
-        # Create legend axes on the right
-        legend_ax = fig.add_axes([0.87, 0.4, 0.1, 0.2])  # Reduced legend size
+        # Create legend for predictions
+        legend_ax = fig.add_axes([0.87, 0.4, 0.1, 0.2])
         legend_ax.axis("off")
         legend_elements = [
             Patch(facecolor="green", alpha=0.7, label="Correct Prediction"),
@@ -495,7 +555,7 @@ class Visualizer:
         )
         legend.get_title().set_fontweight("bold")
 
-        # Add column headers with less space
+        # Column headers
         fig.text(
             0.3,
             0.93,
@@ -519,48 +579,30 @@ class Visualizer:
             if t < 0:
                 t = len(predictions) + t
 
-            # Plot actual adjacency
+            # Actual adjacency
             ax_actual = fig.add_subplot(gs[i, 0])
             adj_actual = actual_series[t]["adjacency"]
-            im_actual = ax_actual.imshow(adj_actual, cmap="Blues")
+            ax_actual.imshow(adj_actual, cmap="Blues")
             ax_actual.set_title(f"t={t}", pad=2, fontsize=PlotStyle.SMALL_SIZE)
-
-            # Remove ticks but keep frame
             ax_actual.set_xticks([])
             ax_actual.set_yticks([])
 
-            # Get predicted adjacency
+            # Predicted adjacency
+            ax_pred = fig.add_subplot(gs[i, 1])
             pred_idx = t - len(actual_series) + len(predictions)
             adj_pred = predictions[pred_idx]["adjacency"]
 
-            # Calculate metrics
-            true_links = np.sum(adj_actual)  # Total actual links
-            correct_pred = np.sum((adj_actual == 1) & (adj_pred == 1))  # True positives
-            false_pos = np.sum((adj_actual == 0) & (adj_pred == 1))  # False positives
-            total_pred = np.sum(adj_pred)  # Total predicted links
+            # Metrics
+            metrics = self._calculate_adjacency_metrics(adj_actual, adj_pred)
+            link_coverage = metrics["coverage"]
+            false_pos_rate = metrics["fpr"]
 
-            link_coverage = correct_pred / true_links if true_links > 0 else 0
-            false_pos_rate = false_pos / total_pred if total_pred > 0 else 0
-
-            # Create color-coded prediction matrix
-            colored_pred = np.zeros((*adj_pred.shape, 3))  # RGB array
-
-            # Color coding
-            correct_mask = (adj_actual == 1) & (adj_pred == 1)
-            colored_pred[correct_mask] = [0, 1, 0]  # Green
-
-            false_pos_mask = (adj_actual == 0) & (adj_pred == 1)
-            colored_pred[false_pos_mask] = [1, 0, 0]  # Red
-
-            # Plot predicted adjacency with color coding
-            ax_pred = fig.add_subplot(gs[i, 1])
+            # Color-coded adjacency
+            colored_pred = self._create_colored_pred_matrix(adj_actual, adj_pred)
             ax_pred.imshow(colored_pred)
 
-            # Add metrics as text with shorter format
             metrics_text = f"Coverage: {link_coverage:.1%} | FPR: {false_pos_rate:.1%}"
             ax_pred.set_title(metrics_text, pad=2, fontsize=PlotStyle.SMALL_SIZE)
-
-            # Remove ticks but keep frame
             ax_pred.set_xticks([])
             ax_pred.set_yticks([])
 
@@ -570,18 +612,7 @@ class Visualizer:
         output_path: str = None,
         figsize: Tuple[int, int] = (20, 15),
     ) -> None:
-        """Create a comprehensive dashboard for node degree evolution analysis.
-
-        Parameters
-        ----------
-        network_series : List[Dict]
-            List of network states over time
-        output_path : str, optional
-            Path to save the plot. If None, display only.
-        figsize : Tuple[int, int], optional
-            Figure size (width, height) in inches
-        """
-        # Extract data
+        """Create a comprehensive dashboard for node degree evolution analysis."""
         n_nodes = len(network_series[0]["graph"].nodes())
         n_timesteps = len(network_series)
         degree_matrix = np.zeros((n_timesteps, n_nodes))
@@ -591,8 +622,11 @@ class Visualizer:
             for node in range(n_nodes):
                 degree_matrix[t, node] = degrees[node]
 
-        # Create figure with GridSpec for layout
-        fig = plt.figure(figsize=figsize)
+        # Create figure
+        fig, model_name = self._create_figure_with_suptitle(
+            "Network Degree Evolution Analysis", model_type="Unknown", figsize=figsize
+        )
+
         gs = fig.add_gridspec(
             2,
             2,
@@ -602,27 +636,15 @@ class Visualizer:
             wspace=0.25,
         )
 
-        # Add title
-        fig.suptitle(
-            "Network Degree Evolution Analysis",
-            fontsize=PlotStyle.LARGE_SIZE + 2,
-            y=0.95,
-            weight="bold",
-        )
-
-        # 1. Main Evolution Plot (top left) - Enhanced version
+        # Main Evolution Plot (top left)
         ax1 = fig.add_subplot(gs[0, 0])
-
-        # Plot individual node trajectories with gradient alpha based on degree variance
         degree_variances = np.var(degree_matrix, axis=0)
         normalized_variances = (degree_variances - np.min(degree_variances)) / (
             np.max(degree_variances) - np.min(degree_variances)
         )
 
         for node in range(n_nodes):
-            alpha = (
-                0.1 + 0.6 * normalized_variances[node]
-            )  # More variable nodes are more visible
+            alpha = 0.1 + 0.6 * normalized_variances[node]
             ax1.plot(
                 range(n_timesteps),
                 degree_matrix[:, node],
@@ -631,7 +653,6 @@ class Visualizer:
                 color="gray",
             )
 
-        # Plot mean and quartiles
         mean_degree = np.mean(degree_matrix, axis=1)
         q1 = np.percentile(degree_matrix, 25, axis=1)
         q3 = np.percentile(degree_matrix, 75, axis=1)
@@ -654,7 +675,6 @@ class Visualizer:
             zorder=4,
         )
 
-        # Add change points if they exist
         change_points = [
             i
             for i, state in enumerate(network_series)
@@ -681,7 +701,7 @@ class Visualizer:
         ax1.legend(fontsize=PlotStyle.SMALL_SIZE + 2)
         ax1.grid(True, alpha=0.3, linestyle="--")
 
-        # 2. Degree Distribution Evolution (top right) - Enhanced heatmap
+        # Degree Distribution Evolution (top right)
         ax2 = fig.add_subplot(gs[0, 1])
         max_degree = int(np.max(degree_matrix))
         degree_counts = np.zeros((n_timesteps, max_degree + 1))
@@ -691,9 +711,8 @@ class Visualizer:
             for d in range(max_degree + 1):
                 degree_counts[t, d] = np.sum(degrees == d)
 
-        # Normalize and apply log scale for better visualization
         degree_counts = degree_counts / n_nodes
-        degree_counts = np.log1p(degree_counts)  # log1p to handle zeros
+        degree_counts = np.log1p(degree_counts)
 
         im = ax2.imshow(
             degree_counts.T,
@@ -703,11 +722,9 @@ class Visualizer:
             interpolation="nearest",
         )
 
-        # Add colorbar with scientific notation
         cbar = plt.colorbar(im, ax=ax2)
         cbar.set_label("Log(1 + Fraction of Nodes)", fontsize=PlotStyle.SMALL_SIZE + 2)
 
-        # Add change points to heatmap
         for cp in change_points:
             ax2.axvline(x=cp, color="#2ecc71", linestyle="--", alpha=0.5)
 
@@ -720,16 +737,13 @@ class Visualizer:
             weight="bold",
         )
 
-        # 3. Degree Statistics (bottom left)
+        # Degree Statistics (bottom left)
         ax3 = fig.add_subplot(gs[1, 0])
-
-        # Calculate various statistics
         max_degrees = np.max(degree_matrix, axis=1)
         min_degrees = np.min(degree_matrix, axis=1)
         median_degrees = np.median(degree_matrix, axis=1)
         std_degrees = np.std(degree_matrix, axis=1)
 
-        # Plot with enhanced styling
         ax3.fill_between(
             range(n_timesteps),
             min_degrees,
@@ -753,7 +767,6 @@ class Visualizer:
             linewidth=2,
         )
 
-        # Add change points
         for cp in change_points:
             ax3.axvline(x=cp, color="#2ecc71", linestyle="--", alpha=0.5)
 
@@ -768,15 +781,12 @@ class Visualizer:
         ax3.legend(fontsize=PlotStyle.SMALL_SIZE + 2)
         ax3.grid(True, alpha=0.3, linestyle="--")
 
-        # 4. Top Nodes Analysis (bottom right)
+        # Top Nodes Analysis (bottom right)
         ax4 = fig.add_subplot(gs[1, 1])
-
-        # Find nodes with highest average and variance
         avg_degrees = np.mean(degree_matrix, axis=0)
-        top_by_avg = np.argsort(avg_degrees)[-3:]  # Top 3 by average
-        top_by_var = np.argsort(degree_variances)[-2:]  # Top 2 by variance
+        top_by_avg = np.argsort(avg_degrees)[-3:]
+        top_by_var = np.argsort(degree_variances)[-2:]
 
-        # Plot top nodes
         for node in top_by_avg:
             ax4.plot(
                 range(n_timesteps),
@@ -787,7 +797,7 @@ class Visualizer:
             )
 
         for node in top_by_var:
-            if node not in top_by_avg:  # Avoid duplicates
+            if node not in top_by_avg:
                 ax4.plot(
                     range(n_timesteps),
                     degree_matrix[:, node],
@@ -796,7 +806,6 @@ class Visualizer:
                     label=f"Node {node} (Var: {degree_variances[node]:.1f})",
                 )
 
-        # Add change points
         for cp in change_points:
             ax4.axvline(x=cp, color="#2ecc71", linestyle="--", alpha=0.5)
 
@@ -815,7 +824,6 @@ class Visualizer:
         )
         ax4.grid(True, alpha=0.3, linestyle="--")
 
-        # Adjust layout and save
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         if output_path:
@@ -830,33 +838,14 @@ class Visualizer:
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (20, 15),
     ) -> None:
-        """Create a comprehensive dashboard combining network structure and adjacency matrix visualizations.
-
-        For each time point, shows:
-        - Network structure (actual vs predicted)
-        - Adjacency matrix (actual vs predicted)
-        - Prediction metrics
-        - Color-coded edges and matrix cells
-        """
+        """Create a comprehensive dashboard combining network structure and adjacency matrix visualizations."""
         n_points = len(time_points)
 
-        # Create figure with GridSpec for layout
-        fig = plt.figure(figsize=figsize)
-
-        # Create main title
-        model_name = (
-            "Barabási-Albert"
-            if model_type.lower() == "ba"
-            else "Erdős-Rényi" if model_type.lower() == "er" else model_type
-        )
-        fig.suptitle(
-            f"Network Prediction Dashboard - {model_name} Model",
-            fontsize=PlotStyle.LARGE_SIZE + 2,
-            y=0.98,
-            weight="bold",
+        # Create figure
+        fig, _ = self._create_figure_with_suptitle(
+            "Network Prediction Dashboard", model_type, figsize
         )
 
-        # Create a grid with n_points rows and space for legend
         gs = fig.add_gridspec(
             n_points,
             2,
@@ -864,160 +853,157 @@ class Visualizer:
             height_ratios=[1] * n_points,
             hspace=0.3,
             wspace=0.15,
-            top=0.92,
+            top=0.85,
             bottom=0.05,
             left=0.05,
             right=0.85,
         )
 
-        # Create legend axes on the right
-        legend_ax = fig.add_axes([0.87, 0.4, 0.12, 0.2])
-        legend_ax.axis("off")
-        legend_elements = [
-            Patch(facecolor="green", alpha=0.7, label="Correct Prediction"),
-            Patch(facecolor="red", alpha=0.7, label="False Positive"),
-            Patch(facecolor="gray", alpha=0.3, label="Missed Edge"),
-        ]
-        legend = legend_ax.legend(
-            handles=legend_elements,
-            loc="center",
-            title="Prediction Types",
-            fontsize=PlotStyle.MEDIUM_SIZE,
-        )
-        legend.get_title().set_fontweight("bold")
-        legend.get_title().set_fontsize(PlotStyle.MEDIUM_SIZE)
+        # Add prediction legend
+        self._add_prediction_legend(fig)
 
         for idx, t in enumerate(time_points):
             if t < 0:
                 t = len(predictions) + t
 
-            # Get actual and predicted networks
             G_actual = actual_series[t]["graph"]
             pred_idx = t - len(actual_series) + len(predictions)
             G_pred = predictions[pred_idx]["graph"]
 
-            # Create nested GridSpec for each row
+            # Nested GridSpec for each row
             gs_row = gs[idx, :].subgridspec(
                 2, 2, height_ratios=[1, 1], hspace=0.1, wspace=0.2
             )
+
+            # Calculate edge metrics
+            correct_edges, false_positive_edges, missed_edges, metrics = (
+                self._calculate_network_metrics(G_actual, G_pred)
+            )
+            edge_colors = {
+                "green": correct_edges,
+                "red": false_positive_edges,
+                "gray": missed_edges,
+            }
+            pos = nx.spring_layout(G_actual, seed=42)
 
             # 1. Network Structure (top row)
             ax_net_actual = fig.add_subplot(gs_row[0, 0])
             ax_net_pred = fig.add_subplot(gs_row[0, 1])
 
-            # Common node positions
-            pos = nx.spring_layout(G_actual, seed=42)
-
-            # Plot actual network
-            nx.draw_networkx_nodes(
-                G_actual, pos, ax=ax_net_actual, **PlotStyle.NODE_STYLES["actual"]
+            self._draw_network(
+                G_actual, ax_net_actual, pos, f"Network Structure (t={t})"
             )
-            nx.draw_networkx_edges(
-                G_actual, pos, ax=ax_net_actual, edge_color="gray", alpha=0.4, width=0.5
-            )
-            ax_net_actual.set_title(
-                f"Network Structure (t={t})", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
-            )
-            ax_net_actual.axis("off")
-
-            # Plot predicted network with color-coded edges
-            nx.draw_networkx_nodes(
-                G_pred, pos, ax=ax_net_pred, **PlotStyle.NODE_STYLES["predicted"]
-            )
-
-            # Color-code edges
-            correct_edges = []
-            false_positive_edges = []
-            missed_edges = []
-
-            for e in G_pred.edges():
-                if G_actual.has_edge(*e):
-                    correct_edges.append(e)
-                else:
-                    false_positive_edges.append(e)
-
-            for e in G_actual.edges():
-                if not G_pred.has_edge(*e):
-                    missed_edges.append(e)
-
-            # Draw edges with different colors
-            nx.draw_networkx_edges(
+            self._draw_network(
                 G_pred,
+                ax_net_pred,
                 pos,
-                ax=ax_net_pred,
-                edgelist=correct_edges,
-                edge_color="green",
-                alpha=0.7,
-                width=0.5,
+                self._format_metrics_text(metrics, t),
+                is_predicted=True,
+                edge_colors=edge_colors,
             )
-            nx.draw_networkx_edges(
-                G_pred,
-                pos,
-                ax=ax_net_pred,
-                edgelist=false_positive_edges,
-                edge_color="red",
-                alpha=0.7,
-                width=0.5,
-            )
-            nx.draw_networkx_edges(
-                G_pred,
-                pos,
-                ax=ax_net_pred,
-                edgelist=missed_edges,
-                edge_color="gray",
-                alpha=0.3,
-                width=0.5,
-                style="dashed",
-            )
-
-            # Calculate metrics
-            total_actual = len(G_actual.edges())
-            total_predicted = len(G_pred.edges())
-            correct_count = len(correct_edges)
-            false_positive_count = len(false_positive_edges)
-            missed_count = len(missed_edges)
-            coverage = correct_count / total_actual if total_actual > 0 else 0
-            fpr = false_positive_count / total_predicted if total_predicted > 0 else 0
-
-            metrics_text = (
-                f"Prediction Metrics:\n"
-                f"Coverage: {coverage:.1%} | FPR: {fpr:.1%}\n"
-                f"Correct: {correct_count} | False+: {false_positive_count} | Missed: {missed_count}"
-            )
-            ax_net_pred.set_title(metrics_text, pad=10, fontsize=PlotStyle.MEDIUM_SIZE)
-            ax_net_pred.axis("off")
 
             # 2. Adjacency Matrices (bottom row)
             ax_adj_actual = fig.add_subplot(gs_row[1, 0])
             ax_adj_pred = fig.add_subplot(gs_row[1, 1])
 
-            # Plot actual adjacency
             adj_actual = actual_series[t]["adjacency"]
-            im_actual = ax_adj_actual.imshow(adj_actual, cmap="Blues")
-            ax_adj_actual.set_title(
-                "Adjacency Matrix", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
-            )
-
-            # Create color-coded prediction matrix
             adj_pred = predictions[pred_idx]["adjacency"]
-            colored_pred = np.zeros((*adj_pred.shape, 3))
 
-            # Color coding
-            correct_mask = (adj_actual == 1) & (adj_pred == 1)
-            colored_pred[correct_mask] = [0, 1, 0]  # Green
-
-            false_pos_mask = (adj_actual == 0) & (adj_pred == 1)
-            colored_pred[false_pos_mask] = [1, 0, 0]  # Red
-
-            ax_adj_pred.imshow(colored_pred)
-            ax_adj_pred.set_title(
-                "Predicted Matrix", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
+            self._plot_adjacency_matrix(
+                adj_actual, ax=ax_adj_actual, title="Adjacency Matrix"
             )
-
-            # Remove ticks but keep frame
-            ax_adj_actual.set_xticks([])
-            ax_adj_actual.set_yticks([])
-            ax_adj_pred.set_xticks([])
-            ax_adj_pred.set_yticks([])
+            self._plot_adjacency_matrix(
+                adj_actual, adj_pred, ax=ax_adj_pred, title="Predicted Matrix"
+            )
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    def _draw_network(
+        self,
+        G: nx.Graph,
+        ax: plt.Axes,
+        pos: Dict[int, Tuple[float, float]],
+        title: str,
+        is_predicted: bool = False,
+        edge_colors: Dict[str, List] = None,
+    ) -> None:
+        """Draw a network with consistent styling."""
+        node_style = PlotStyle.NODE_STYLES["predicted" if is_predicted else "actual"]
+        nx.draw_networkx_nodes(G, pos, ax=ax, **node_style)
+
+        if edge_colors:
+            # Use color-coded edges
+            for color, edges in edge_colors.items():
+                alpha = 0.7 if color in ["green", "red"] else 0.3
+                style = "dashed" if color == "gray" else "solid"
+                nx.draw_networkx_edges(
+                    G,
+                    pos,
+                    ax=ax,
+                    edgelist=edges,
+                    edge_color=color,
+                    alpha=alpha,
+                    width=0.5,
+                    style=style,
+                )
+        else:
+            # Default edges
+            nx.draw_networkx_edges(
+                G, pos, ax=ax, edge_color="gray", alpha=0.4, width=0.5
+            )
+
+        ax.set_title(title, pad=10, fontsize=PlotStyle.MEDIUM_SIZE)
+        ax.axis("off")
+
+    def _plot_adjacency_matrix(
+        self,
+        adj_actual: np.ndarray,
+        adj_pred: np.ndarray = None,
+        ax: plt.Axes = None,
+        title: str = "",
+    ) -> None:
+        """Plot adjacency matrix with consistent styling."""
+        if adj_pred is None:
+            ax.imshow(adj_actual, cmap="Blues")
+        else:
+            colored_pred = self._create_colored_pred_matrix(adj_actual, adj_pred)
+            ax.imshow(colored_pred)
+
+        ax.set_title(title, pad=10, fontsize=PlotStyle.MEDIUM_SIZE)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    def _plot_change_points(
+        self,
+        ax: plt.Axes,
+        change_points: List[int],
+        show_label: bool = True,
+    ) -> None:
+        """Plot change points with consistent styling."""
+        for cp in change_points:
+            ax.axvline(
+                x=cp,
+                color="#2ecc71",
+                linestyle="--",
+                alpha=0.5,
+                label="Change Point" if show_label and cp == change_points[0] else None,
+                zorder=3,
+            )
+
+    def _format_metrics_text(
+        self, metrics: Dict[str, Union[int, float]], t: int, compact: bool = False
+    ) -> str:
+        """Format metrics text with consistent styling."""
+        if compact:
+            return (
+                f"Predicted (t={t})\n"
+                f"Coverage: {metrics['coverage']:.1%} | FPR: {metrics['fpr']:.1%}"
+            )
+
+        return (
+            f"Prediction Metrics:\n"
+            f"Coverage: {metrics['coverage']:.1%} | FPR: {metrics['fpr']:.1%}\n"
+            f"Correct: {metrics['correct_count']} | "
+            f"FP: {metrics['false_positive_count']} | "
+            f"Missed: {metrics['missed_count']}"
+        )
