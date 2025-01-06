@@ -111,21 +111,25 @@ def get_sbm_config(
             min_segment=min_segment,
             min_changes=min_changes,
             max_changes=max_changes,
-            # Model parameters
-            num_blocks=4,
-            min_block_size=20,
-            max_block_size=35,
-            intra_prob=0.3,
-            inter_prob=0.05,
-            min_intra_prob=0.2,
-            max_intra_prob=0.4,
-            min_inter_prob=0.02,
-            max_inter_prob=0.1,
-            # Evolution parameters
-            n_std=None,
-            blocks_std=None,
-            intra_prob_std=0.02,
-            inter_prob_std=0.01,
+            
+            # Model parameters - More stable configuration
+            num_blocks=4,  # Fixed number of blocks
+            min_block_size=n//5,  # Each block ~25% of nodes
+            max_block_size=n//3,  # Allow some size variation but not too much
+            
+            # Higher contrast between intra/inter probabilities
+            intra_prob=0.5,      # Higher intra-block density
+            inter_prob=0.02,     # Lower inter-block density
+            min_intra_prob=0.4,  # Tighter bounds for intra
+            max_intra_prob=0.6,
+            min_inter_prob=0.01, # Tighter bounds for inter
+            max_inter_prob=0.03,
+            
+            # Evolution parameters - Reduced variability
+            n_std=None,          # Fixed number of nodes
+            blocks_std=None,     # Fixed number of blocks
+            intra_prob_std=0.01, # Very small probability variations
+            inter_prob_std=0.005,# Even smaller for inter-block
         ),
     }
 
