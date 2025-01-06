@@ -367,29 +367,18 @@ def main():
     plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Network structure comparison
-    plt.figure(figsize=(15, 5))
-    visualizer.plot_network_comparison(
+    # 2. Comprehensive prediction dashboard
+    plt.figure(figsize=(20, 15))
+    visualizer.plot_prediction_dashboard(
         network_series,
         predictions,
         [min_history, len(predictions) // 2, -1],
         model_type=args.model,
     )
-    plt.savefig(output_dir / "network_comparison.png", dpi=300, bbox_inches="tight")
+    plt.savefig(output_dir / "prediction_dashboard.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 3. Adjacency matrix comparison
-    plt.figure(figsize=(15, 5))
-    visualizer.plot_adjacency_matrices(
-        network_series,
-        predictions,
-        [min_history, len(predictions) // 2, -1],
-        model_type=args.model,
-    )
-    plt.savefig(output_dir / "adjacency_comparison.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 4. Node degree evolution plot
+    # 3. Node degree evolution plot
     visualizer.plot_node_degree_evolution(
         network_series, output_path=output_dir / "node_degree_evolution.png"
     )
