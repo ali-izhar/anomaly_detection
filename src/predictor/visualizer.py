@@ -375,7 +375,9 @@ class Visualizer:
             (change_style["color"], "Change Point", change_style["alpha"]),
             ("#95a5a6", "Prediction Start", 0.5),
         ]
-        self._add_legend_to_figure(fig, legend_elements, "Series Types")
+        self._add_legend_to_figure(
+            fig, legend_elements, "Series Types", position=[0.87, 0.4, 0.12, 0.2]
+        )
 
         # Plot each metric
         for idx, (metric_name, title, description) in enumerate(metrics):
@@ -425,6 +427,7 @@ class Visualizer:
                     mae = np.mean(
                         np.abs(np.array(pred_values) - np.array(actual_pred_range))
                     )
+
                     rmse = np.sqrt(
                         np.mean(
                             (np.array(pred_values) - np.array(actual_pred_range)) ** 2
@@ -434,7 +437,7 @@ class Visualizer:
                     error_text = f"MAE: {mae:.3f}\nRMSE: {rmse:.3f}"
                     self._add_metric_textbox(ax, error_text, (0.98, 0.98))
 
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])
 
     def plot_network_comparison(
         self,
@@ -1013,25 +1016,9 @@ class Visualizer:
         actual_series: List[Dict[str, Any]],
         predictions: List[Dict[str, Any]],
         model_type: str = "Unknown",
-        figsize: Tuple[int, int] = (20, 15),
+        figsize: Tuple[int, int] = (20, 20),
     ) -> None:
-        """Plot network comparisons at time steps with best, worst, and average performance.
-
-        This visualization shows:
-        1. Best performing prediction (highest score)
-        2. Average performing prediction (score closest to mean)
-        3. Worst performing prediction (lowest score)
-
-        For each point, displays:
-        - Actual network structure
-        - Predicted network structure
-        - Actual adjacency matrix
-        - Predicted adjacency matrix
-
-        Score is calculated as the harmonic mean between coverage and (1-FPR),
-        balancing the trade-off between correctly predicting edges (coverage)
-        and avoiding false predictions (1-FPR).
-        """
+        """Plot network comparisons at time steps with best, worst, and average performance."""
         # Calculate scores for all predictions
         scores = []
         for t in range(len(predictions)):
@@ -1065,18 +1052,36 @@ class Visualizer:
             "Network Prediction Performance Analysis", model_type, figsize
         )
 
-        gs = fig.add_gridspec(
+        # Create two grid specs: one for networks and one for metric plots
+        gs_main = fig.add_gridspec(
+            4,
+            1,  # 4 rows: 3 for networks, 1 for metrics
+            height_ratios=[1, 1, 1, 0.8],
+            hspace=0.4,
+            top=0.85,
+            bottom=0.08,
+            right=0.85,  # Leave space for legend
+        )
+
+        # Grid spec for network visualizations (top 3 rows)
+        gs_nets = gs_main[0:3, 0].subgridspec(
             3,
             4,  # 3 rows (best/avg/worst), 4 cols (actual graph, pred graph, actual adj, pred adj)
             height_ratios=[1, 1, 1],
             width_ratios=[1, 1, 1, 1],
             hspace=0.4,
             wspace=0.3,
-            top=0.85,
-            right=0.85,  # Leave space for legend
         )
 
-        # Plot each time point
+        # Grid spec for metric plots (bottom row)
+        gs_metrics = gs_main[3, 0].subgridspec(
+            1,
+            3,  # 1 row, 3 cols for Score, Coverage, FPR
+            width_ratios=[1, 1, 1],
+            wspace=0.3,
+        )
+
+        # Plot networks (reusing existing code)
         for idx, (t, label) in enumerate(zip(time_points, point_labels)):
             # Get actual and predicted networks
             G_actual = actual_series[t]["graph"]
@@ -1099,7 +1104,7 @@ class Visualizer:
             metrics["score"] = score
 
             # Plot actual network
-            ax_actual = fig.add_subplot(gs[idx, 0])
+            ax_actual = fig.add_subplot(gs_nets[idx, 0])
             nx.draw_networkx_nodes(
                 G_actual, pos, ax=ax_actual, **PlotStyle.NODE_STYLES["actual"]
             )
@@ -1114,7 +1119,7 @@ class Visualizer:
             ax_actual.axis("off")
 
             # Plot predicted network with color-coded edges
-            ax_pred = fig.add_subplot(gs[idx, 1])
+            ax_pred = fig.add_subplot(gs_nets[idx, 1])
             nx.draw_networkx_nodes(
                 G_actual, pos, ax=ax_pred, **PlotStyle.NODE_STYLES["actual"]
             )
@@ -1150,7 +1155,7 @@ class Visualizer:
             ax_pred.axis("off")
 
             # Plot actual adjacency matrix
-            ax_adj_actual = fig.add_subplot(gs[idx, 2])
+            ax_adj_actual = fig.add_subplot(gs_nets[idx, 2])
             ax_adj_actual.imshow(actual_series[t]["adjacency"], cmap="Blues")
             ax_adj_actual.set_title(
                 f"{label} Actual Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
@@ -1159,7 +1164,7 @@ class Visualizer:
             ax_adj_actual.set_yticks([])
 
             # Plot predicted adjacency matrix
-            ax_adj_pred = fig.add_subplot(gs[idx, 3])
+            ax_adj_pred = fig.add_subplot(gs_nets[idx, 3])
             colored_pred = self._create_colored_pred_matrix(
                 actual_series[t]["adjacency"], predictions[t]["adjacency"]
             )
@@ -1170,10 +1175,138 @@ class Visualizer:
             ax_adj_pred.set_xticks([])
             ax_adj_pred.set_yticks([])
 
-        # Add prediction legend with adjusted position
+        # Plot metric evolution
+        times = [s["time"] for s in scores]
+        metrics_data = {
+            "Score": [s["score"] for s in scores],
+            "Coverage": [s["coverage"] for s in scores],
+            "FPR": [s["fpr"] for s in scores],
+        }
+
+        # Get change points
+        change_points = [
+            i
+            for i, state in enumerate(actual_series)
+            if state.get("is_change_point", False)
+        ]
+
+        for idx, (metric_name, values) in enumerate(metrics_data.items()):
+            ax = fig.add_subplot(gs_metrics[0, idx])
+
+            # Calculate and plot average performance band
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+            ax.axhline(y=mean_val, color="gray", linestyle="--", alpha=0.5)
+            ax.fill_between(
+                times, mean_val - std_val, mean_val + std_val, color="gray", alpha=0.2
+            )
+
+            # Plot metric values
+            ax.plot(times, values, "-o", markersize=3, zorder=3, color="blue")
+
+            # Plot change points
+            for cp in change_points:
+                if cp in times:  # Only show change points within our time range
+                    ax.axvline(x=cp, color="purple", linestyle=":", alpha=0.5)
+
+            # Highlight best, average, and worst points
+            highlight_points = [
+                (best_point["time"], "Best", "green"),
+                (avg_point["time"], "Average", "blue"),
+                (worst_point["time"], "Worst", "red"),
+            ]
+
+            for t, label, color in highlight_points:
+                if metric_name == "Score":
+                    metric_value = scores[t]["score"]
+                elif metric_name == "Coverage":
+                    metric_value = scores[t]["coverage"]
+                else:  # FPR
+                    metric_value = scores[t]["fpr"]
+                ax.plot(t, metric_value, "o", color=color, markersize=8, zorder=4)
+
+            ax.set_xlabel("Time Step")
+            ax.set_ylabel(metric_name)
+            ax.set_title(f"{metric_name} Evolution")
+            ax.grid(True, alpha=0.3)
+
+            # Add mean ± std text
+            text_y = 0.02 if metric_name == "FPR" else 0.98
+            va = "bottom" if metric_name == "FPR" else "top"
+            ax.text(
+                0.98,
+                text_y,
+                f"Mean: {mean_val:.3f}\nStd: {std_val:.3f}",
+                transform=ax.transAxes,
+                ha="right",
+                va=va,
+                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3),
+                fontsize=PlotStyle.SMALL_SIZE,
+            )
+
+        # Add prediction legend with adjusted position (centered in middle row)
         self._add_prediction_legend(
             fig,
-            position=[0.87, 0.4, 0.12, 0.2],  # Moved further right
-            title="Prediction Types\n\nScore: harmonic mean of\ncoverage and (1-FPR)",  # Added score explanation
+            position=[0.87, 0.45, 0.12, 0.2],  # Centered in middle row
+            title="Prediction Types\n\nScore: harmonic mean of\ncoverage and (1-FPR)",
         )
-        plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])  # Adjusted to accommodate legend
+
+        # Add metrics evolution legend (aligned with metric plots)
+        metrics_legend_ax = fig.add_axes(
+            [0.87, 0.08, 0.12, 0.2]
+        )  # Aligned with bottom row
+        metrics_legend_ax.axis("off")
+
+        legend_elements = [
+            plt.Line2D(
+                [0],
+                [0],
+                color="blue",
+                marker="o",
+                markersize=8,
+                label="Time Series",
+                linestyle="-",
+                linewidth=1,
+            ),
+            plt.Line2D(
+                [0],
+                [0],
+                color="green",
+                marker="o",
+                markersize=8,
+                label="Best",
+                linestyle="",
+            ),
+            plt.Line2D(
+                [0],
+                [0],
+                color="blue",
+                marker="o",
+                markersize=8,
+                label="Average",
+                linestyle="",
+            ),
+            plt.Line2D(
+                [0],
+                [0],
+                color="red",
+                marker="o",
+                markersize=8,
+                label="Worst",
+                linestyle="",
+            ),
+            plt.Line2D([0], [0], color="gray", linestyle="--", label="Mean"),
+            plt.Rectangle((0, 0), 1, 1, fc="gray", alpha=0.2, label="±1 std dev"),
+            plt.Line2D([0], [0], color="purple", linestyle=":", label="Change Point"),
+        ]
+
+        metrics_legend = metrics_legend_ax.legend(
+            handles=legend_elements,
+            loc="center",
+            title="Metrics Evolution",
+            fontsize=PlotStyle.SMALL_SIZE,
+        )
+        metrics_legend.get_title().set_fontweight("bold")
+        metrics_legend.get_title().set_fontsize(PlotStyle.MEDIUM_SIZE)
+
+        plt.tight_layout(rect=[0, 0.08, 0.85, 0.95])
