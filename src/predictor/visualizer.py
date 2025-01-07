@@ -1007,3 +1007,173 @@ class Visualizer:
             f"FP: {metrics['false_positive_count']} | "
             f"Missed: {metrics['missed_count']}"
         )
+
+    def plot_performance_extremes(
+        self,
+        actual_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        model_type: str = "Unknown",
+        figsize: Tuple[int, int] = (20, 15),
+    ) -> None:
+        """Plot network comparisons at time steps with best, worst, and average performance.
+
+        This visualization shows:
+        1. Best performing prediction (highest score)
+        2. Average performing prediction (score closest to mean)
+        3. Worst performing prediction (lowest score)
+
+        For each point, displays:
+        - Actual network structure
+        - Predicted network structure
+        - Actual adjacency matrix
+        - Predicted adjacency matrix
+
+        Score is calculated as the harmonic mean between coverage and (1-FPR),
+        balancing the trade-off between correctly predicting edges (coverage)
+        and avoiding false predictions (1-FPR).
+        """
+        # Calculate scores for all predictions
+        scores = []
+        for t in range(len(predictions)):
+            true_adj = actual_series[t]["adjacency"]
+            pred_adj = predictions[t]["adjacency"]
+            metrics = self._calculate_adjacency_metrics(true_adj, pred_adj)
+            # Calculate score as harmonic mean of coverage and (1-fpr)
+            coverage = metrics["coverage"]
+            fpr = metrics["fpr"]
+            score = (
+                2 * coverage * (1 - fpr) / (coverage + (1 - fpr))
+                if coverage + (1 - fpr) > 0
+                else 0
+            )
+            scores.append({"time": t, "score": score, "coverage": coverage, "fpr": fpr})
+
+        # Find best, worst, and average time points
+        sorted_scores = sorted(scores, key=lambda x: x["score"])
+        worst_point = sorted_scores[0]
+        best_point = sorted_scores[-1]
+
+        # Find the point closest to mean score
+        mean_score = np.mean([s["score"] for s in scores])
+        avg_point = min(scores, key=lambda x: abs(x["score"] - mean_score))
+
+        time_points = [best_point["time"], avg_point["time"], worst_point["time"]]
+        point_labels = ["Best", "Average", "Worst"]
+
+        # Create figure
+        fig, model_name = self._create_figure_with_suptitle(
+            "Network Prediction Performance Analysis", model_type, figsize
+        )
+
+        gs = fig.add_gridspec(
+            3,
+            4,  # 3 rows (best/avg/worst), 4 cols (actual graph, pred graph, actual adj, pred adj)
+            height_ratios=[1, 1, 1],
+            width_ratios=[1, 1, 1, 1],
+            hspace=0.4,
+            wspace=0.3,
+            top=0.85,
+            right=0.85,  # Leave space for legend
+        )
+
+        # Plot each time point
+        for idx, (t, label) in enumerate(zip(time_points, point_labels)):
+            # Get actual and predicted networks
+            G_actual = actual_series[t]["graph"]
+            G_pred = predictions[t]["graph"]
+            pos = nx.spring_layout(G_actual, seed=42)  # Use same layout for both
+
+            # Calculate metrics
+            correct_edges, false_positive_edges, missed_edges, metrics = (
+                self._calculate_network_metrics(G_actual, G_pred)
+            )
+
+            # Calculate score for display
+            coverage = metrics["coverage"]
+            fpr = metrics["fpr"]
+            score = (
+                2 * coverage * (1 - fpr) / (coverage + (1 - fpr))
+                if coverage + (1 - fpr) > 0
+                else 0
+            )
+            metrics["score"] = score
+
+            # Plot actual network
+            ax_actual = fig.add_subplot(gs[idx, 0])
+            nx.draw_networkx_nodes(
+                G_actual, pos, ax=ax_actual, **PlotStyle.NODE_STYLES["actual"]
+            )
+            nx.draw_networkx_edges(
+                G_actual, pos, ax=ax_actual, edge_color="black", alpha=0.6
+            )
+            ax_actual.set_title(
+                f"{label} Actual Network (t={t})",
+                pad=10,
+                fontsize=PlotStyle.MEDIUM_SIZE,
+            )
+            ax_actual.axis("off")
+
+            # Plot predicted network with color-coded edges
+            ax_pred = fig.add_subplot(gs[idx, 1])
+            nx.draw_networkx_nodes(
+                G_actual, pos, ax=ax_pred, **PlotStyle.NODE_STYLES["actual"]
+            )
+            self._draw_color_coded_edges(
+                G_pred, pos, ax_pred, correct_edges, false_positive_edges, missed_edges
+            )
+
+            # Add metrics text as a vertical list with semi-transparent background
+            metrics_text = (
+                f"Coverage: {metrics['coverage']:.3f}\n"
+                f"FPR: {metrics['fpr']:.3f}\n"
+                f"Score: {metrics['score']:.3f}"
+            )
+            ax_pred.set_title(
+                f"{label} Predicted Network", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
+            )
+            # Add metrics text box with semi-transparent background
+            ax_pred.text(
+                0.02,
+                0.98,  # Position in top-left
+                metrics_text,
+                transform=ax_pred.transAxes,
+                fontsize=PlotStyle.SMALL_SIZE + 1,
+                verticalalignment="top",
+                bbox=dict(
+                    facecolor="whitesmoke",
+                    alpha=0.7,
+                    edgecolor="none",
+                    pad=5,
+                    boxstyle="round,pad=0.5",
+                ),
+            )
+            ax_pred.axis("off")
+
+            # Plot actual adjacency matrix
+            ax_adj_actual = fig.add_subplot(gs[idx, 2])
+            ax_adj_actual.imshow(actual_series[t]["adjacency"], cmap="Blues")
+            ax_adj_actual.set_title(
+                f"{label} Actual Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
+            )
+            ax_adj_actual.set_xticks([])
+            ax_adj_actual.set_yticks([])
+
+            # Plot predicted adjacency matrix
+            ax_adj_pred = fig.add_subplot(gs[idx, 3])
+            colored_pred = self._create_colored_pred_matrix(
+                actual_series[t]["adjacency"], predictions[t]["adjacency"]
+            )
+            ax_adj_pred.imshow(colored_pred)
+            ax_adj_pred.set_title(
+                f"{label} Predicted Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
+            )
+            ax_adj_pred.set_xticks([])
+            ax_adj_pred.set_yticks([])
+
+        # Add prediction legend with adjusted position
+        self._add_prediction_legend(
+            fig,
+            position=[0.87, 0.4, 0.12, 0.2],  # Moved further right
+            title="Prediction Types\n\nScore: harmonic mean of\ncoverage and (1-FPR)",  # Added score explanation
+        )
+        plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])  # Adjusted to accommodate legend

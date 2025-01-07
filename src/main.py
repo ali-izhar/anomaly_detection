@@ -90,7 +90,7 @@ def get_args():
     parser.add_argument(
         "--predictor",
         type=str,
-        choices=["weighted", "hybrid"],  # Only weighted and hybrid
+        choices=["weighted", "hybrid"],
         help="Type of predictor to use. If not specified, will use recommended predictor for the model.",
     )
 
@@ -384,21 +384,22 @@ def main():
     plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Comprehensive prediction dashboard
-    plt.figure(figsize=(20, 15))
-    visualizer.plot_prediction_dashboard(
-        network_series,
-        predictions,
-        [min_history, len(predictions) // 2, -1],
-        model_type=args.model,
-    )
-    plt.savefig(output_dir / "prediction_dashboard.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 3. Node degree evolution plot
+    # 2. Node degree evolution plot
     visualizer.plot_node_degree_evolution(
         network_series, output_path=output_dir / "node_degree_evolution.png"
     )
+
+    # 3. Performance extremes visualization
+    plt.figure(figsize=(20, 15))
+    visualizer.plot_performance_extremes(
+        network_series[
+            min_history : min_history + len(predictions)
+        ],  # Align with predictions
+        predictions,
+        model_type=args.model,
+    )
+    plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
+    plt.close()
 
     # Analyze prediction accuracy
     print(f"\nPrediction Performance Summary for {args.model}:")
