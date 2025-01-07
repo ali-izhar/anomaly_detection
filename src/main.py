@@ -13,11 +13,15 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
-from predictor import (
-    WeightedPredictor,
-    HybridPredictor,
-    Visualizer,
+from predictor.weighted import WeightedPredictor
+from predictor.hybrid import (
+    BAPredictor,
+    SBMPredictor,
+    RCPPredictor,
+    WSPredictor,
+    ERPredictor,
 )
+from predictor.visualizer import Visualizer
 from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
@@ -30,7 +34,14 @@ logger = logging.getLogger(__name__)
 # Define predictor mapping
 PREDICTOR_MAP = {
     "weighted": WeightedPredictor,
-    "hybrid": HybridPredictor,
+    "hybrid": {  # Map model types to their hybrid predictors
+        "ba": BAPredictor,
+        "ws": WSPredictor,
+        "er": ERPredictor,
+        "sbm": SBMPredictor,
+        "rcp": RCPPredictor,
+        "lfr": SBMPredictor,  # Use SBM predictor for LFR
+    },
 }
 
 # Define all available graph models
@@ -53,7 +64,12 @@ GRAPH_MODELS = {
 
 # Define recommended predictors for each model
 MODEL_PREDICTOR_RECOMMENDATIONS = {
-    model: ["weighted", "hybrid"] for model in GRAPH_MODELS.values()
+    "ba": ["hybrid", "weighted"],
+    "ws": ["hybrid", "weighted"],
+    "er": ["hybrid", "weighted"],
+    "sbm": ["hybrid", "weighted"],
+    "rcp": ["hybrid", "weighted"],
+    "lfr": ["hybrid", "weighted"],
 }
 
 
@@ -74,7 +90,7 @@ def get_args():
     parser.add_argument(
         "--predictor",
         type=str,
-        choices=list(PREDICTOR_MAP.keys()),
+        choices=["weighted", "hybrid"],  # Only weighted and hybrid
         help="Type of predictor to use. If not specified, will use recommended predictor for the model.",
     )
 
@@ -295,12 +311,13 @@ def main():
         max_changes=args.max_changes,
     )
 
-    # Initialize predictor with model-specific config
-    if args.predictor == "hybrid":
-        predictor = PREDICTOR_MAP[args.predictor](model_type=args.model, config=config)
-    else:
-        # For non-hybrid predictors (e.g., weighted)
-        predictor = PREDICTOR_MAP[args.predictor]()
+    # Initialize predictor
+    if args.predictor == "weighted":
+        predictor = WeightedPredictor()
+    else:  # hybrid
+        # Get the appropriate hybrid predictor for the model type
+        predictor_class = PREDICTOR_MAP["hybrid"][args.model]
+        predictor = predictor_class(config=config)
 
     # Save configuration
     with open(output_dir / "config.json", "w") as f:

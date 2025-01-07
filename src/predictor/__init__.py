@@ -1,13 +1,13 @@
 # src/predictor/__init__.py
 
-from .base import BasePredictor
 from .weighted import WeightedPredictor
 from .hybrid import HybridPredictor
-from .visualize import Visualizer
+from .grid_search import GridSearch
+from .visualizer import Visualizer
 
 __all__ = [
-    "BasePredictor",
     "WeightedPredictor",
     "HybridPredictor",
+    "GridSearch",
     "Visualizer",
 ]

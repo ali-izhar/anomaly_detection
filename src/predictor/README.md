@@ -4,12 +4,7 @@ This document provides detailed documentation for each network predictor impleme
 
 ## Table of Contents
 1. [WeightedPredictor](#weightedpredictor)
-2. [SpectralPredictor](#spectralpredictor)
-3. [EmbeddingPredictor](#embeddingpredictor)
-4. [DynamicalPredictor](#dynamicalpredictor)
-5. [EnsemblePredictor](#ensemblepredictor)
-6. [AdaptivePredictor](#adaptivepredictor)
-7. [HybridPredictor](#hybridpredictor)
+2. [HybridPredictor](#hybridpredictor)
 
 ## WeightedPredictor
 

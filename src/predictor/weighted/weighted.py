@@ -1,12 +1,35 @@
-# src/predictor/weighted.py
+# src/predictor/weighted/weighted.py
 
 """Weighted average network predictor."""
 
 import networkx as nx
 import numpy as np
 from typing import List, Dict, Any, Optional
+from abc import ABC, abstractmethod
 
-from .base import BasePredictor
+
+class BasePredictor(ABC):
+    """Abstract base class for network prediction models."""
+
+    @abstractmethod
+    def predict(
+        self, history: List[Dict[str, Any]], horizon: int = 1
+    ) -> List[np.ndarray]:
+        """Predict future network states.
+
+        Parameters
+        ----------
+        history : List[Dict[str, Any]]
+            Historical network data
+        horizon : int, optional
+            Number of steps to predict ahead, by default 1
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of predicted adjacency matrices
+        """
+        pass
 
 
 class WeightedPredictor(BasePredictor):
@@ -67,13 +90,13 @@ class WeightedPredictor(BasePredictor):
         n_history: int = 3,
         weights: Optional[np.ndarray] = None,
         adaptive: bool = True,
-        enforce_connectivity: bool = False,
+        enforce_connectivity: bool = True,
         binary: bool = True,
     ):
         self.n_history = n_history
 
         if weights is None:
-            weights = np.array([0.5, 0.3, 0.2])
+            weights = np.array([0.6, 0.3, 0.1])
 
         # Normalize weights
         weights = np.array(weights, dtype=float)
