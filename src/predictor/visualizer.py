@@ -1194,10 +1194,10 @@ class Visualizer:
 
             # Plot predicted adjacency matrix
             ax_adj_pred = fig.add_subplot(gs_nets[idx, 3])
-            colored_pred = self._create_colored_pred_matrix(
+            colored_adj = self._create_colored_adjacency(
                 actual_series[orig_idx]["adjacency"], predictions[orig_idx]["adjacency"]
             )
-            ax_adj_pred.imshow(colored_pred)
+            ax_adj_pred.imshow(colored_adj)
             ax_adj_pred.set_title(
                 f"{label} Predicted Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
             )
@@ -1349,6 +1349,7 @@ class Visualizer:
         actual_shap: np.ndarray,
         pred_shap: np.ndarray,
         output_path: Path,
+        threshold: float = 30.0,
     ) -> None:
         """Create a simplified dashboard comparing actual and predicted martingales with SHAP values."""
         # Get feature names from network metrics
@@ -1382,9 +1383,13 @@ class Visualizer:
                 alpha=0.6,
             )
 
+        # Plot threshold line
+        ax_actual_mart.axhline(
+            y=threshold, color="k", linestyle="--", alpha=0.5, label="Threshold"
+        )
+
         # Plot actual change points
         for cp in change_points:
-            # No need to adjust change points - they should appear at their actual times
             ax_actual_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
 
         # Plot combined martingales
@@ -1440,7 +1445,6 @@ class Visualizer:
 
         # Add actual change point indicators
         for cp in change_points:
-            # No need to adjust change points - they should appear at their actual times
             ax_actual_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
         ax_actual_shap.set_title("SHAP Values Over Time", fontsize=12, pad=20)
@@ -1461,9 +1465,13 @@ class Visualizer:
                 alpha=0.6,
             )
 
+        # Plot threshold line
+        ax_pred_mart.axhline(
+            y=threshold, color="k", linestyle="--", alpha=0.5, label="Threshold"
+        )
+
         # Plot actual change points
         for cp in change_points:
-            # No need to adjust change points - they should appear at their actual times
             ax_pred_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
 
         # Plot combined predicted martingales
@@ -1521,7 +1529,6 @@ class Visualizer:
 
         # Add actual change point indicators
         for cp in change_points:
-            # No need to adjust change points - they should appear at their actual times
             ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
         ax_pred_shap.set_title("Predicted SHAP Values Over Time", fontsize=12, pad=20)
@@ -1632,7 +1639,7 @@ class Visualizer:
         self, actual_adj: np.ndarray, pred_adj: np.ndarray
     ) -> np.ndarray:
         """Create a colored adjacency matrix highlighting differences."""
-        # Create RGB array (green for correct, red for false positive, blue for missed)
+        # Create RGB array (green for correct, red for false positive, gray for missed)
         colored = np.zeros((*actual_adj.shape, 3))
 
         # Correct predictions (green)
@@ -1642,7 +1649,11 @@ class Visualizer:
         # False positives (red)
         colored[(actual_adj == 0) & (pred_adj == 1)] = [1, 0, 0]
 
-        # Missed edges (blue)
-        colored[(actual_adj == 1) & (pred_adj == 0)] = [0, 0, 1]
+        # Missed edges (gray)
+        colored[(actual_adj == 1) & (pred_adj == 0)] = [
+            0.7,
+            0.7,
+            0.7,
+        ]  # Changed from blue to gray
 
         return colored

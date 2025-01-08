@@ -328,7 +328,7 @@ def analyze_martingales(
 
     # Initialize detector
     detector = ChangePointDetector()
-    threshold = 20.0  # Can be made configurable
+    threshold = 30.0  # Can be made configurable
     epsilon = 0.8  # Can be made configurable
 
     # Compute martingales for actual networks
@@ -443,6 +443,7 @@ def analyze_martingales(
         actual_shap=actual_shap,
         pred_shap=pred_shap,
         output_path=output_dir / "martingale_comparison_dashboard.png",
+        threshold=threshold,
     )
 
 
