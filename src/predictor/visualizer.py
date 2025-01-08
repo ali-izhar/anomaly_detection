@@ -5,6 +5,8 @@ from matplotlib.patches import Patch
 from typing import List, Dict, Any, Tuple, Union
 import networkx as nx
 import numpy as np
+from matplotlib.ticker import AutoMinorLocator, FuncFormatter
+from pathlib import Path
 
 from graph.features import NetworkFeatureExtractor
 
@@ -1015,6 +1017,7 @@ class Visualizer:
         self,
         actual_series: List[Dict[str, Any]],
         predictions: List[Dict[str, Any]],
+        min_history: int,
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (20, 20),
     ) -> None:
@@ -1033,7 +1036,15 @@ class Visualizer:
                 if coverage + (1 - fpr) > 0
                 else 0
             )
-            scores.append({"time": t, "score": score, "coverage": coverage, "fpr": fpr})
+            # Store time with min_history offset
+            scores.append(
+                {
+                    "time": t + min_history,
+                    "score": score,
+                    "coverage": coverage,
+                    "fpr": fpr,
+                }
+            )
 
         # Find best, worst, and average time points
         sorted_scores = sorted(scores, key=lambda x: x["score"])
@@ -1083,9 +1094,10 @@ class Visualizer:
 
         # Plot networks (reusing existing code)
         for idx, (t, label) in enumerate(zip(time_points, point_labels)):
-            # Get actual and predicted networks
-            G_actual = actual_series[t]["graph"]
-            G_pred = predictions[t]["graph"]
+            # Get actual and predicted networks (adjust time by subtracting min_history)
+            t_idx = t - min_history
+            G_actual = actual_series[t_idx]["graph"]
+            G_pred = predictions[t_idx]["graph"]
             pos = nx.spring_layout(G_actual, seed=42)  # Use same layout for both
 
             # Calculate metrics
@@ -1112,7 +1124,7 @@ class Visualizer:
                 G_actual, pos, ax=ax_actual, edge_color="black", alpha=0.6
             )
             ax_actual.set_title(
-                f"{label} Actual Network (t={t})",
+                f"{label} Actual Network (t={t})",  # Use adjusted time
                 pad=10,
                 fontsize=PlotStyle.MEDIUM_SIZE,
             )
@@ -1156,7 +1168,7 @@ class Visualizer:
 
             # Plot actual adjacency matrix
             ax_adj_actual = fig.add_subplot(gs_nets[idx, 2])
-            ax_adj_actual.imshow(actual_series[t]["adjacency"], cmap="Blues")
+            ax_adj_actual.imshow(actual_series[t_idx]["adjacency"], cmap="Blues")
             ax_adj_actual.set_title(
                 f"{label} Actual Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
             )
@@ -1166,7 +1178,7 @@ class Visualizer:
             # Plot predicted adjacency matrix
             ax_adj_pred = fig.add_subplot(gs_nets[idx, 3])
             colored_pred = self._create_colored_pred_matrix(
-                actual_series[t]["adjacency"], predictions[t]["adjacency"]
+                actual_series[t_idx]["adjacency"], predictions[t_idx]["adjacency"]
             )
             ax_adj_pred.imshow(colored_pred)
             ax_adj_pred.set_title(
@@ -1176,7 +1188,7 @@ class Visualizer:
             ax_adj_pred.set_yticks([])
 
         # Plot metric evolution
-        times = [s["time"] for s in scores]
+        times = [s["time"] for s in scores]  # Use adjusted times
         metrics_data = {
             "Score": [s["score"] for s in scores],
             "Coverage": [s["coverage"] for s in scores],
@@ -1185,7 +1197,7 @@ class Visualizer:
 
         # Get change points
         change_points = [
-            i
+            i + min_history  # Adjust change points by adding min_history
             for i, state in enumerate(actual_series)
             if state.get("is_change_point", False)
         ]
@@ -1206,8 +1218,7 @@ class Visualizer:
 
             # Plot change points
             for cp in change_points:
-                if cp in times:  # Only show change points within our time range
-                    ax.axvline(x=cp, color="purple", linestyle=":", alpha=0.5)
+                ax.axvline(x=cp, color="purple", linestyle=":", alpha=0.5)
 
             # Highlight best, average, and worst points
             highlight_points = [
@@ -1217,12 +1228,13 @@ class Visualizer:
             ]
 
             for t, label, color in highlight_points:
+                t_idx = t - min_history
                 if metric_name == "Score":
-                    metric_value = scores[t]["score"]
+                    metric_value = scores[t_idx]["score"]
                 elif metric_name == "Coverage":
-                    metric_value = scores[t]["coverage"]
+                    metric_value = scores[t_idx]["coverage"]
                 else:  # FPR
-                    metric_value = scores[t]["fpr"]
+                    metric_value = scores[t_idx]["fpr"]
                 ax.plot(t, metric_value, "o", color=color, markersize=8, zorder=4)
 
             ax.set_xlabel("Time Step")
@@ -1310,3 +1322,311 @@ class Visualizer:
         metrics_legend.get_title().set_fontsize(PlotStyle.MEDIUM_SIZE)
 
         plt.tight_layout(rect=[0, 0.08, 0.85, 0.95])
+
+    def create_martingale_comparison_dashboard(
+        self,
+        network_series: List[Dict[str, Any]],
+        predictions: List[Dict[str, Any]],
+        min_history: int,
+        actual_martingales: Dict[str, Dict],
+        pred_martingales: Dict[str, Dict],
+        actual_shap: np.ndarray,
+        pred_shap: np.ndarray,
+        output_path: Path,
+    ) -> None:
+        """Create a simplified dashboard comparing actual and predicted martingales with SHAP values."""
+        # Get feature names from network metrics
+        feature_names = ["degree", "clustering", "betweenness", "closeness"]
+
+        # Get actual change points from network series
+        change_points = [
+            i
+            for i, state in enumerate(network_series)
+            if state.get("is_change_point", False)
+        ]
+
+        # Create figure
+        fig = plt.figure(figsize=(20, 12))
+        gs = fig.add_gridspec(
+            2, 2, height_ratios=[1, 1], width_ratios=[1, 1], hspace=0.3, wspace=0.3
+        )
+
+        # Color palette for features
+        colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
+
+        # 1. Reset Martingales (Top Left)
+        ax_actual_mart = fig.add_subplot(gs[0, 0])
+        for idx, feature in enumerate(feature_names):
+            values = actual_martingales["reset"][feature]["martingales"]
+            ax_actual_mart.plot(
+                values,
+                label=feature.capitalize(),
+                color=colors[idx],
+                linewidth=1.5,
+                alpha=0.6,
+            )
+
+        # Plot actual change points
+        for cp in change_points:
+            # No need to adjust change points - they should appear at their actual times
+            ax_actual_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
+
+        # Plot combined martingales
+        martingale_arrays = []
+        for feature in feature_names:
+            values = actual_martingales["reset"][feature]["martingales"]
+            martingale_arrays.append(values)
+
+        M_sum = np.sum(martingale_arrays, axis=0)
+        M_avg = M_sum / len(feature_names)
+
+        ax_actual_mart.plot(
+            M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
+        )
+        ax_actual_mart.plot(
+            M_sum,
+            color="#2F2F2F",
+            label="Sum",
+            linewidth=2.5,
+            linestyle="-.",
+            alpha=0.8,
+        )
+
+        # Customize reset martingales plot
+        ax_actual_mart.grid(True, linestyle="--", alpha=0.3)
+        ax_actual_mart.yaxis.set_minor_locator(AutoMinorLocator())
+        ax_actual_mart.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
+        ax_actual_mart.set_xlabel("Time Steps", fontsize=12, labelpad=5)
+        ax_actual_mart.set_ylabel("Martingale Values", fontsize=12, labelpad=10)
+        ax_actual_mart.set_title("Reset Martingale Measures", fontsize=12, pad=15)
+        legend = ax_actual_mart.legend(
+            fontsize=10,
+            ncol=3,
+            loc="upper right",
+            bbox_to_anchor=(1, 1.02),
+            frameon=True,
+            facecolor="none",
+            edgecolor="none",
+        )
+        legend.get_frame().set_facecolor("none")
+        legend.get_frame().set_alpha(0)
+
+        # 2. SHAP Values Over Time (Top Right)
+        ax_actual_shap = fig.add_subplot(gs[0, 1])
+        for idx, feature in enumerate(feature_names):
+            ax_actual_shap.plot(
+                actual_shap[:, idx],
+                label=feature.capitalize(),
+                color=colors[idx],
+                linewidth=1.5,
+                alpha=0.7,
+            )
+
+        # Add actual change point indicators
+        for cp in change_points:
+            # No need to adjust change points - they should appear at their actual times
+            ax_actual_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+
+        ax_actual_shap.set_title("SHAP Values Over Time", fontsize=12, pad=20)
+        ax_actual_shap.set_xlabel("Time Steps", fontsize=10)
+        ax_actual_shap.set_ylabel("Feature Importance", fontsize=10)
+        ax_actual_shap.legend(fontsize=8, title="Centrality Measures")
+        ax_actual_shap.grid(True, alpha=0.3)
+
+        # 3. Predicted Martingales (Bottom Left)
+        ax_pred_mart = fig.add_subplot(gs[1, 0])
+        for idx, feature in enumerate(feature_names):
+            values = pred_martingales["reset"][feature]["martingales"]
+            ax_pred_mart.plot(
+                values,
+                label=feature.capitalize(),
+                color=colors[idx],
+                linewidth=1.5,
+                alpha=0.6,
+            )
+
+        # Plot actual change points
+        for cp in change_points:
+            # No need to adjust change points - they should appear at their actual times
+            ax_pred_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
+
+        # Plot combined predicted martingales
+        pred_martingale_arrays = []
+        for feature in feature_names:
+            values = pred_martingales["reset"][feature]["martingales"]
+            pred_martingale_arrays.append(values)
+
+        M_sum_pred = np.sum(pred_martingale_arrays, axis=0)
+        M_avg_pred = M_sum_pred / len(feature_names)
+
+        ax_pred_mart.plot(
+            M_avg_pred, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
+        )
+        ax_pred_mart.plot(
+            M_sum_pred,
+            color="#2F2F2F",
+            label="Sum",
+            linewidth=2.5,
+            linestyle="-.",
+            alpha=0.8,
+        )
+
+        # Customize predicted martingales plot
+        ax_pred_mart.grid(True, linestyle="--", alpha=0.3)
+        ax_pred_mart.yaxis.set_minor_locator(AutoMinorLocator())
+        ax_pred_mart.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
+        ax_pred_mart.set_xlabel("Time Steps", fontsize=12, labelpad=5)
+        ax_pred_mart.set_ylabel("Martingale Values", fontsize=12, labelpad=10)
+        ax_pred_mart.set_title(
+            "Predicted Reset Martingale Measures", fontsize=12, pad=15
+        )
+        legend = ax_pred_mart.legend(
+            fontsize=10,
+            ncol=3,
+            loc="upper right",
+            bbox_to_anchor=(1, 1.02),
+            frameon=True,
+            facecolor="none",
+            edgecolor="none",
+        )
+        legend.get_frame().set_facecolor("none")
+        legend.get_frame().set_alpha(0)
+
+        # 4. Predicted SHAP Values (Bottom Right)
+        ax_pred_shap = fig.add_subplot(gs[1, 1])
+        for idx, feature in enumerate(feature_names):
+            ax_pred_shap.plot(
+                pred_shap[:, idx],
+                label=feature.capitalize(),
+                color=colors[idx],
+                linewidth=1.5,
+                alpha=0.7,
+            )
+
+        # Add actual change point indicators
+        for cp in change_points:
+            # No need to adjust change points - they should appear at their actual times
+            ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+
+        ax_pred_shap.set_title("Predicted SHAP Values Over Time", fontsize=12, pad=20)
+        ax_pred_shap.set_xlabel("Time Steps", fontsize=10)
+        ax_pred_shap.set_ylabel("Feature Importance", fontsize=10)
+        ax_pred_shap.legend(fontsize=8, title="Centrality Measures")
+        ax_pred_shap.grid(True, alpha=0.3)
+
+        # Adjust layout and save
+        plt.tight_layout()
+        plt.savefig(
+            output_path,
+            dpi=300,
+            bbox_inches="tight",
+            facecolor="white",
+            edgecolor="none",
+        )
+        plt.close()
+
+    def _compute_edge_coverage(self, G_actual: nx.Graph, G_pred: nx.Graph) -> float:
+        """Compute edge coverage (true positive rate) between actual and predicted graphs."""
+        actual_edges = set(G_actual.edges())
+        pred_edges = set(G_pred.edges())
+        if not actual_edges:
+            return 1.0  # If no actual edges, consider perfect coverage
+        return len(actual_edges.intersection(pred_edges)) / len(actual_edges)
+
+    def _compute_false_positive_rate(
+        self, G_actual: nx.Graph, G_pred: nx.Graph
+    ) -> float:
+        """Compute false positive rate between actual and predicted graphs."""
+        actual_edges = set(G_actual.edges())
+        pred_edges = set(G_pred.edges())
+        false_positives = len(pred_edges - actual_edges)
+        true_negatives = (
+            len(G_actual.nodes()) * (len(G_actual.nodes()) - 1)
+        ) // 2 - len(actual_edges)
+        if true_negatives == 0:
+            return 0.0  # If no possible true negatives, consider perfect FPR
+        return false_positives / true_negatives
+
+    def _plot_network_comparison(
+        self,
+        fig: plt.Figure,
+        gs: plt.GridSpec,
+        actual: Dict[str, Any],
+        pred: Dict[str, Any],
+        label: str,
+        metrics: Dict[str, float],
+    ) -> None:
+        """Plot network comparison with actual and predicted graphs."""
+        # Create a subgridspec for this row
+        subgs = gs.subgridspec(1, 4, wspace=0.3)
+
+        # Get graphs
+        G_actual = actual["graph"]
+        G_pred = pred["graph"]
+
+        # Use same layout for both graphs
+        pos = nx.spring_layout(G_actual, seed=42)
+
+        # Plot actual network
+        ax_actual = fig.add_subplot(subgs[0])
+        nx.draw(
+            G_actual,
+            pos,
+            ax=ax_actual,
+            node_color="lightblue",
+            node_size=100,
+            edge_color="black",
+            alpha=0.7,
+            with_labels=False,
+        )
+        ax_actual.set_title(f"{label} Actual Network (t={actual['time']})")
+
+        # Plot predicted network
+        ax_pred = fig.add_subplot(subgs[1])
+        nx.draw(
+            G_pred,
+            pos,
+            ax=ax_pred,
+            node_color="lightblue",
+            node_size=100,
+            edge_color="black",
+            alpha=0.7,
+            with_labels=False,
+        )
+        ax_pred.set_title(
+            f"{label} Predicted Network\nCoverage: {metrics['coverage']:.3f}, FPR: {metrics['fpr']:.3f}"
+        )
+
+        # Plot actual adjacency matrix
+        ax_adj_actual = fig.add_subplot(subgs[2])
+        ax_adj_actual.imshow(actual["adjacency"], cmap="Blues")
+        ax_adj_actual.set_title(f"{label} Actual Adjacency")
+        ax_adj_actual.axis("off")
+
+        # Plot predicted adjacency matrix with color-coded differences
+        ax_adj_pred = fig.add_subplot(subgs[3])
+        colored_adj = self._create_colored_adjacency(
+            actual["adjacency"], pred["adjacency"]
+        )
+        ax_adj_pred.imshow(colored_adj)
+        ax_adj_pred.set_title(f"{label} Predicted Adjacency")
+        ax_adj_pred.axis("off")
+
+    def _create_colored_adjacency(
+        self, actual_adj: np.ndarray, pred_adj: np.ndarray
+    ) -> np.ndarray:
+        """Create a colored adjacency matrix highlighting differences."""
+        # Create RGB array (green for correct, red for false positive, blue for missed)
+        colored = np.zeros((*actual_adj.shape, 3))
+
+        # Correct predictions (green)
+        correct = actual_adj == pred_adj
+        colored[correct & (actual_adj == 1)] = [0, 1, 0]  # Green for correct edges
+
+        # False positives (red)
+        colored[(actual_adj == 0) & (pred_adj == 1)] = [1, 0, 0]
+
+        # Missed edges (blue)
+        colored[(actual_adj == 1) & (pred_adj == 0)] = [0, 0, 1]
+
+        return colored

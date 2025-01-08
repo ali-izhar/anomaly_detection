@@ -23,7 +23,7 @@ from predictor.hybrid import (
 )
 from predictor.visualizer import Visualizer
 from changepoint.detector import ChangePointDetector
-from changepoint.visualizer import MartingaleVisualizer
+from changepoint.threshold import CustomThresholdModel
 from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
@@ -385,13 +385,18 @@ def analyze_martingales(
             "change_detected_instant": cumul_results["change_points"],
         }
 
-    # Create martingale visualizations
-    # 1. Actual network martingales
-    actual_visualizer = MartingaleVisualizer(
-        graphs=[
-            state["adjacency"]
-            for state in network_series[min_history : min_history + len(predictions)]
-        ],
+    # Compute SHAP values for actual and predicted networks
+    model = CustomThresholdModel(threshold=threshold)
+
+    # For actual networks
+    actual_feature_matrix = np.column_stack(
+        [
+            actual_martingales["reset"][feature]["martingales"]
+            for feature in actual_features.keys()
+        ]
+    )
+    actual_shap = model.compute_shap_values(
+        X=actual_feature_matrix,
         change_points=sorted(
             list(
                 set(
@@ -401,17 +406,19 @@ def analyze_martingales(
                 )
             )
         ),
-        martingales=actual_martingales,  # Now includes both reset and cumulative
-        graph_type="Actual",
-        threshold=threshold,
-        epsilon=epsilon,
-        output_dir=str(output_dir / "martingales"),
+        sequence_length=len(actual_feature_matrix),
+        window_size=5,
     )
-    actual_visualizer.create_dashboard()
 
-    # 2. Predicted network martingales
-    pred_visualizer = MartingaleVisualizer(
-        graphs=[state["adjacency"] for state in predictions],
+    # For predicted networks
+    pred_feature_matrix = np.column_stack(
+        [
+            pred_martingales["reset"][feature]["martingales"]
+            for feature in pred_features.keys()
+        ]
+    )
+    pred_shap = model.compute_shap_values(
+        X=pred_feature_matrix,
         change_points=sorted(
             list(
                 set(
@@ -421,46 +428,22 @@ def analyze_martingales(
                 )
             )
         ),
-        martingales=pred_martingales,  # Now includes both reset and cumulative
-        graph_type="Predicted",
-        threshold=threshold,
-        epsilon=epsilon,
-        output_dir=str(output_dir / "martingales"),
+        sequence_length=len(pred_feature_matrix),
+        window_size=5,
     )
-    pred_visualizer.create_dashboard()
 
-    # 3. Create comparison plot
-    plt.figure(figsize=(15, 10))
-    for feature_name in actual_features.keys():
-        plt.subplot(2, 2, list(actual_features.keys()).index(feature_name) + 1)
-
-        # Plot actual martingales
-        actual_values = actual_martingales["reset"][feature_name]["martingales"]
-        plt.plot(actual_values, label="Actual", color="blue", alpha=0.7)
-
-        # Plot predicted martingales
-        pred_values = pred_martingales["reset"][feature_name]["martingales"]
-        plt.plot(pred_values, label="Predicted", color="red", alpha=0.7)
-
-        # Plot change points
-        for cp in actual_martingales["reset"][feature_name]["change_detected_instant"]:
-            plt.axvline(x=cp, color="blue", linestyle="--", alpha=0.3)
-        for cp in pred_martingales["reset"][feature_name]["change_detected_instant"]:
-            plt.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
-
-        plt.title(f"{feature_name.capitalize()} Martingale Comparison")
-        plt.xlabel("Time Steps")
-        plt.ylabel("Martingale Value")
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-
-    plt.tight_layout()
-    plt.savefig(
-        output_dir / "martingales" / "martingale_comparison.png",
-        dpi=300,
-        bbox_inches="tight",
+    # Create simplified dashboard using the Visualizer class
+    visualizer = Visualizer()
+    visualizer.create_martingale_comparison_dashboard(
+        network_series=network_series,
+        predictions=predictions,
+        min_history=min_history,
+        actual_martingales=actual_martingales,
+        pred_martingales=pred_martingales,
+        actual_shap=actual_shap,
+        pred_shap=pred_shap,
+        output_path=output_dir / "martingale_comparison_dashboard.png",
     )
-    plt.close()
 
 
 def main():
@@ -569,6 +552,7 @@ def main():
             min_history : min_history + len(predictions)
         ],  # Align with predictions
         predictions,
+        min_history=min_history,
         model_type=args.model,
     )
     plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
