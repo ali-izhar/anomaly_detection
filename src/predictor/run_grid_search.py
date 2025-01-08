@@ -1,4 +1,4 @@
-# src/run_grid_search.py
+# src/predictor/run_grid_search.py
 
 """Grid search script for network forecasting."""
 
@@ -14,14 +14,16 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor
-from predictor.weighted import WeightedPredictor
-from predictor.grid_search import GridSearch
-from predictor.hybrid.sbm_predictor import SBMPredictor
-from predictor.hybrid.ba_predictor import BAPredictor
-from predictor.hybrid.er_predictor import ERPredictor
-from predictor.hybrid.rcp_predictor import RCPPredictor
-from predictor.hybrid.ws_predictor import WSPredictor
 from config.graph_configs import GRAPH_CONFIGS
+
+from weighted import WeightedPredictor
+from grid_search import GridSearch
+from hybrid.sbm_predictor import SBMPredictor
+from hybrid.ba_predictor import BAPredictor
+from hybrid.er_predictor import ERPredictor
+from hybrid.rcp_predictor import RCPPredictor
+from hybrid.ws_predictor import WSPredictor
+
 
 # Configure logging
 logging.basicConfig(

@@ -1,4 +1,4 @@
-# src/compare.py
+# src/predictor/compare.py
 
 """Compare performance of weighted and hybrid SBM predictors."""
 
@@ -15,9 +15,10 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor
-from predictor.weighted import WeightedPredictor
-from predictor.hybrid.sbm_predictor import SBMPredictor
 from config.graph_configs import GRAPH_CONFIGS
+
+from weighted import WeightedPredictor
+from hybrid.sbm_predictor import SBMPredictor
 
 # Configure logging
 logging.basicConfig(
