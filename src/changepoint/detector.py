@@ -25,6 +25,7 @@ class ChangePointDetector:
         data: np.ndarray,
         threshold: float,
         epsilon: float,
+        reset: bool = False,
         max_window: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Detect change points in single-view sequential data.
@@ -84,6 +85,7 @@ class ChangePointDetector:
             data=data.tolist(),
             threshold=threshold,
             epsilon=epsilon,
+            reset=reset,
             window_size=max_window,
         )
 
@@ -99,6 +101,7 @@ class ChangePointDetector:
         data: List[np.ndarray],
         threshold: float,
         epsilon: float,
+        reset: bool = False,
         max_window: Optional[int] = None,
         max_martingale: Optional[float] = None,
     ) -> Dict[str, Any]:

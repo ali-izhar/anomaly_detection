@@ -22,6 +22,8 @@ from predictor.hybrid import (
     ERPredictor,
 )
 from predictor.visualizer import Visualizer
+from changepoint.detector import ChangePointDetector
+from changepoint.visualizer import MartingaleVisualizer
 from config.graph_configs import GRAPH_CONFIGS
 
 from typing import Dict, List, Any
@@ -290,6 +292,177 @@ def analyze_prediction_phases(
     return results
 
 
+def compute_network_features(graphs: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
+    """Compute network features for martingale analysis."""
+    feature_extractor = NetworkFeatureExtractor()
+    features = {
+        "degree": [],
+        "clustering": [],
+        "betweenness": [],
+        "closeness": [],
+    }
+
+    for state in graphs:
+        G = state["graph"]
+        metrics = feature_extractor.get_all_metrics(G)
+        features["degree"].append(metrics.avg_degree)
+        features["clustering"].append(metrics.clustering)
+        features["betweenness"].append(metrics.avg_betweenness)
+        features["closeness"].append(metrics.avg_closeness)
+
+    return {k: np.array(v) for k, v in features.items()}
+
+
+def analyze_martingales(
+    network_series: List[Dict[str, Any]],
+    predictions: List[Dict[str, Any]],
+    min_history: int,
+    output_dir: Path,
+) -> None:
+    """Analyze and visualize martingales for actual and predicted networks."""
+    # Extract features for actual and predicted networks
+    actual_features = compute_network_features(
+        network_series[min_history : min_history + len(predictions)]
+    )
+    pred_features = compute_network_features(predictions)
+
+    # Initialize detector
+    detector = ChangePointDetector()
+    threshold = 20.0  # Can be made configurable
+    epsilon = 0.8  # Can be made configurable
+
+    # Compute martingales for actual networks
+    actual_martingales = {"reset": {}, "cumulative": {}}
+    for feature_name, feature_data in actual_features.items():
+        # Reset martingales (with reset=True)
+        reset_results = detector.detect_changes(
+            data=feature_data.reshape(-1, 1),
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=True,
+        )
+        actual_martingales["reset"][feature_name] = {
+            "martingales": reset_results["martingale_values"],
+            "change_detected_instant": reset_results["change_points"],
+        }
+
+        # Cumulative martingales (with reset=False)
+        cumul_results = detector.detect_changes(
+            data=feature_data.reshape(-1, 1),
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=False,
+        )
+        actual_martingales["cumulative"][feature_name] = {
+            "martingales": cumul_results["martingale_values"],
+            "change_detected_instant": cumul_results["change_points"],
+        }
+
+    # Compute martingales for predicted networks
+    pred_martingales = {"reset": {}, "cumulative": {}}
+    for feature_name, feature_data in pred_features.items():
+        # Reset martingales
+        reset_results = detector.detect_changes(
+            data=feature_data.reshape(-1, 1),
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=True,
+        )
+        pred_martingales["reset"][feature_name] = {
+            "martingales": reset_results["martingale_values"],
+            "change_detected_instant": reset_results["change_points"],
+        }
+
+        # Cumulative martingales
+        cumul_results = detector.detect_changes(
+            data=feature_data.reshape(-1, 1),
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=False,
+        )
+        pred_martingales["cumulative"][feature_name] = {
+            "martingales": cumul_results["martingale_values"],
+            "change_detected_instant": cumul_results["change_points"],
+        }
+
+    # Create martingale visualizations
+    # 1. Actual network martingales
+    actual_visualizer = MartingaleVisualizer(
+        graphs=[
+            state["adjacency"]
+            for state in network_series[min_history : min_history + len(predictions)]
+        ],
+        change_points=sorted(
+            list(
+                set(
+                    cp
+                    for m in actual_martingales["reset"].values()
+                    for cp in m["change_detected_instant"]
+                )
+            )
+        ),
+        martingales=actual_martingales,  # Now includes both reset and cumulative
+        graph_type="Actual",
+        threshold=threshold,
+        epsilon=epsilon,
+        output_dir=str(output_dir / "martingales"),
+    )
+    actual_visualizer.create_dashboard()
+
+    # 2. Predicted network martingales
+    pred_visualizer = MartingaleVisualizer(
+        graphs=[state["adjacency"] for state in predictions],
+        change_points=sorted(
+            list(
+                set(
+                    cp
+                    for m in pred_martingales["reset"].values()
+                    for cp in m["change_detected_instant"]
+                )
+            )
+        ),
+        martingales=pred_martingales,  # Now includes both reset and cumulative
+        graph_type="Predicted",
+        threshold=threshold,
+        epsilon=epsilon,
+        output_dir=str(output_dir / "martingales"),
+    )
+    pred_visualizer.create_dashboard()
+
+    # 3. Create comparison plot
+    plt.figure(figsize=(15, 10))
+    for feature_name in actual_features.keys():
+        plt.subplot(2, 2, list(actual_features.keys()).index(feature_name) + 1)
+
+        # Plot actual martingales
+        actual_values = actual_martingales["reset"][feature_name]["martingales"]
+        plt.plot(actual_values, label="Actual", color="blue", alpha=0.7)
+
+        # Plot predicted martingales
+        pred_values = pred_martingales["reset"][feature_name]["martingales"]
+        plt.plot(pred_values, label="Predicted", color="red", alpha=0.7)
+
+        # Plot change points
+        for cp in actual_martingales["reset"][feature_name]["change_detected_instant"]:
+            plt.axvline(x=cp, color="blue", linestyle="--", alpha=0.3)
+        for cp in pred_martingales["reset"][feature_name]["change_detected_instant"]:
+            plt.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+
+        plt.title(f"{feature_name.capitalize()} Martingale Comparison")
+        plt.xlabel("Time Steps")
+        plt.ylabel("Martingale Value")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(
+        output_dir / "martingales" / "martingale_comparison.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
 def main():
     """Main execution function."""
     args = get_args()
@@ -400,6 +573,10 @@ def main():
     )
     plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
     plt.close()
+
+    # 4. Analyze martingales
+    print("Analyzing martingales...")
+    analyze_martingales(network_series, predictions, min_history, output_dir)
 
     # Analyze prediction accuracy
     print(f"\nPrediction Performance Summary for {args.model}:")
