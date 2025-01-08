@@ -256,14 +256,20 @@ class Visualizer:
     def _create_colored_pred_matrix(
         self, adj_actual: np.ndarray, adj_pred: np.ndarray
     ) -> np.ndarray:
-        """Create an RGB array highlighting correct predictions (green) and false positives (red)."""
+        """Create an RGB array highlighting correct predictions (green), false positives (red), and missed edges (gray)."""
         colored_pred = np.zeros((*adj_pred.shape, 3))
 
+        # Correct predictions (green)
         correct_mask = (adj_actual == 1) & (adj_pred == 1)
         colored_pred[correct_mask] = [0, 1, 0]  # Green
 
+        # False positives (red)
         false_pos_mask = (adj_actual == 0) & (adj_pred == 1)
         colored_pred[false_pos_mask] = [1, 0, 0]  # Red
+
+        # Missed edges (gray)
+        missed_mask = (adj_actual == 1) & (adj_pred == 0)
+        colored_pred[missed_mask] = [0.7, 0.7, 0.7]  # Gray
 
         return colored_pred
 
@@ -1028,7 +1034,6 @@ class Visualizer:
             true_adj = actual_series[t]["adjacency"]
             pred_adj = predictions[t]["adjacency"]
             metrics = self._calculate_adjacency_metrics(true_adj, pred_adj)
-            # Calculate score as harmonic mean of coverage and (1-fpr)
             coverage = metrics["coverage"]
             fpr = metrics["fpr"]
             score = (
@@ -1036,27 +1041,38 @@ class Visualizer:
                 if coverage + (1 - fpr) > 0
                 else 0
             )
-            # Store time with min_history offset
             scores.append(
                 {
                     "time": t + min_history,
                     "score": score,
                     "coverage": coverage,
                     "fpr": fpr,
+                    "index": t,  # Store original index for correct data access
                 }
             )
 
         # Find best, worst, and average time points
-        sorted_scores = sorted(scores, key=lambda x: x["score"])
-        worst_point = sorted_scores[0]
-        best_point = sorted_scores[-1]
+        score_values = [s["score"] for s in scores]
+        best_idx = np.argmax(score_values)
+        worst_idx = np.argmin(score_values)
 
-        # Find the point closest to mean score
-        mean_score = np.mean([s["score"] for s in scores])
-        avg_point = min(scores, key=lambda x: abs(x["score"] - mean_score))
+        # Find point closest to mean score
+        mean_score = np.mean(score_values)
+        avg_idx = min(
+            range(len(scores)), key=lambda i: abs(scores[i]["score"] - mean_score)
+        )
+
+        best_point = scores[best_idx]
+        worst_point = scores[worst_idx]
+        avg_point = scores[avg_idx]
 
         time_points = [best_point["time"], avg_point["time"], worst_point["time"]]
         point_labels = ["Best", "Average", "Worst"]
+        point_indices = [
+            best_point["index"],
+            avg_point["index"],
+            worst_point["index"],
+        ]  # For accessing data
 
         # Create figure
         fig, model_name = self._create_figure_with_suptitle(
@@ -1093,12 +1109,13 @@ class Visualizer:
         )
 
         # Plot networks (reusing existing code)
-        for idx, (t, label) in enumerate(zip(time_points, point_labels)):
-            # Get actual and predicted networks (adjust time by subtracting min_history)
-            t_idx = t - min_history
-            G_actual = actual_series[t_idx]["graph"]
-            G_pred = predictions[t_idx]["graph"]
-            pos = nx.spring_layout(G_actual, seed=42)  # Use same layout for both
+        for idx, (t, label, orig_idx) in enumerate(
+            zip(time_points, point_labels, point_indices)
+        ):
+            # Get actual and predicted networks using original index
+            G_actual = actual_series[orig_idx]["graph"]
+            G_pred = predictions[orig_idx]["graph"]
+            pos = nx.spring_layout(G_actual, seed=42)
 
             # Calculate metrics
             correct_edges, false_positive_edges, missed_edges, metrics = (
@@ -1168,7 +1185,7 @@ class Visualizer:
 
             # Plot actual adjacency matrix
             ax_adj_actual = fig.add_subplot(gs_nets[idx, 2])
-            ax_adj_actual.imshow(actual_series[t_idx]["adjacency"], cmap="Blues")
+            ax_adj_actual.imshow(actual_series[orig_idx]["adjacency"], cmap="Blues")
             ax_adj_actual.set_title(
                 f"{label} Actual Adjacency", pad=10, fontsize=PlotStyle.MEDIUM_SIZE
             )
@@ -1178,7 +1195,7 @@ class Visualizer:
             # Plot predicted adjacency matrix
             ax_adj_pred = fig.add_subplot(gs_nets[idx, 3])
             colored_pred = self._create_colored_pred_matrix(
-                actual_series[t_idx]["adjacency"], predictions[t_idx]["adjacency"]
+                actual_series[orig_idx]["adjacency"], predictions[orig_idx]["adjacency"]
             )
             ax_adj_pred.imshow(colored_pred)
             ax_adj_pred.set_title(
@@ -1188,7 +1205,7 @@ class Visualizer:
             ax_adj_pred.set_yticks([])
 
         # Plot metric evolution
-        times = [s["time"] for s in scores]  # Use adjusted times
+        times = [s["time"] for s in scores]
         metrics_data = {
             "Score": [s["score"] for s in scores],
             "Coverage": [s["coverage"] for s in scores],
@@ -1197,7 +1214,7 @@ class Visualizer:
 
         # Get change points
         change_points = [
-            i + min_history  # Adjust change points by adding min_history
+            i + min_history
             for i, state in enumerate(actual_series)
             if state.get("is_change_point", False)
         ]
@@ -1222,19 +1239,18 @@ class Visualizer:
 
             # Highlight best, average, and worst points
             highlight_points = [
-                (best_point["time"], "Best", "green"),
-                (avg_point["time"], "Average", "blue"),
-                (worst_point["time"], "Worst", "red"),
+                (best_point["time"], best_point["index"], "Best", "green"),
+                (avg_point["time"], avg_point["index"], "Average", "blue"),
+                (worst_point["time"], worst_point["index"], "Worst", "red"),
             ]
 
-            for t, label, color in highlight_points:
-                t_idx = t - min_history
+            for t, orig_idx, label, color in highlight_points:
                 if metric_name == "Score":
-                    metric_value = scores[t_idx]["score"]
+                    metric_value = scores[orig_idx]["score"]
                 elif metric_name == "Coverage":
-                    metric_value = scores[t_idx]["coverage"]
+                    metric_value = scores[orig_idx]["coverage"]
                 else:  # FPR
-                    metric_value = scores[t_idx]["fpr"]
+                    metric_value = scores[orig_idx]["fpr"]
                 ax.plot(t, metric_value, "o", color=color, markersize=8, zorder=4)
 
             ax.set_xlabel("Time Step")
