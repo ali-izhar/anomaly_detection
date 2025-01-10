@@ -20,16 +20,27 @@ logger = logging.getLogger(__name__)
 #######################
 
 
-def generate_network_series(
-    config: Dict[str, Any], seed: int = None
-) -> List[Dict[str, Any]]:
-    """Generate a time series of evolving networks."""
+def generate_network_series(config: Dict[str, Any], seed: int = None) -> Dict[str, Any]:
+    """Generate a time series of evolving networks.
+
+    Returns:
+        Dict containing:
+        - graphs: List of network states
+        - change_points: List of change point indices
+        - parameters: List of parameters for each segment
+        - metadata: Additional information
+        - model: Model type
+        - num_changes: Number of changes
+        - n: Number of nodes
+        - sequence_length: Total sequence length
+    """
     if seed is not None:
         np.random.seed(seed)
 
     generator = GraphGenerator()
     feature_extractor = NetworkFeatureExtractor()
 
+    # Generate base sequence
     result = generator.generate_sequence(
         model=config["model"], params=config["params"], seed=seed
     )
@@ -43,10 +54,10 @@ def generate_network_series(
         param_map[i] = current_params
 
     # Convert to network states
-    network_series = []
+    network_states = []
     for i, adj in enumerate(result["graphs"]):
         G = nx.from_numpy_array(adj)
-        network_series.append(
+        network_states.append(
             {
                 "time": i,
                 "adjacency": adj,
@@ -57,7 +68,17 @@ def generate_network_series(
             }
         )
 
-    return network_series
+    # Return in expected format
+    return {
+        "graphs": network_states,
+        "change_points": result["change_points"],
+        "parameters": result["parameters"],
+        "metadata": result["metadata"],
+        "model": result["model"],
+        "num_changes": result["num_changes"],
+        "n": result["n"],
+        "sequence_length": result["sequence_length"],
+    }
 
 
 #######################

@@ -1,6 +1,6 @@
 # src/main.py
 
-"""Main script for network forecasting."""
+"""Main script for network forecasting with clear separation of data generation, actual processing, and forecasting."""
 
 import sys
 from pathlib import Path
@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import logging
 import matplotlib.pyplot as plt
+import numpy as np
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -99,9 +100,9 @@ def get_args():
         "-l", "--seq-len", type=int, default=100, help="Sequence length"
     )
     parser.add_argument("--min-changes", type=int, default=1, help="Min change points")
-    parser.add_argument("--max-changes", type=int, default=3, help="Max change points")
+    parser.add_argument("--max-changes", type=int, default=1, help="Max change points")
     parser.add_argument(
-        "-s", "--min-segment", type=int, default=30, help="Min segment length"
+        "-s", "--min-segment", type=int, default=50, help="Min segment length"
     )
     parser.add_argument(
         "-w", "--prediction-window", type=int, default=3, help="Prediction steps"
@@ -121,8 +122,174 @@ def get_args():
     return args
 
 
+def generate_data(args, config):
+    """Generate synthetic network data."""
+    logger.info(f"Generating {args.model} network time series...")
+    network_data = generate_network_series(config, seed=args.seed)
+
+    # Extract ground truth information
+    ground_truth = {
+        "change_points": network_data["change_points"],
+        "parameters": network_data["parameters"],
+        "metadata": network_data["metadata"],
+        "model": network_data["model"],
+        "num_changes": network_data["num_changes"],
+        "n": network_data["n"],
+        "sequence_length": network_data["sequence_length"],
+    }
+
+    return network_data["graphs"], ground_truth
+
+
+def compute_actual_metrics(graphs, min_history):
+    """Compute actual network metrics without data leakage."""
+    logger.info("Computing actual network metrics...")
+    actual_features = compute_network_features(graphs[min_history:])
+
+    detector = ChangePointDetector()
+    actual_martingales = compute_martingales(actual_features, detector)
+    actual_shap = compute_shap_values(actual_martingales, actual_features)
+
+    return actual_features, actual_martingales, actual_shap
+
+
+def compute_forecast_metrics(graphs, predictor, args):
+    """Compute forecasting metrics without data leakage."""
+    logger.info("Performing rolling predictions...")
+    predictions = generate_predictions(
+        network_series=graphs,
+        predictor=predictor,
+        min_history=args.min_history,
+        seq_len=args.seq_len,
+        prediction_window=args.prediction_window,
+    )
+
+    pred_features = compute_network_features(predictions)
+
+    detector = ChangePointDetector()
+    pred_martingales = compute_martingales(pred_features, detector)
+    pred_shap = compute_shap_values(pred_martingales, pred_features)
+
+    return predictions, pred_features, pred_martingales, pred_shap
+
+
+def save_results(
+    output_dir, args, config, ground_truth, actual_metrics, forecast_metrics
+):
+    """Save all results and configurations."""
+
+    def convert_to_serializable(obj):
+        """Convert numpy types to Python native types."""
+        if isinstance(obj, (np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_serializable(item) for item in obj]
+        elif isinstance(obj, Path):
+            return str(obj)
+        return obj
+
+    # Convert ground truth to serializable format
+    serializable_ground_truth = convert_to_serializable(ground_truth)
+
+    # Save configuration
+    with open(output_dir / "config.json", "w") as f:
+        json.dump(
+            {
+                "model": args.model,
+                "parameters": {
+                    k: convert_to_serializable(v) for k, v in vars(args).items()
+                },
+                "model_config": {
+                    "model": config["model"],
+                    "params": {
+                        k: convert_to_serializable(v)
+                        for k, v in vars(config["params"]).items()
+                    },
+                },
+                "ground_truth": serializable_ground_truth,
+            },
+            f,
+            indent=4,
+        )
+
+    # # Save metrics
+    # np.save(output_dir / "actual_features.npy", actual_metrics[0])
+    # np.save(output_dir / "actual_martingales.npy", actual_metrics[1])
+    # np.save(output_dir / "actual_shap.npy", actual_metrics[2])
+
+    # np.save(output_dir / "predictions.npy", forecast_metrics[0])
+    # np.save(output_dir / "pred_features.npy", forecast_metrics[1])
+    # np.save(output_dir / "pred_martingales.npy", forecast_metrics[2])
+    # np.save(output_dir / "pred_shap.npy", forecast_metrics[3])
+
+
+def generate_visualizations(
+    output_dir,
+    graphs,
+    predictions,
+    actual_metrics,
+    forecast_metrics,
+    args,
+    ground_truth,
+):
+    """Generate and save visualizations."""
+    logger.info("Generating visualizations...")
+    visualizer = Visualizer()
+
+    # 1. Metric evolution
+    plt.figure(figsize=(12, 8))
+    visualizer.plot_metric_evolution(
+        graphs,
+        predictions,
+        args.min_history,
+        model_type=args.model,
+        change_points=ground_truth["change_points"],
+    )
+    plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 2. Node degree evolution
+    visualizer.plot_node_degree_evolution(
+        graphs,
+        change_points=ground_truth["change_points"],
+        output_path=output_dir / "node_degree_evolution.png",
+    )
+
+    # 3. Performance extremes
+    plt.figure(figsize=(20, 15))
+    visualizer.plot_performance_extremes(
+        graphs[args.min_history : args.min_history + len(predictions)],
+        predictions,
+        min_history=args.min_history,
+        model_type=args.model,
+        change_points=ground_truth["change_points"],
+    )
+    plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 4. Martingale comparison dashboard
+    visualizer.create_martingale_comparison_dashboard(
+        network_series=graphs,
+        predictions=predictions,
+        min_history=args.min_history,
+        actual_martingales=actual_metrics[1],
+        pred_martingales=forecast_metrics[2],
+        actual_shap=actual_metrics[2],
+        pred_shap=forecast_metrics[3],
+        output_path=output_dir / "martingale_comparison_dashboard.png",
+        threshold=30.0,
+        change_points=ground_truth["change_points"],
+    )
+
+
 def main():
-    """Main execution function."""
+    """Main execution function with clear separation of data generation, processing, and forecasting."""
     args = get_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -145,99 +312,35 @@ def main():
         else PREDICTOR_MAP["hybrid"][args.model](config=config)
     )
 
-    # Save configuration
-    with open(output_dir / "config.json", "w") as f:
-        json.dump(
-            {
-                "model": args.model,
-                "parameters": {
-                    k: str(v) if isinstance(v, Path) else v
-                    for k, v in vars(args).items()
-                },
-                "model_config": {
-                    "model": config["model"],
-                    "params": {
-                        k: v if isinstance(v, (int, float, str, bool)) else str(v)
-                        for k, v in vars(config["params"]).items()
-                    },
-                },
-            },
-            f,
-            indent=4,
-        )
+    # 1. Generate synthetic data
+    graphs, ground_truth = generate_data(args, config)
 
-    # Generate and predict network series
-    print(f"Generating {args.model} network time series...")
-    network_series = generate_network_series(config, seed=args.seed)
+    # 2. Compute actual metrics (without data leakage)
+    actual_metrics = compute_actual_metrics(graphs, args.min_history)
 
-    print("Performing rolling predictions...")
-    predictions = generate_predictions(
-        network_series=network_series,
-        predictor=predictor,
-        min_history=args.min_history,
-        seq_len=args.seq_len,
-        prediction_window=args.prediction_window,
+    # 3. Compute forecast metrics (without data leakage)
+    forecast_metrics = compute_forecast_metrics(graphs, predictor, args)
+
+    # 4. Save results
+    save_results(
+        output_dir, args, config, ground_truth, actual_metrics, forecast_metrics
     )
 
-    # Compute features and martingales
-    print("Computing features and martingales...")
-    actual_features = compute_network_features(
-        network_series[args.min_history : args.min_history + len(predictions)]
-    )
-    pred_features = compute_network_features(predictions)
-
-    detector = ChangePointDetector()
-    actual_martingales = compute_martingales(actual_features, detector)
-    pred_martingales = compute_martingales(pred_features, detector)
-
-    actual_shap = compute_shap_values(actual_martingales, actual_features)
-    pred_shap = compute_shap_values(pred_martingales, pred_features)
-
-    # Generate visualizations
-    print("Generating visualizations...")
-    visualizer = Visualizer()
-
-    # 1. Metric evolution
-    plt.figure(figsize=(12, 8))
-    visualizer.plot_metric_evolution(
-        network_series, predictions, args.min_history, model_type=args.model
-    )
-    plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 2. Node degree evolution
-    visualizer.plot_node_degree_evolution(
-        network_series, output_path=output_dir / "node_degree_evolution.png"
+    # 5. Generate visualizations
+    generate_visualizations(
+        output_dir,
+        graphs,
+        forecast_metrics[0],
+        actual_metrics,
+        forecast_metrics,
+        args,
+        ground_truth,
     )
 
-    # 3. Performance extremes
-    plt.figure(figsize=(20, 15))
-    visualizer.plot_performance_extremes(
-        network_series[args.min_history : args.min_history + len(predictions)],
-        predictions,
-        min_history=args.min_history,
-        model_type=args.model,
-    )
-    plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 4. Martingale comparison dashboard
-    visualizer.create_martingale_comparison_dashboard(
-        network_series=network_series,
-        predictions=predictions,
-        min_history=args.min_history,
-        actual_martingales=actual_martingales,
-        pred_martingales=pred_martingales,
-        actual_shap=actual_shap,
-        pred_shap=pred_shap,
-        output_path=output_dir / "martingale_comparison_dashboard.png",
-        threshold=30.0,
-    )
-
-    # Analyze prediction accuracy
+    # 6. Analyze prediction accuracy
     print(f"\nPrediction Performance Summary for {args.model}:")
     print("-" * 50)
-    analyze_prediction_phases(predictions, network_series, args.min_history, output_dir)
+    analyze_prediction_phases(forecast_metrics[0], graphs, args.min_history, output_dir)
 
     print(f"\nResults saved to: {output_dir}")
 

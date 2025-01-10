@@ -319,6 +319,7 @@ class Visualizer:
         min_history: int,
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (20, 15),
+        change_points: List[int] = None,
     ) -> None:
         """Create an enhanced visualization of network metric evolution over time."""
         # Calculate metrics
@@ -331,12 +332,13 @@ class Visualizer:
         ]
         pred_times = [p["time"] for p in predictions]
 
-        # Get change points
-        change_points = [
-            i
-            for i, state in enumerate(actual_series)
-            if state.get("is_change_point", False)
-        ]
+        # Use provided change points or extract from series
+        if change_points is None:
+            change_points = [
+                i
+                for i, state in enumerate(actual_series)
+                if state.get("is_change_point", False)
+            ]
 
         # Create figure with GridSpec for better layout
         fig, model_name = self._create_figure_with_suptitle(
@@ -622,6 +624,7 @@ class Visualizer:
         network_series: List[Dict[str, Any]],
         output_path: str = None,
         figsize: Tuple[int, int] = (20, 15),
+        change_points: List[int] = None,
     ) -> None:
         """Create a comprehensive dashboard for node degree evolution analysis."""
         n_nodes = len(network_series[0]["graph"].nodes())
@@ -637,6 +640,14 @@ class Visualizer:
         fig, model_name = self._create_figure_with_suptitle(
             "Network Degree Evolution Analysis", model_type="Unknown", figsize=figsize
         )
+
+        # Use provided change points or extract from series
+        if change_points is None:
+            change_points = [
+                i
+                for i, state in enumerate(network_series)
+                if state.get("is_change_point", False)
+            ]
 
         gs = fig.add_gridspec(
             2,
@@ -1026,6 +1037,7 @@ class Visualizer:
         min_history: int,
         model_type: str = "Unknown",
         figsize: Tuple[int, int] = (20, 20),
+        change_points: List[int] = None,
     ) -> None:
         """Plot network comparisons at time steps with best, worst, and average performance."""
         # Calculate scores for all predictions
@@ -1078,6 +1090,14 @@ class Visualizer:
         fig, model_name = self._create_figure_with_suptitle(
             "Network Prediction Performance Analysis", model_type, figsize
         )
+
+        # Use provided change points or extract from series
+        if change_points is None:
+            change_points = [
+                i
+                for i, state in enumerate(actual_series)
+                if state.get("is_change_point", False)
+            ]
 
         # Create two grid specs: one for networks and one for metric plots
         gs_main = fig.add_gridspec(
@@ -1235,7 +1255,8 @@ class Visualizer:
 
             # Plot change points
             for cp in change_points:
-                ax.axvline(x=cp, color="purple", linestyle=":", alpha=0.5)
+                if cp >= min_history:  # Only plot change points after min_history
+                    ax.axvline(x=cp, color="purple", linestyle=":", alpha=0.5)
 
             # Highlight best, average, and worst points
             highlight_points = [
@@ -1350,17 +1371,19 @@ class Visualizer:
         pred_shap: np.ndarray,
         output_path: Path,
         threshold: float = 30.0,
+        change_points: List[int] = None,
     ) -> None:
         """Create a simplified dashboard comparing actual and predicted martingales with SHAP values."""
         # Get feature names from network metrics
         feature_names = ["degree", "clustering", "betweenness", "closeness"]
 
-        # Get actual change points from network series
-        change_points = [
-            i
-            for i, state in enumerate(network_series)
-            if state.get("is_change_point", False)
-        ]
+        # Use provided change points or extract from series
+        if change_points is None:
+            change_points = [
+                i
+                for i, state in enumerate(network_series)
+                if state.get("is_change_point", False)
+            ]
 
         # Create figure
         fig = plt.figure(figsize=(20, 12))

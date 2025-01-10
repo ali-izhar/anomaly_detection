@@ -101,8 +101,8 @@ def get_sbm_config(
     min_changes: int = 1,
     max_changes: int = 3,
 ) -> Dict[str, Any]:
-    """Get configuration for Stochastic Block Model network with extremely distinct states
-    and drastic changes at change points."""
+    """Get configuration for Stochastic Block Model network with extremely stable
+    community structure and minimal variations at change points."""
     return {
         "model": "stochastic_block_model",
         "params": SBMParams(
@@ -112,21 +112,21 @@ def get_sbm_config(
             min_segment=min_segment,
             min_changes=min_changes,
             max_changes=max_changes,
-            # Model parameters - Two extreme states
-            num_blocks=2,  # Two clear communities
-            min_block_size=n // 2 - 5,  # Almost equal sized communities
-            max_block_size=n // 2 + 5,  # Small variation allowed
-            # State 1: Extremely separated communities
+            # Model parameters - Two perfectly balanced communities
+            num_blocks=2,  # Two communities
+            min_block_size=n // 2,  # Exactly equal sized communities
+            max_block_size=n // 2,  # No size variation allowed
+            # Base state: Extremely separated communities
             intra_prob=0.95,  # Almost complete connection within communities
             inter_prob=0.01,  # Almost no connections between communities
             # State transitions between two extreme configurations:
             # State 1: Extremely separated communities (0.95, 0.01)
-            # State 2: Almost uniform connectivity (0.4, 0.4)
-            min_intra_prob=0.4,  # Lower bound - uniform state
-            max_intra_prob=0.95,  # Upper bound - separated state
-            min_inter_prob=0.01,  # Lower bound - separated state
-            max_inter_prob=0.4,  # Upper bound - uniform state
-            # Evolution parameters - Absolutely no gradual evolution
+            # State 2: Almost merged communities (0.3, 0.3)
+            min_intra_prob=0.3,  # Lower bound for second state
+            max_intra_prob=0.95,  # Upper bound for first state
+            min_inter_prob=0.01,  # Lower bound for first state
+            max_inter_prob=0.3,  # Upper bound for second state
+            # Evolution parameters - No gradual evolution
             n_std=None,  # Fixed number of nodes
             blocks_std=None,  # Fixed number of blocks
             intra_prob_std=None,  # No probability variations
