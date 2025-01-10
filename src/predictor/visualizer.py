@@ -1435,28 +1435,33 @@ class Visualizer:
             label="Threshold",
         )
 
-        # Find detected changepoints (where sum martingale crosses threshold)
-        detected_cp = np.where(M_sum >= threshold)[0]
-        first_detected_cp = detected_cp[0] if len(detected_cp) > 0 else None
-
-        # Plot actual and detected change points
+        # Find detected changepoints for each actual change point
+        detected_cps = []
         for cp in change_points:
-            ax_actual_mart.axvline(
-                x=cp,
-                color="red",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Actual CP (t={cp})" if cp == change_points[0] else "",
-            )
+            # Get all detections from all features
+            all_detections = []
+            for feature in feature_names:
+                if "change_detected_instant" in actual_martingales["reset"][feature]:
+                    feature_detections = actual_martingales["reset"][feature]["change_detected_instant"]
+                    # Only consider detections near this change point
+                    for detection in feature_detections:
+                        if abs(detection - cp) <= 10:  # Within 10 steps of the CP
+                            all_detections.append(detection)
+            
+            # If we found any detections for this CP, take the earliest one
+            if all_detections:
+                detected_cps.append(min(all_detections))
 
-        if first_detected_cp is not None:
-            ax_actual_mart.axvline(
-                x=first_detected_cp,
-                color="green",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Detected CP (t={first_detected_cp})",
-            )
+        # Plot actual change points and their corresponding detections
+        for i, cp in enumerate(change_points):
+            # Plot actual CP
+            ax_actual_mart.axvline(x=cp, color="red", linestyle="-", alpha=0.5, 
+                                 label=f"Actual CP {i+1} (t={cp})")
+            
+            # Plot corresponding detected CP if it exists
+            if i < len(detected_cps):
+                ax_actual_mart.axvline(x=detected_cps[i], color="green", linestyle="-", alpha=0.5, 
+                                     label=f"Detected CP {i+1} (t={detected_cps[i]})")
 
         ax_actual_mart.set_title("Actual Reset Martingale Measures", pad=20)
         ax_actual_mart.set_xlabel("Time Steps")
@@ -1466,11 +1471,8 @@ class Visualizer:
 
         # 2. Reset Martingales - Predicted (Top Right)
         ax_pred_mart = fig.add_subplot(gs[0, 1])
-        time_points = (
-            np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"]))
-            - prediction_window
-        )
-
+        time_points = np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"])) - prediction_window
+        
         # First plot individual feature martingales with thinner lines
         for idx, feature in enumerate(feature_names):
             pred_values = pred_martingales["reset"][feature]["martingales"]
@@ -1519,29 +1521,34 @@ class Visualizer:
             label="Threshold",
         )
 
-        # Find predicted changepoints (where predicted sum martingale crosses threshold)
-        predicted_cp = np.where(P_sum >= threshold)[0]
-        first_predicted_cp = predicted_cp[0] if len(predicted_cp) > 0 else None
-
-        # Plot actual and predicted change points
+        # Find predicted changepoints for each actual change point
+        predicted_cps = []
         for cp in change_points:
-            ax_pred_mart.axvline(
-                x=cp,
-                color="red",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Actual CP (t={cp})" if cp == change_points[0] else "",
-            )
+            # Get all predictions from all features
+            all_predictions = []
+            for feature in feature_names:
+                if "change_detected_instant" in pred_martingales["reset"][feature]:
+                    feature_predictions = pred_martingales["reset"][feature]["change_detected_instant"]
+                    # Only consider predictions near this change point
+                    for prediction in feature_predictions:
+                        shifted_prediction = prediction - prediction_window  # Account for the time shift
+                        if abs(shifted_prediction - cp) <= 10:  # Within 10 steps of the CP
+                            all_predictions.append(shifted_prediction)
+            
+            # If we found any predictions for this CP, take the earliest one
+            if all_predictions:
+                predicted_cps.append(min(all_predictions))
 
-        if first_predicted_cp is not None:
-            predicted_time = time_points[first_predicted_cp]
-            ax_pred_mart.axvline(
-                x=predicted_time,
-                color="blue",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Predicted CP (t={predicted_time})",
-            )
+        # Plot actual change points and their corresponding predictions
+        for i, cp in enumerate(change_points):
+            # Plot actual CP
+            ax_pred_mart.axvline(x=cp, color="red", linestyle="-", alpha=0.5, 
+                               label=f"Actual CP {i+1} (t={cp})")
+            
+            # Plot corresponding predicted CP if it exists
+            if i < len(predicted_cps):
+                ax_pred_mart.axvline(x=predicted_cps[i], color="blue", linestyle="-", alpha=0.5, 
+                                   label=f"Predicted CP {i+1} (t={predicted_cps[i]})")
 
         ax_pred_mart.set_title(
             f"Predicted Reset Martingale Measures (Shifted by {prediction_window} steps)",
@@ -1550,7 +1557,7 @@ class Visualizer:
         ax_pred_mart.set_xlabel("Time Steps")
         ax_pred_mart.set_ylabel("Martingale Values")
         ax_pred_mart.legend(fontsize=8, title="Features & Aggregates")
-        ax_pred_mart.grid(True, alpha=0.3)
+        ax_pred_mart.grid(True, alpha=0.3, linestyle="--")
 
         # 3. SHAP Values - Actual (Bottom Left)
         ax_actual_shap = fig.add_subplot(gs[1, 0])

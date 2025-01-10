@@ -75,8 +75,8 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
     "lfr": ["weighted", "hybrid"],
 }
 
-THRESHOLD = 50.0
-EPSILON = 0.8
+THRESHOLD = 70.0
+EPSILON = 0.6
 
 
 def get_args():
@@ -103,7 +103,7 @@ def get_args():
         "-l", "--seq-len", type=int, default=100, help="Sequence length"
     )
     parser.add_argument("--min-changes", type=int, default=1, help="Min change points")
-    parser.add_argument("--max-changes", type=int, default=1, help="Max change points")
+    parser.add_argument("--max-changes", type=int, default=3, help="Max change points")
     parser.add_argument(
         "-s", "--min-segment", type=int, default=50, help="Min segment length"
     )
