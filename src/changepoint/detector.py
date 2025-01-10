@@ -101,7 +101,6 @@ class ChangePointDetector:
         data: List[np.ndarray],
         threshold: float,
         epsilon: float,
-        reset: bool = False,
         max_window: Optional[int] = None,
         max_martingale: Optional[float] = None,
     ) -> Dict[str, Any]:
