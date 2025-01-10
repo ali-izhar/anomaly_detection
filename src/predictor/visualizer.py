@@ -5,7 +5,6 @@ from matplotlib.patches import Patch
 from typing import List, Dict, Any, Tuple, Union
 import networkx as nx
 import numpy as np
-from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from pathlib import Path
 
 from graph.features import NetworkFeatureExtractor
@@ -1363,17 +1362,19 @@ class Visualizer:
     def create_martingale_comparison_dashboard(
         self,
         network_series: List[Dict[str, Any]],
-        predictions: List[Dict[str, Any]],
-        min_history: int,
         actual_martingales: Dict[str, Dict],
         pred_martingales: Dict[str, Dict],
         actual_shap: np.ndarray,
         pred_shap: np.ndarray,
         output_path: Path,
         threshold: float = 30.0,
+        epsilon: float = 0.8,
         change_points: List[int] = None,
+        prediction_window: int = 3,
     ) -> None:
-        """Create a simplified dashboard comparing actual and predicted martingales with SHAP values."""
+        """Create a dashboard comparing actual and predicted martingales with SHAP values.
+        Predicted martingales are shifted back by prediction_window to show early warning capability.
+        """
         # Get feature names from network metrics
         feature_names = ["degree", "clustering", "betweenness", "closeness"]
 
@@ -1394,28 +1395,21 @@ class Visualizer:
         # Color palette for features
         colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
 
-        # 1. Reset Martingales (Top Left)
+        # 1. Reset Martingales - Actual (Top Left)
         ax_actual_mart = fig.add_subplot(gs[0, 0])
+
+        # First plot individual feature martingales with thinner lines
         for idx, feature in enumerate(feature_names):
             values = actual_martingales["reset"][feature]["martingales"]
             ax_actual_mart.plot(
                 values,
                 label=feature.capitalize(),
                 color=colors[idx],
-                linewidth=1.5,
-                alpha=0.6,
+                linewidth=1.0,
+                alpha=0.3,
             )
 
-        # Plot threshold line
-        ax_actual_mart.axhline(
-            y=threshold, color="k", linestyle="--", alpha=0.5, label="Threshold"
-        )
-
-        # Plot actual change points
-        for cp in change_points:
-            ax_actual_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
-
-        # Plot combined martingales
+        # Calculate and plot sum and average martingales
         martingale_arrays = []
         for feature in feature_names:
             values = actual_martingales["reset"][feature]["martingales"]
@@ -1424,39 +1418,142 @@ class Visualizer:
         M_sum = np.sum(martingale_arrays, axis=0)
         M_avg = M_sum / len(feature_names)
 
+        # Plot sum and average with thicker lines
+        ax_actual_mart.plot(
+            M_sum, color="#2F2F2F", label="Sum", linewidth=2.5, alpha=0.9
+        )
         ax_actual_mart.plot(
             M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
         )
-        ax_actual_mart.plot(
-            M_sum,
+
+        # Plot threshold line for sum only
+        ax_actual_mart.axhline(
+            y=threshold,
+            color="#2F2F2F",
+            linestyle="--",
+            alpha=0.5,
+            label="Threshold",
+        )
+
+        # Find detected changepoints (where sum martingale crosses threshold)
+        detected_cp = np.where(M_sum >= threshold)[0]
+        first_detected_cp = detected_cp[0] if len(detected_cp) > 0 else None
+
+        # Plot actual and detected change points
+        for cp in change_points:
+            ax_actual_mart.axvline(
+                x=cp,
+                color="red",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Actual CP (t={cp})" if cp == change_points[0] else "",
+            )
+
+        if first_detected_cp is not None:
+            ax_actual_mart.axvline(
+                x=first_detected_cp,
+                color="green",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Detected CP (t={first_detected_cp})",
+            )
+
+        ax_actual_mart.set_title("Actual Reset Martingale Measures", pad=20)
+        ax_actual_mart.set_xlabel("Time Steps")
+        ax_actual_mart.set_ylabel("Martingale Values")
+        ax_actual_mart.legend(fontsize=8, title="Features & Aggregates")
+        ax_actual_mart.grid(True, alpha=0.3)
+
+        # 2. Reset Martingales - Predicted (Top Right)
+        ax_pred_mart = fig.add_subplot(gs[0, 1])
+        time_points = (
+            np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"]))
+            - prediction_window
+        )
+
+        # First plot individual feature martingales with thinner lines
+        for idx, feature in enumerate(feature_names):
+            pred_values = pred_martingales["reset"][feature]["martingales"]
+            ax_pred_mart.plot(
+                time_points,
+                pred_values,
+                label=feature.capitalize(),
+                color=colors[idx],
+                linewidth=1.0,
+                alpha=0.3,
+            )
+
+        # Calculate and plot sum and average predicted martingales
+        pred_martingale_arrays = []
+        for feature in feature_names:
+            pred_values = pred_martingales["reset"][feature]["martingales"]
+            pred_martingale_arrays.append(pred_values)
+
+        P_sum = np.sum(pred_martingale_arrays, axis=0)
+        P_avg = P_sum / len(feature_names)
+
+        # Plot sum and average with thicker lines
+        ax_pred_mart.plot(
+            time_points,
+            P_sum,
             color="#2F2F2F",
             label="Sum",
             linewidth=2.5,
-            linestyle="-.",
-            alpha=0.8,
+            alpha=0.9,
+        )
+        ax_pred_mart.plot(
+            time_points,
+            P_avg,
+            color="#FF4B4B",
+            label="Average",
+            linewidth=2.5,
+            alpha=0.9,
         )
 
-        # Customize reset martingales plot
-        ax_actual_mart.grid(True, linestyle="--", alpha=0.3)
-        ax_actual_mart.yaxis.set_minor_locator(AutoMinorLocator())
-        ax_actual_mart.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
-        ax_actual_mart.set_xlabel("Time Steps", fontsize=12, labelpad=5)
-        ax_actual_mart.set_ylabel("Martingale Values", fontsize=12, labelpad=10)
-        ax_actual_mart.set_title("Reset Martingale Measures", fontsize=12, pad=15)
-        legend = ax_actual_mart.legend(
-            fontsize=10,
-            ncol=3,
-            loc="upper right",
-            bbox_to_anchor=(1, 1.02),
-            frameon=True,
-            facecolor="none",
-            edgecolor="none",
+        # Plot threshold line for sum only
+        ax_pred_mart.axhline(
+            y=threshold,
+            color="#2F2F2F",
+            linestyle="--",
+            alpha=0.5,
+            label="Threshold",
         )
-        legend.get_frame().set_facecolor("none")
-        legend.get_frame().set_alpha(0)
 
-        # 2. SHAP Values Over Time (Top Right)
-        ax_actual_shap = fig.add_subplot(gs[0, 1])
+        # Find predicted changepoints (where predicted sum martingale crosses threshold)
+        predicted_cp = np.where(P_sum >= threshold)[0]
+        first_predicted_cp = predicted_cp[0] if len(predicted_cp) > 0 else None
+
+        # Plot actual and predicted change points
+        for cp in change_points:
+            ax_pred_mart.axvline(
+                x=cp,
+                color="red",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Actual CP (t={cp})" if cp == change_points[0] else "",
+            )
+
+        if first_predicted_cp is not None:
+            predicted_time = time_points[first_predicted_cp]
+            ax_pred_mart.axvline(
+                x=predicted_time,
+                color="blue",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Predicted CP (t={predicted_time})",
+            )
+
+        ax_pred_mart.set_title(
+            f"Predicted Reset Martingale Measures (Shifted by {prediction_window} steps)",
+            pad=20,
+        )
+        ax_pred_mart.set_xlabel("Time Steps")
+        ax_pred_mart.set_ylabel("Martingale Values")
+        ax_pred_mart.legend(fontsize=8, title="Features & Aggregates")
+        ax_pred_mart.grid(True, alpha=0.3)
+
+        # 3. SHAP Values - Actual (Bottom Left)
+        ax_actual_shap = fig.add_subplot(gs[1, 0])
         for idx, feature in enumerate(feature_names):
             ax_actual_shap.plot(
                 actual_shap[:, idx],
@@ -1470,79 +1567,17 @@ class Visualizer:
         for cp in change_points:
             ax_actual_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
-        ax_actual_shap.set_title("SHAP Values Over Time", fontsize=12, pad=20)
-        ax_actual_shap.set_xlabel("Time Steps", fontsize=10)
-        ax_actual_shap.set_ylabel("Feature Importance", fontsize=10)
-        ax_actual_shap.legend(fontsize=8, title="Centrality Measures")
+        ax_actual_shap.set_title("Actual SHAP Values Over Time", pad=20)
+        ax_actual_shap.set_xlabel("Time Steps")
+        ax_actual_shap.set_ylabel("Feature Importance")
+        ax_actual_shap.legend(fontsize=8, title="Features")
         ax_actual_shap.grid(True, alpha=0.3)
 
-        # 3. Predicted Martingales (Bottom Left)
-        ax_pred_mart = fig.add_subplot(gs[1, 0])
-        for idx, feature in enumerate(feature_names):
-            values = pred_martingales["reset"][feature]["martingales"]
-            ax_pred_mart.plot(
-                values,
-                label=feature.capitalize(),
-                color=colors[idx],
-                linewidth=1.5,
-                alpha=0.6,
-            )
-
-        # Plot threshold line
-        ax_pred_mart.axhline(
-            y=threshold, color="k", linestyle="--", alpha=0.5, label="Threshold"
-        )
-
-        # Plot actual change points
-        for cp in change_points:
-            ax_pred_mart.axvspan(cp - 5, cp + 5, color="red", alpha=0.1)
-
-        # Plot combined predicted martingales
-        pred_martingale_arrays = []
-        for feature in feature_names:
-            values = pred_martingales["reset"][feature]["martingales"]
-            pred_martingale_arrays.append(values)
-
-        M_sum_pred = np.sum(pred_martingale_arrays, axis=0)
-        M_avg_pred = M_sum_pred / len(feature_names)
-
-        ax_pred_mart.plot(
-            M_avg_pred, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
-        )
-        ax_pred_mart.plot(
-            M_sum_pred,
-            color="#2F2F2F",
-            label="Sum",
-            linewidth=2.5,
-            linestyle="-.",
-            alpha=0.8,
-        )
-
-        # Customize predicted martingales plot
-        ax_pred_mart.grid(True, linestyle="--", alpha=0.3)
-        ax_pred_mart.yaxis.set_minor_locator(AutoMinorLocator())
-        ax_pred_mart.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
-        ax_pred_mart.set_xlabel("Time Steps", fontsize=12, labelpad=5)
-        ax_pred_mart.set_ylabel("Martingale Values", fontsize=12, labelpad=10)
-        ax_pred_mart.set_title(
-            "Predicted Reset Martingale Measures", fontsize=12, pad=15
-        )
-        legend = ax_pred_mart.legend(
-            fontsize=10,
-            ncol=3,
-            loc="upper right",
-            bbox_to_anchor=(1, 1.02),
-            frameon=True,
-            facecolor="none",
-            edgecolor="none",
-        )
-        legend.get_frame().set_facecolor("none")
-        legend.get_frame().set_alpha(0)
-
-        # 4. Predicted SHAP Values (Bottom Right)
+        # 4. SHAP Values - Predicted (Bottom Right)
         ax_pred_shap = fig.add_subplot(gs[1, 1])
         for idx, feature in enumerate(feature_names):
             ax_pred_shap.plot(
+                time_points,
                 pred_shap[:, idx],
                 label=feature.capitalize(),
                 color=colors[idx],
@@ -1554,22 +1589,17 @@ class Visualizer:
         for cp in change_points:
             ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
-        ax_pred_shap.set_title("Predicted SHAP Values Over Time", fontsize=12, pad=20)
-        ax_pred_shap.set_xlabel("Time Steps", fontsize=10)
-        ax_pred_shap.set_ylabel("Feature Importance", fontsize=10)
-        ax_pred_shap.legend(fontsize=8, title="Centrality Measures")
+        ax_pred_shap.set_title(
+            f"Predicted SHAP Values Over Time (Shifted by {prediction_window} steps)",
+            pad=20,
+        )
+        ax_pred_shap.set_xlabel("Time Steps")
+        ax_pred_shap.set_ylabel("Feature Importance")
+        ax_pred_shap.legend(fontsize=8, title="Features")
         ax_pred_shap.grid(True, alpha=0.3)
 
-        # Adjust layout and save
         plt.tight_layout()
-        plt.savefig(
-            output_path,
-            dpi=300,
-            bbox_inches="tight",
-            facecolor="white",
-            edgecolor="none",
-        )
-        plt.close()
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
 
     def _compute_edge_coverage(self, G_actual: nx.Graph, G_pred: nx.Graph) -> float:
         """Compute edge coverage (true positive rate) between actual and predicted graphs."""

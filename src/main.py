@@ -75,6 +75,9 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
     "lfr": ["weighted", "hybrid"],
 }
 
+THRESHOLD = 50.0
+EPSILON = 0.8
+
 
 def get_args():
     """Parse command line arguments."""
@@ -105,7 +108,7 @@ def get_args():
         "-s", "--min-segment", type=int, default=50, help="Min segment length"
     )
     parser.add_argument(
-        "-w", "--prediction-window", type=int, default=3, help="Prediction steps"
+        "-w", "--prediction-window", type=int, default=5, help="Prediction steps"
     )
     parser.add_argument(
         "-mh", "--min-history", type=int, default=10, help="Min history length"
@@ -147,7 +150,9 @@ def compute_actual_metrics(graphs, min_history):
     actual_features = compute_network_features(graphs[min_history:])
 
     detector = ChangePointDetector()
-    actual_martingales = compute_martingales(actual_features, detector)
+    actual_martingales = compute_martingales(
+        actual_features, detector, threshold=THRESHOLD, epsilon=EPSILON
+    )
     actual_shap = compute_shap_values(actual_martingales, actual_features)
 
     return actual_features, actual_martingales, actual_shap
@@ -167,7 +172,9 @@ def compute_forecast_metrics(graphs, predictor, args):
     pred_features = compute_network_features(predictions)
 
     detector = ChangePointDetector()
-    pred_martingales = compute_martingales(pred_features, detector)
+    pred_martingales = compute_martingales(
+        pred_features, detector, threshold=THRESHOLD, epsilon=EPSILON
+    )
     pred_shap = compute_shap_values(pred_martingales, pred_features)
 
     return predictions, pred_features, pred_martingales, pred_shap
@@ -276,15 +283,15 @@ def generate_visualizations(
     # 4. Martingale comparison dashboard
     visualizer.create_martingale_comparison_dashboard(
         network_series=graphs,
-        predictions=predictions,
-        min_history=args.min_history,
         actual_martingales=actual_metrics[1],
         pred_martingales=forecast_metrics[2],
         actual_shap=actual_metrics[2],
         pred_shap=forecast_metrics[3],
         output_path=output_dir / "martingale_comparison_dashboard.png",
-        threshold=30.0,
+        threshold=THRESHOLD,
+        epsilon=EPSILON,
         change_points=ground_truth["change_points"],
+        prediction_window=args.prediction_window,
     )
 
 
