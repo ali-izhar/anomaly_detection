@@ -9,8 +9,12 @@ import numpy as np
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from typing import Dict, Any
+import itertools
+import pandas as pd
+import seaborn as sns
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 
 from src.predictor.utils import (
     generate_network_series,
@@ -27,15 +31,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-N_RUNS = 20  # Number of runs for the experiment
+N_RUNS = 30  # Increased number of runs for better statistics
 N_NODES = 50  # Number of nodes in the network
-SEQ_LEN = 200  # Length of the sequence
+SEQ_LEN = 200  # Increased sequence length
 MIN_SEGMENT = 50  # Minimum segment length
-THRESHOLD = 70.0  # Detection threshold
-EPSILON = 0.6  # Martingale sensitivity
+
+# Parameter ranges to test
+THRESHOLDS = [50.0, 70.0, 100.0, 150.0, 200.0]
+EPSILONS = [0.6, 0.7, 0.8, 0.9]
 
 
-def analyze_single_run(seed: int) -> Dict[str, Any]:
+def analyze_single_run(seed: int, threshold: float, epsilon: float) -> Dict[str, Any]:
     """Run a single experiment and analyze detection timing."""
     # Get SBM configuration
     config = GRAPH_CONFIGS["sbm"](
@@ -55,7 +61,7 @@ def analyze_single_run(seed: int) -> Dict[str, Any]:
     features = compute_network_features(graphs)
     detector = ChangePointDetector()
     martingale_results = compute_martingales(
-        features, detector, threshold=THRESHOLD, epsilon=EPSILON
+        features, detector, threshold=threshold, epsilon=epsilon
     )
 
     # Extract detected change points from each feature
@@ -75,72 +81,128 @@ def analyze_single_run(seed: int) -> Dict[str, Any]:
         "actual_cps": actual_cps,
         "detected_cps": dict(detected_cps),
         "martingale_values": martingale_values,
+        "threshold": threshold,
+        "epsilon": epsilon,
     }
 
 
-def analyze_detection_timing():
-    """Run multiple experiments and analyze detection timing patterns."""
-    results = []
-    detection_offsets = defaultdict(list)
+def analyze_parameter_combinations():
+    """Run experiments with different parameter combinations and analyze detection timing."""
+    all_results = []
+    parameter_stats = []
 
-    # Run experiments
-    for run in range(N_RUNS):
-        seed = run + 1  # Use run number as seed for reproducibility
-        logger.info(f"Running experiment {run+1}/{N_RUNS} with seed {seed}")
+    # Run experiments for each parameter combination
+    for threshold, epsilon in itertools.product(THRESHOLDS, EPSILONS):
+        logger.info(f"\nTesting threshold={threshold}, epsilon={epsilon}")
+        detection_offsets = defaultdict(list)
+        early_detections = defaultdict(int)
+        late_detections = defaultdict(int)
+        false_positives = defaultdict(int)
+        missed_detections = defaultdict(int)
 
-        result = analyze_single_run(seed)
-        results.append(result)
+        for run in range(N_RUNS):
+            seed = run + 1
+            result = analyze_single_run(seed, threshold, epsilon)
+            all_results.append(result)
+            actual_cps = result["actual_cps"]
 
-        # Calculate detection offsets for each actual change point
-        actual_cps = result["actual_cps"]
-        for feature, detections in result["detected_cps"].items():
-            for cp in actual_cps:
-                # Find the closest detection to this change point
-                if detections:
-                    closest_detection = min(detections, key=lambda x: abs(x - cp))
-                    # Only count if within ±10 steps of the change point
-                    if abs(closest_detection - cp) <= 10:
+            # Analyze detections for each feature
+            for feature, detections in result["detected_cps"].items():
+                matched_cps = set()
+
+                # For each actual change point, find the closest detection
+                for cp in actual_cps:
+                    if detections:
+                        closest_detection = min(detections, key=lambda x: abs(x - cp))
                         offset = closest_detection - cp
-                        detection_offsets[feature].append(offset)
 
-    # Analyze results
-    logger.info("\nDetection Timing Analysis:")
-    for feature, offsets in detection_offsets.items():
-        if offsets:
-            mean_offset = np.mean(offsets)
-            std_offset = np.std(offsets)
-            logger.info(f"\n{feature}:")
-            logger.info(f"  Mean offset: {mean_offset:.2f} steps")
-            logger.info(f"  Std offset: {std_offset:.2f} steps")
-            logger.info(f"  Number of detections: {len(offsets)}")
+                        # Only count if within ±20 steps of the change point
+                        if abs(offset) <= 20:
+                            detection_offsets[feature].append(offset)
+                            matched_cps.add(closest_detection)
 
-            # Count early vs late detections
-            early = sum(1 for x in offsets if x < 0)
-            late = sum(1 for x in offsets if x > 0)
-            on_time = sum(1 for x in offsets if x == 0)
-            logger.info(f"  Early detections: {early}")
-            logger.info(f"  Late detections: {late}")
-            logger.info(f"  On-time detections: {on_time}")
+                            if offset < 0:
+                                early_detections[feature] += 1
+                            else:
+                                late_detections[feature] += 1
 
-    # Plot distribution of detection offsets
-    plt.figure(figsize=(12, 6))
-    features = list(detection_offsets.keys())
-    positions = range(len(features))
+                # Count unmatched detections as false positives
+                false_positives[feature] += len(set(detections) - matched_cps)
 
-    plt.boxplot(
-        [detection_offsets[f] for f in features], labels=features, showfliers=True
+                # Count unmatched actual CPs as missed detections
+                detected_cps = set(
+                    d for d in detections if any(abs(d - cp) <= 20 for cp in actual_cps)
+                )
+                missed_detections[feature] += len(actual_cps) - len(detected_cps)
+
+        # Compute statistics for this parameter combination
+        for feature in detection_offsets.keys():
+            offsets = detection_offsets[feature]
+            if offsets:
+                stats = {
+                    "threshold": threshold,
+                    "epsilon": epsilon,
+                    "feature": feature,
+                    "mean_offset": np.mean(offsets),
+                    "std_offset": np.std(offsets),
+                    "n_detections": len(offsets),
+                    "early_detections": early_detections[feature],
+                    "late_detections": late_detections[feature],
+                    "false_positives": false_positives[feature],
+                    "missed_detections": missed_detections[feature],
+                    "late_to_early_ratio": late_detections[feature]
+                    / (early_detections[feature] + 1e-6),
+                }
+                parameter_stats.append(stats)
+
+    # Convert to DataFrame for easier analysis
+    df = pd.DataFrame(parameter_stats)
+
+    # Create heatmaps for different metrics
+    metrics = [
+        "late_to_early_ratio",
+        "mean_offset",
+        "false_positives",
+        "missed_detections",
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(15, 15))
+    axes = axes.ravel()
+
+    for idx, metric in enumerate(metrics):
+        pivot_data = df.pivot_table(
+            values=metric, index="threshold", columns="epsilon", aggfunc="mean"
+        )
+
+        sns.heatmap(pivot_data, annot=True, fmt=".2f", cmap="RdYlBu_r", ax=axes[idx])
+        axes[idx].set_title(f"{metric} by Parameters")
+
+    plt.tight_layout()
+    plt.savefig("parameter_analysis.png", dpi=300, bbox_inches="tight")
+
+    # Find best parameter combinations for late detection
+    best_params = df.sort_values(
+        by=["late_to_early_ratio", "false_positives", "missed_detections"],
+        ascending=[False, True, True],
+    ).head(5)
+
+    logger.info("\nBest parameter combinations for late detection:")
+    logger.info(
+        best_params[
+            [
+                "threshold",
+                "epsilon",
+                "late_to_early_ratio",
+                "mean_offset",
+                "false_positives",
+                "missed_detections",
+            ]
+        ]
     )
 
-    plt.axhline(y=0, color="r", linestyle="--", alpha=0.5)
-    plt.title("Distribution of Detection Offsets by Feature")
-    plt.ylabel("Detection Offset (steps)")
-    plt.xlabel("Feature")
-    plt.grid(True, alpha=0.3)
-
-    # Save plot
-    plt.savefig("detection_timing_analysis.png", dpi=300, bbox_inches="tight")
-    logger.info("\nPlot saved as 'detection_timing_analysis.png'")
+    # Save detailed results
+    df.to_csv("parameter_analysis.csv", index=False)
+    logger.info("\nDetailed results saved to 'parameter_analysis.csv'")
 
 
 if __name__ == "__main__":
-    analyze_detection_timing()
+    analyze_parameter_combinations()
