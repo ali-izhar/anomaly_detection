@@ -217,13 +217,13 @@ def compute_martingales(
     epsilon: float = 0.4,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Compute martingales for network features with weights based on reliability and timing.
-    
+
     Feature weights are assigned based on empirical analysis and reliability:
     - betweenness: 1.0 (baseline, most reliable)
     - clustering: 0.85 (most consistent timing)
     - closeness: 0.7 (moderate reliability)
     - degree: 0.5 (least reliable, needs strictest threshold)
-    
+
     The weighting scheme is applied in two ways:
     1. Threshold adjustment: Each feature's threshold is increased by (1/weight)
        to make less reliable features need stronger evidence
@@ -231,22 +231,24 @@ def compute_martingales(
        reliable features on the overall sum
     """
     martingales = {"reset": {}, "cumulative": {}}
-    
+
     # Define feature weights - updated to be more strict
     weights = {
         "betweenness": 1.0,  # Most reliable
-        "clustering": 0.85,   # Most consistent
-        "closeness": 0.7,    # Moderate reliability
-        "degree": 0.5        # Least reliable
+        "clustering": 0.85,  # Most consistent
+        "closeness": 0.7,  # Moderate reliability
+        "degree": 0.5,  # Least reliable
     }
 
     for feature_name, feature_data in features.items():
         weight = weights.get(feature_name, 1.0)
-        
+
         # Adjust threshold inversely with weight
         # Less reliable features need to exceed a higher threshold
-        adjusted_threshold = threshold / (weight)  # Square the denominator for stronger effect
-        
+        adjusted_threshold = threshold / (
+            weight
+        )  # Square the denominator for stronger effect
+
         # Reset martingales
         reset_results = detector.detect_changes(
             data=feature_data.reshape(-1, 1),
@@ -254,15 +256,15 @@ def compute_martingales(
             epsilon=epsilon,
             reset=True,
         )
-        
+
         # Scale martingale values by weight
         weighted_martingales = reset_results["martingale_values"] * weight
-        
+
         martingales["reset"][feature_name] = {
             "martingales": weighted_martingales,
             "change_detected_instant": reset_results["change_points"],
             "weight": weight,
-            "adjusted_threshold": adjusted_threshold  # Store for reference
+            "adjusted_threshold": adjusted_threshold,  # Store for reference
         }
 
         # Cumulative martingales
@@ -272,15 +274,15 @@ def compute_martingales(
             epsilon=epsilon,
             reset=False,
         )
-        
+
         # Scale martingale values by weight
         weighted_cumul_martingales = cumul_results["martingale_values"] * weight
-        
+
         martingales["cumulative"][feature_name] = {
             "martingales": weighted_cumul_martingales,
             "change_detected_instant": cumul_results["change_points"],
             "weight": weight,
-            "adjusted_threshold": adjusted_threshold  # Store for reference
+            "adjusted_threshold": adjusted_threshold,  # Store for reference
         }
 
     return martingales

@@ -1442,12 +1442,14 @@ class Visualizer:
             all_detections = []
             for feature in feature_names:
                 if "change_detected_instant" in actual_martingales["reset"][feature]:
-                    feature_detections = actual_martingales["reset"][feature]["change_detected_instant"]
+                    feature_detections = actual_martingales["reset"][feature][
+                        "change_detected_instant"
+                    ]
                     # Only consider detections near this change point
                     for detection in feature_detections:
                         if abs(detection - cp) <= 10:  # Within 10 steps of the CP
                             all_detections.append(detection)
-            
+
             # If we found any detections for this CP, take the earliest one
             if all_detections:
                 detected_cps.append(min(all_detections))
@@ -1455,13 +1457,23 @@ class Visualizer:
         # Plot actual change points and their corresponding detections
         for i, cp in enumerate(change_points):
             # Plot actual CP
-            ax_actual_mart.axvline(x=cp, color="red", linestyle="-", alpha=0.5, 
-                                 label=f"Actual CP {i+1} (t={cp})")
-            
+            ax_actual_mart.axvline(
+                x=cp,
+                color="red",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Actual CP {i+1} (t={cp})",
+            )
+
             # Plot corresponding detected CP if it exists
             if i < len(detected_cps):
-                ax_actual_mart.axvline(x=detected_cps[i], color="green", linestyle="-", alpha=0.5, 
-                                     label=f"Detected CP {i+1} (t={detected_cps[i]})")
+                ax_actual_mart.axvline(
+                    x=detected_cps[i],
+                    color="green",
+                    linestyle="-",
+                    alpha=0.5,
+                    label=f"Detected CP {i+1} (t={detected_cps[i]})",
+                )
 
         ax_actual_mart.set_title("Actual Reset Martingale Measures", pad=20)
         ax_actual_mart.set_xlabel("Time Steps")
@@ -1471,8 +1483,11 @@ class Visualizer:
 
         # 2. Reset Martingales - Predicted (Top Right)
         ax_pred_mart = fig.add_subplot(gs[0, 1])
-        time_points = np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"])) - prediction_window
-        
+        time_points = (
+            np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"]))
+            - prediction_window
+        )
+
         # First plot individual feature martingales with thinner lines
         for idx, feature in enumerate(feature_names):
             pred_values = pred_martingales["reset"][feature]["martingales"]
@@ -1528,13 +1543,19 @@ class Visualizer:
             all_predictions = []
             for feature in feature_names:
                 if "change_detected_instant" in pred_martingales["reset"][feature]:
-                    feature_predictions = pred_martingales["reset"][feature]["change_detected_instant"]
+                    feature_predictions = pred_martingales["reset"][feature][
+                        "change_detected_instant"
+                    ]
                     # Only consider predictions near this change point
                     for prediction in feature_predictions:
-                        shifted_prediction = prediction - prediction_window  # Account for the time shift
-                        if abs(shifted_prediction - cp) <= 10:  # Within 10 steps of the CP
+                        shifted_prediction = (
+                            prediction - prediction_window
+                        )  # Account for the time shift
+                        if (
+                            abs(shifted_prediction - cp) <= 10
+                        ):  # Within 10 steps of the CP
                             all_predictions.append(shifted_prediction)
-            
+
             # If we found any predictions for this CP, take the earliest one
             if all_predictions:
                 predicted_cps.append(min(all_predictions))
@@ -1542,13 +1563,23 @@ class Visualizer:
         # Plot actual change points and their corresponding predictions
         for i, cp in enumerate(change_points):
             # Plot actual CP
-            ax_pred_mart.axvline(x=cp, color="red", linestyle="-", alpha=0.5, 
-                               label=f"Actual CP {i+1} (t={cp})")
-            
+            ax_pred_mart.axvline(
+                x=cp,
+                color="red",
+                linestyle="-",
+                alpha=0.5,
+                label=f"Actual CP {i+1} (t={cp})",
+            )
+
             # Plot corresponding predicted CP if it exists
             if i < len(predicted_cps):
-                ax_pred_mart.axvline(x=predicted_cps[i], color="blue", linestyle="-", alpha=0.5, 
-                                   label=f"Predicted CP {i+1} (t={predicted_cps[i]})")
+                ax_pred_mart.axvline(
+                    x=predicted_cps[i],
+                    color="blue",
+                    linestyle="-",
+                    alpha=0.5,
+                    label=f"Predicted CP {i+1} (t={predicted_cps[i]})",
+                )
 
         ax_pred_mart.set_title(
             f"Predicted Reset Martingale Measures (Shifted by {prediction_window} steps)",
