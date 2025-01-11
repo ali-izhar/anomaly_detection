@@ -3,72 +3,70 @@
 import logging
 import numpy as np
 import random
-from typing import List, Optional
+from typing import List, Optional, Union, Any
 from sklearn.cluster import KMeans, MiniBatchKMeans
 
 logger = logging.getLogger(__name__)
 
 
 def strangeness_point(
-    data: List[List[float]],
+    data: Union[List[Any], np.ndarray],
     n_clusters: int = 1,
-    random_state: Optional[int] = None,
+    random_state: Optional[int] = 42,
     batch_size: Optional[int] = None,
+    return_all_distances: bool = True,
 ) -> np.ndarray:
-    """Compute a cluster-based strangeness score for each sample in `data`
-    using (MiniBatch)KMeans. The 'strangeness' is defined here as the
-    minimum distance from each sample to any of the cluster centers.
+    """Compute distance-based scores for each sample relative to KMeans (or MiniBatchKMeans) cluster centers.
 
-    1. We treat `data` as (N x features) or (a x b x features). If it's 3D, we flatten
-       it to a 2D array of shape (N, features).
-    2. We fit KMeans or MiniBatchKMeans on the data (using `n_clusters`).
-    3. For each sample, we compute the distances to the cluster centers. The smallest
-       distance is taken as that sample's 'strangeness'.
-    4. Returning these strangeness values as a 1D array of length N.
-
-    This approach is a simplistic but effective way to measure how "unusual" a point is,
-    in a clustering sense. Points closer to their nearest cluster center have lower strangeness;
-    points far from all centers have higher strangeness.
+    By default, returns the full (N, n_clusters) distance matrix.
+    If `return_all_distances=False`, returns the minimum distance to any center as a 1D array (N,).
 
     Parameters
     ----------
-    data : List[List[float]]
-        A list-of-lists representing the dataset. Can be:
-          - 2D: shape (N, num_features)
-          - 3D: shape (a, b, num_features) which will be flattened to (N, num_features).
+    data : Union[List[Any], np.ndarray]
+        Input data to compute strangeness for.
+        Can be 2D (N x features) or 3D (a x b x features). If 3D, it is flattened to 2D.
     n_clusters : int, default=1
         Number of clusters to use in KMeans or MiniBatchKMeans.
-        - For `n_clusters=1`, we effectively measure distance from the single centroid
-          to each sample.
     random_state : int, optional
-        Random seed for the clustering algorithm, controlling reproducibility.
+        Random seed for reproducibility.
     batch_size : int, optional
-        If specified and the number of samples N > `batch_size`,
-        we use MiniBatchKMeans for efficiency.
+        If provided and data size > batch_size, uses MiniBatchKMeans for efficiency.
+    return_all_distances : bool, default=True
+        If True, return the full distance matrix (N, n_clusters).
+        If False, return the minimum distance per sample as a 1D array (N,).
 
     Returns
     -------
     np.ndarray
-        A 1D array of length N, where each entry is the strangeness value
-        for the corresponding sample.
+        - If `return_all_distances=False`, shape (N,).
+        - If `return_all_distances=True`, shape (N, n_clusters).
 
     Raises
     ------
     ValueError
-        If `data` is empty.
+        If data is empty or has invalid shape.
+    RuntimeError
+        If cluster-fitting fails for some reason.
     """
-    # 1. Basic checks and conversion to array
-    data_array = np.array(data)
-    if data_array.size == 0:
-        raise ValueError("Empty data sequence.")
+    # 1. Validate data
+    if data is None or len(data) == 0:
+        logger.error("Empty data sequence")
+        raise ValueError("Empty data sequence")
 
-    # 2. If data is 3D, flatten to 2D => (N, features)
-    if data_array.ndim == 3:
-        data_array = data_array.reshape(-1, data_array.shape[-1])
-
-    # 3. Decide which KMeans variant to use
     try:
-        if batch_size is not None and data_array.shape[0] > batch_size:
+        data_array = np.array(data)
+        if data_array.size == 0:
+            logger.error("Data array has zero size after np.array conversion")
+            raise ValueError("Empty data sequence")
+
+        # 2. Flatten if 3D
+        if data_array.ndim == 3:
+            data_array = data_array.reshape(-1, data_array.shape[-1])
+
+        # 3. Decide KMeans vs MiniBatchKMeans
+        N = data_array.shape[0]
+        if batch_size is not None and N > batch_size:
             model = MiniBatchKMeans(
                 n_clusters=n_clusters, batch_size=batch_size, random_state=random_state
             )
@@ -77,14 +75,22 @@ def strangeness_point(
                 n_clusters=n_clusters, n_init="auto", random_state=random_state
             )
 
-        # 4. Fit and compute distances
-        distances = model.fit_transform(data_array)  # shape => (N, n_clusters)
+        logger.debug(f"Fitting model with {n_clusters} cluster(s)")
+        # 4. Fit + Transform => distances shape (N, n_clusters)
+        distances = model.fit_transform(data_array)
 
-        # 5. Return min distance across cluster centers => strangeness
-        strangeness_scores = distances.min(axis=1)  # shape => (N,)
-        return strangeness_scores
+        # 5. Return either all distances or the minimum
+        if return_all_distances:
+            logger.debug("Returning full (N, n_clusters) distance matrix")
+            return distances
+        else:
+            # If the docstring says “strangeness = min distance to any center,” do .min(axis=1)
+            strangeness_scores = distances.min(axis=1)
+            logger.debug("Returning 1D array of minimum distances (strangeness)")
+            return strangeness_scores
 
     except Exception as e:
+        logger.error(f"Strangeness computation failed: {str(e)}")
         raise RuntimeError(f"Strangeness computation failed: {str(e)}")
 
 

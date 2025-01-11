@@ -75,8 +75,8 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
     "lfr": ["weighted", "hybrid"],
 }
 
-THRESHOLD = 70.0
-EPSILON = 0.6
+THRESHOLD = 30.0
+EPSILON = 0.85
 
 
 def get_args():
@@ -261,14 +261,7 @@ def generate_visualizations(
     plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. Node degree evolution
-    visualizer.plot_node_degree_evolution(
-        graphs,
-        change_points=ground_truth["change_points"],
-        output_path=output_dir / "node_degree_evolution.png",
-    )
-
-    # 3. Performance extremes
+    # 2. Performance extremes
     plt.figure(figsize=(20, 15))
     visualizer.plot_performance_extremes(
         graphs[args.min_history : args.min_history + len(predictions)],
@@ -280,7 +273,7 @@ def generate_visualizations(
     plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 4. Martingale comparison dashboard
+    # 3. Martingale comparison dashboard
     visualizer.create_martingale_comparison_dashboard(
         network_series=graphs,
         actual_martingales=actual_metrics[1],
