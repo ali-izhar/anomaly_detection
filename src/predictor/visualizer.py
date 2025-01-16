@@ -839,7 +839,6 @@ class Visualizer:
         avg_idx = min(
             range(len(scores)), key=lambda i: abs(scores[i]["score"] - mean_score)
         )
-
         best_point = scores[best_idx]
         worst_point = scores[worst_idx]
         avg_point = scores[avg_idx]
@@ -1139,9 +1138,7 @@ class Visualizer:
         change_points: List[int] = None,
         prediction_window: int = 3,
     ) -> None:
-        """Create a dashboard comparing actual and predicted martingales with SHAP values.
-        Predicted martingales are shifted back by prediction_window to show early warning capability.
-        """
+        """Create a dashboard comparing actual and predicted martingales with SHAP values."""
         # Get feature names from network metrics
         feature_names = ["degree", "clustering", "betweenness", "closeness"]
 
@@ -1212,9 +1209,11 @@ class Visualizer:
                     feature_detections = actual_martingales["reset"][feature][
                         "change_detected_instant"
                     ]
-                    # Only consider detections near this change point
+                    # Only consider detections after the change point
                     for detection in feature_detections:
-                        if abs(detection - cp) <= 10:  # Within 10 steps of the CP
+                        if (
+                            0 <= (detection - cp) <= 10
+                        ):  # Only look at detections up to 10 steps after CP
                             all_detections.append(detection)
 
             # If we found any detections for this CP, take the earliest one
@@ -1250,9 +1249,8 @@ class Visualizer:
 
         # 2. Reset Martingales - Predicted (Top Right)
         ax_pred_mart = fig.add_subplot(gs[0, 1])
-        time_points = (
-            np.arange(len(pred_martingales["reset"][feature_names[0]]["martingales"]))
-            - prediction_window
+        time_points = np.arange(
+            len(pred_martingales["reset"][feature_names[0]]["martingales"])
         )
 
         # First plot individual feature martingales with thinner lines
@@ -1313,15 +1311,12 @@ class Visualizer:
                     feature_predictions = pred_martingales["reset"][feature][
                         "change_detected_instant"
                     ]
-                    # Only consider predictions near this change point
+                    # Only consider predictions after the change point
                     for prediction in feature_predictions:
-                        shifted_prediction = (
-                            prediction - prediction_window
-                        )  # Account for the time shift
                         if (
-                            abs(shifted_prediction - cp) <= 10
-                        ):  # Within 10 steps of the CP
-                            all_predictions.append(shifted_prediction)
+                            0 <= (prediction - cp) <= 10
+                        ):  # Only look at predictions up to 10 steps after CP
+                            all_predictions.append(prediction)
 
             # If we found any predictions for this CP, take the earliest one
             if all_predictions:
@@ -1349,7 +1344,7 @@ class Visualizer:
                 )
 
         ax_pred_mart.set_title(
-            f"Predicted Reset Martingale Measures (Shifted by {prediction_window} steps)",
+            "Predicted Reset Martingale Measures",
             pad=20,
         )
         ax_pred_mart.set_xlabel("Time Steps")
@@ -1395,7 +1390,7 @@ class Visualizer:
             ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
         ax_pred_shap.set_title(
-            f"Predicted SHAP Values Over Time (Shifted by {prediction_window} steps)",
+            "Predicted SHAP Values Over Time",
             pad=20,
         )
         ax_pred_shap.set_xlabel("Time Steps")
