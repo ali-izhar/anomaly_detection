@@ -79,52 +79,6 @@ THRESHOLD = 50.0
 EPSILON = 0.7
 
 
-def get_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Network prediction framework")
-
-    parser.add_argument(
-        "-m",
-        "--model",
-        type=str,
-        choices=list(GRAPH_MODELS.keys()),
-        default="ba",
-        help="Type of network model",
-    )
-    parser.add_argument(
-        "-p",
-        "--predictor",
-        type=str,
-        choices=["weighted", "hybrid"],
-        help="Type of predictor",
-    )
-    parser.add_argument("-n", "--n-nodes", type=int, default=50, help="Number of nodes")
-    parser.add_argument(
-        "-l", "--seq-len", type=int, default=100, help="Sequence length"
-    )
-    parser.add_argument("--min-changes", type=int, default=2, help="Min change points")
-    parser.add_argument("--max-changes", type=int, default=2, help="Max change points")
-    parser.add_argument(
-        "-s", "--min-segment", type=int, default=50, help="Min segment length"
-    )
-    parser.add_argument(
-        "-w", "--prediction-window", type=int, default=5, help="Prediction steps"
-    )
-    parser.add_argument(
-        "-mh", "--min-history", type=int, default=10, help="Min history length"
-    )
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
-
-    args = parser.parse_args()
-    args.model = GRAPH_MODELS[args.model]
-
-    if args.predictor is None:
-        args.predictor = MODEL_PREDICTOR_RECOMMENDATIONS[args.model][0]
-        logger.info(f"Using recommended predictor for {args.model}: {args.predictor}")
-
-    return args
-
-
 def generate_data(args, config):
     """Generate synthetic network data."""
     logger.info(f"Generating {args.model} network time series...")
@@ -180,112 +134,218 @@ def compute_forecast_metrics(graphs, predictor, args):
     return predictions, pred_features, pred_martingales, pred_shap
 
 
-def save_results(
-    output_dir, args, config, ground_truth, actual_metrics, forecast_metrics
-):
-    """Save all results and configurations."""
+def convert_to_serializable(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(
+        obj,
+        (
+            np.int_,
+            np.intc,
+            np.intp,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+        ),
+    ):
+        return int(obj)
+    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_)):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_to_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_to_serializable(item) for item in obj)
+    elif isinstance(obj, set):
+        return {convert_to_serializable(item) for item in obj}
+    elif isinstance(obj, Path):
+        return str(obj)
+    return obj
 
-    def convert_to_serializable(obj):
-        """Convert numpy types to Python native types."""
-        if isinstance(obj, (np.int32, np.int64)):
-            return int(obj)
-        elif isinstance(obj, (np.float32, np.float64)):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {k: convert_to_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_to_serializable(item) for item in obj]
-        elif isinstance(obj, Path):
-            return str(obj)
-        return obj
 
-    # Convert ground truth to serializable format
-    serializable_ground_truth = convert_to_serializable(ground_truth)
+class ExperimentRunner:
+    """Class to handle experiment execution with support for single and multiple runs."""
 
-    # Save configuration
-    with open(output_dir / "config.json", "w") as f:
-        json.dump(
-            {
-                "model": args.model,
-                "parameters": {
-                    k: convert_to_serializable(v) for k, v in vars(args).items()
-                },
-                "model_config": {
-                    "model": config["model"],
-                    "params": {
-                        k: convert_to_serializable(v)
-                        for k, v in vars(config["params"]).items()
-                    },
-                },
-                "ground_truth": serializable_ground_truth,
-            },
-            f,
-            indent=4,
+    def __init__(self, args, output_dir=None, seed=None):
+        self.args = args
+        self.seed = seed if seed is not None else args.seed
+        self.args.seed = self.seed  # Update args seed with the new seed
+        self.output_dir = output_dir or self._create_output_dir()
+        self.config = self._get_config()
+
+    def _create_output_dir(self):
+        """Create and return output directory."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(
+            f"results/{self.args.model}_{self.args.predictor}_{timestamp}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _get_config(self):
+        """Get experiment configuration."""
+        return GRAPH_CONFIGS[self.args.model](
+            n=self.args.n_nodes,
+            seq_len=self.args.seq_len,
+            min_segment=self.args.min_segment,
+            min_changes=self.args.min_changes,
+            max_changes=self.args.max_changes,
         )
 
-    # # Save metrics
-    # np.save(output_dir / "actual_features.npy", actual_metrics[0])
-    # np.save(output_dir / "actual_martingales.npy", actual_metrics[1])
-    # np.save(output_dir / "actual_shap.npy", actual_metrics[2])
+    def run_single_experiment(self):
+        """Run a single experiment and return results."""
+        # Generate data
+        graphs, ground_truth = generate_data(self.args, self.config)
 
-    # np.save(output_dir / "predictions.npy", forecast_metrics[0])
-    # np.save(output_dir / "pred_features.npy", forecast_metrics[1])
-    # np.save(output_dir / "pred_martingales.npy", forecast_metrics[2])
-    # np.save(output_dir / "pred_shap.npy", forecast_metrics[3])
+        # Initialize predictor
+        predictor = (
+            WeightedPredictor()
+            if self.args.predictor == "weighted"
+            else PREDICTOR_MAP["hybrid"][self.args.model](config=self.config)
+        )
+
+        # Compute metrics
+        actual_metrics = compute_actual_metrics(graphs, self.args.min_history)
+        forecast_metrics = compute_forecast_metrics(graphs, predictor, self.args)
+
+        return {
+            "graphs": graphs,
+            "ground_truth": ground_truth,
+            "actual_metrics": actual_metrics,
+            "forecast_metrics": forecast_metrics,
+        }
+
+    def visualize_results(self, results):
+        """Generate visualizations for the results."""
+        visualizer = Visualizer()
+
+        # 1. Metric evolution
+        plt.figure(figsize=(12, 8))
+        visualizer.plot_metric_evolution(
+            results["graphs"],
+            results["forecast_metrics"][0],  # predictions
+            self.args.min_history,
+            model_type=self.args.model,
+            change_points=results["ground_truth"]["change_points"],
+        )
+        plt.savefig(
+            self.output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # 2. Performance extremes
+        plt.figure(figsize=(20, 15))
+        visualizer.plot_performance_extremes(
+            results["graphs"][
+                self.args.min_history : self.args.min_history
+                + len(results["forecast_metrics"][0])
+            ],
+            results["forecast_metrics"][0],
+            min_history=self.args.min_history,
+            model_type=self.args.model,
+            change_points=results["ground_truth"]["change_points"],
+        )
+        plt.savefig(
+            self.output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # 3. Martingale comparison dashboard
+        visualizer.create_martingale_comparison_dashboard(
+            network_series=results["graphs"],
+            actual_martingales=results["actual_metrics"][1],
+            pred_martingales=results["forecast_metrics"][2],
+            actual_shap=results["actual_metrics"][2],
+            pred_shap=results["forecast_metrics"][3],
+            output_path=self.output_dir / "martingale_comparison_dashboard.png",
+            threshold=THRESHOLD,
+            epsilon=EPSILON,
+            change_points=results["ground_truth"]["change_points"],
+            prediction_window=self.args.prediction_window,
+        )
+
+    def save_results(self, results):
+        """Save experiment results and configuration."""
+        # Convert all data to JSON serializable format
+        serializable_data = {
+            "model": self.args.model,
+            "parameters": convert_to_serializable(vars(self.args)),
+            "model_config": {
+                "model": self.config["model"],
+                "params": convert_to_serializable(vars(self.config["params"])),
+            },
+            "ground_truth": convert_to_serializable(results["ground_truth"]),
+        }
+
+        # Save configuration
+        with open(self.output_dir / "config.json", "w") as f:
+            json.dump(serializable_data, f, indent=4)
+
+    def analyze_results(self, results):
+        """Analyze prediction accuracy."""
+        print(f"\nPrediction Performance Summary for {self.args.model}:")
+        print("-" * 50)
+        analyze_prediction_phases(
+            results["forecast_metrics"][0],
+            results["graphs"],
+            self.args.min_history,
+            self.output_dir,
+        )
 
 
-def generate_visualizations(
-    output_dir,
-    graphs,
-    predictions,
-    actual_metrics,
-    forecast_metrics,
-    args,
-    ground_truth,
-):
-    """Generate and save visualizations."""
-    logger.info("Generating visualizations...")
-    visualizer = Visualizer()
+def get_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Network prediction framework")
 
-    # 1. Metric evolution
-    plt.figure(figsize=(12, 8))
-    visualizer.plot_metric_evolution(
-        graphs,
-        predictions,
-        args.min_history,
-        model_type=args.model,
-        change_points=ground_truth["change_points"],
+    parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        choices=list(GRAPH_MODELS.keys()),
+        default="ba",
+        help="Type of network model",
     )
-    plt.savefig(output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 2. Performance extremes
-    plt.figure(figsize=(20, 15))
-    visualizer.plot_performance_extremes(
-        graphs[args.min_history : args.min_history + len(predictions)],
-        predictions,
-        min_history=args.min_history,
-        model_type=args.model,
-        change_points=ground_truth["change_points"],
+    parser.add_argument(
+        "-p",
+        "--predictor",
+        type=str,
+        choices=["weighted", "hybrid"],
+        help="Type of predictor",
     )
-    plt.savefig(output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 3. Martingale comparison dashboard
-    visualizer.create_martingale_comparison_dashboard(
-        network_series=graphs,
-        actual_martingales=actual_metrics[1],
-        pred_martingales=forecast_metrics[2],
-        actual_shap=actual_metrics[2],
-        pred_shap=forecast_metrics[3],
-        output_path=output_dir / "martingale_comparison_dashboard.png",
-        threshold=THRESHOLD,
-        epsilon=EPSILON,
-        change_points=ground_truth["change_points"],
-        prediction_window=args.prediction_window,
+    parser.add_argument("-n", "--n-nodes", type=int, default=50, help="Number of nodes")
+    parser.add_argument(
+        "-l", "--seq-len", type=int, default=100, help="Sequence length"
     )
+    parser.add_argument("--min-changes", type=int, default=2, help="Min change points")
+    parser.add_argument("--max-changes", type=int, default=2, help="Max change points")
+    parser.add_argument(
+        "-s", "--min-segment", type=int, default=50, help="Min segment length"
+    )
+    parser.add_argument(
+        "-w", "--prediction-window", type=int, default=5, help="Prediction steps"
+    )
+    parser.add_argument(
+        "-mh", "--min-history", type=int, default=10, help="Min history length"
+    )
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+
+    args = parser.parse_args()
+    args.model = GRAPH_MODELS[args.model]
+
+    if args.predictor is None:
+        args.predictor = MODEL_PREDICTOR_RECOMMENDATIONS[args.model][0]
+        logger.info(f"Using recommended predictor for {args.model}: {args.predictor}")
+
+    return args
 
 
 def main():
@@ -293,56 +353,12 @@ def main():
     args = get_args()
     logging.basicConfig(level=logging.INFO)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(f"results/{args.model}_{args.predictor}_{timestamp}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Get configuration and initialize predictor
-    config = GRAPH_CONFIGS[args.model](
-        n=args.n_nodes,
-        seq_len=args.seq_len,
-        min_segment=args.min_segment,
-        min_changes=args.min_changes,
-        max_changes=args.max_changes,
-    )
-
-    predictor = (
-        WeightedPredictor()
-        if args.predictor == "weighted"
-        else PREDICTOR_MAP["hybrid"][args.model](config=config)
-    )
-
-    # 1. Generate synthetic data
-    graphs, ground_truth = generate_data(args, config)
-
-    # 2. Compute actual metrics (without data leakage)
-    actual_metrics = compute_actual_metrics(graphs, args.min_history)
-
-    # 3. Compute forecast metrics (without data leakage)
-    forecast_metrics = compute_forecast_metrics(graphs, predictor, args)
-
-    # 4. Save results
-    save_results(
-        output_dir, args, config, ground_truth, actual_metrics, forecast_metrics
-    )
-
-    # 5. Generate visualizations
-    generate_visualizations(
-        output_dir,
-        graphs,
-        forecast_metrics[0],
-        actual_metrics,
-        forecast_metrics,
-        args,
-        ground_truth,
-    )
-
-    # 6. Analyze prediction accuracy
-    print(f"\nPrediction Performance Summary for {args.model}:")
-    print("-" * 50)
-    analyze_prediction_phases(forecast_metrics[0], graphs, args.min_history, output_dir)
-
-    print(f"\nResults saved to: {output_dir}")
+    runner = ExperimentRunner(args)
+    results = runner.run_single_experiment()
+    runner.visualize_results(results)
+    runner.save_results(results)
+    runner.analyze_results(results)
+    print(f"\nResults saved to: {runner.output_dir}")
 
 
 if __name__ == "__main__":
