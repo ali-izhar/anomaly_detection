@@ -17,7 +17,6 @@ from predictor.weighted import WeightedPredictor
 from predictor.hybrid import (
     BAPredictor,
     SBMPredictor,
-    RCPPredictor,
     WSPredictor,
     ERPredictor,
 )
@@ -46,8 +45,6 @@ PREDICTOR_MAP = {
         "ws": WSPredictor,
         "er": ERPredictor,
         "sbm": SBMPredictor,
-        "rcp": RCPPredictor,
-        "lfr": SBMPredictor,
     },
 }
 
@@ -56,14 +53,10 @@ GRAPH_MODELS = {
     "watts_strogatz": "ws",
     "erdos_renyi": "er",
     "stochastic_block_model": "sbm",
-    "random_core_periphery": "rcp",
-    "lfr_benchmark": "lfr",
     "ba": "ba",
     "ws": "ws",
     "er": "er",
     "sbm": "sbm",
-    "rcp": "rcp",
-    "lfr": "lfr",
 }
 
 MODEL_PREDICTOR_RECOMMENDATIONS = {
@@ -71,8 +64,6 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
     "ws": ["weighted", "hybrid"],
     "er": ["weighted", "hybrid"],
     "sbm": ["weighted", "hybrid"],
-    "rcp": ["weighted", "hybrid"],
-    "lfr": ["weighted", "hybrid"],
 }
 
 THRESHOLD = 50.0

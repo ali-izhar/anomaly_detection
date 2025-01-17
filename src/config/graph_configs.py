@@ -3,7 +3,7 @@
 """Predefined configurations including standard and evolving parameters for graph models."""
 
 from typing import Dict, Any
-from graph.params import BAParams, WSParams, ERParams, SBMParams, RCPParams, LFRParams
+from graph.params import BAParams, WSParams, ERParams, SBMParams
 
 
 def get_ba_config(
@@ -135,77 +135,6 @@ def get_sbm_config(
     }
 
 
-def get_rcp_config(
-    n: int = 100,
-    seq_len: int = 200,
-    min_segment: int = 40,
-    min_changes: int = 1,
-    max_changes: int = 3,
-) -> Dict[str, Any]:
-    """Get configuration for Random Core-Periphery network."""
-    return {
-        "model": "random_core_periphery",
-        "params": RCPParams(
-            # Base parameters
-            n=n,
-            seq_len=seq_len,
-            min_segment=min_segment,
-            min_changes=min_changes,
-            max_changes=max_changes,
-            # Model parameters - Clear core-periphery structure
-            core_size=n // 5,  # Core is 20% of network
-            min_core_size=n // 6,  # Minimum core size
-            max_core_size=n // 4,  # Maximum core size
-            # High contrast between core and periphery
-            core_prob=0.8,  # Dense core
-            periph_prob=0.05,  # Sparse periphery
-            core_periph_prob=0.2,  # Moderate core-periphery connectivity
-            # Evolution parameters - Minimal variability
-            n_std=None,  # Fixed number of nodes
-            core_size_std=1.0,  # Very small core size variations
-            core_prob_std=0.02,  # Small probability variations
-            periph_prob_std=0.005,  # Minimal periphery variations
-            core_periph_prob_std=0.01,  # Small core-periphery variations
-        ),
-    }
-
-
-def get_lfr_config(
-    n: int = 100,
-    seq_len: int = 200,
-    min_segment: int = 40,
-    min_changes: int = 1,
-    max_changes: int = 3,
-) -> Dict[str, Any]:
-    """Get configuration for LFR Benchmark network."""
-    return {
-        "model": "lfr_benchmark",
-        "params": LFRParams(
-            # Base parameters
-            n=n,
-            seq_len=seq_len,
-            min_segment=min_segment,
-            min_changes=min_changes,
-            max_changes=max_changes,
-            # Model parameters - Clear community structure
-            avg_degree=8,  # Higher average degree for stability
-            max_degree=20,  # Reasonable maximum degree
-            mu=0.1,  # Strong communities (low mixing)
-            min_mu=0.05,  # Very strong communities
-            max_mu=0.15,  # Still maintain clear structure
-            min_community=n // 6,  # Reasonable community sizes
-            max_community=n // 3,
-            # Power law parameters - Realistic but stable
-            tau1=2.5,  # Degree distribution exponent
-            tau2=1.5,  # Community size distribution exponent
-            # Evolution parameters - Minimal variability
-            n_std=None,  # Fixed number of nodes
-            degree_std=0.2,  # Very small degree variations
-            mu_std=0.01,  # Minimal mixing parameter variations
-        ),
-    }
-
-
 # Dictionary mapping model names to their config functions
 GRAPH_CONFIGS = {
     # Full model names
@@ -213,13 +142,9 @@ GRAPH_CONFIGS = {
     "watts_strogatz": get_ws_config,
     "erdos_renyi": get_er_config,
     "stochastic_block_model": get_sbm_config,
-    "random_core_periphery": get_rcp_config,
-    "lfr_benchmark": get_lfr_config,
     # Short aliases
     "ba": get_ba_config,
     "ws": get_ws_config,
     "er": get_er_config,
     "sbm": get_sbm_config,
-    "rcp": get_rcp_config,
-    "lfr": get_lfr_config,
 }

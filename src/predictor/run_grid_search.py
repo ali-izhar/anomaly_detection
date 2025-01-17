@@ -21,7 +21,6 @@ from grid_search import GridSearch
 from hybrid.sbm_predictor import SBMPredictor
 from hybrid.ba_predictor import BAPredictor
 from hybrid.er_predictor import ERPredictor
-from hybrid.rcp_predictor import RCPPredictor
 from hybrid.ws_predictor import WSPredictor
 
 
@@ -38,7 +37,6 @@ PREDICTOR_MAP = {
         "sbm": SBMPredictor,
         "ba": BAPredictor,
         "er": ERPredictor,
-        "rcp": RCPPredictor,
         "ws": WSPredictor,
     },
 }
@@ -108,7 +106,7 @@ def get_args() -> argparse.Namespace:
         "--graph_type",
         type=str,
         default="sbm",
-        choices=["sbm", "ba", "er", "rcp", "ws"],
+        choices=["sbm", "ba", "er", "ws"],
         help="Graph model to use for hybrid predictor",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
