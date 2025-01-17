@@ -41,18 +41,13 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
 
 
 def parse_trial_args():
-    """Parse command line arguments with extended parameter ranges."""
+    """Parse command line arguments with fixed parameters."""
     parser = argparse.ArgumentParser(
         description="Multi-trial network prediction experiments"
     )
 
     # Basic parameters
-    parser.add_argument(
-        "--n-trials",
-        type=int,
-        default=10,
-        help="Number of trials per parameter combination",
-    )
+    parser.add_argument("--n-trials", type=int, default=10, help="Number of trials")
     parser.add_argument(
         "-m",
         "--model",
@@ -69,44 +64,20 @@ def parse_trial_args():
         help="Type of predictor",
     )
 
-    # Network parameters with ranges
+    # Fixed network parameters
+    parser.add_argument("-n", "--n-nodes", type=int, default=50, help="Number of nodes")
     parser.add_argument(
-        "--n-nodes-range",
-        type=int,
-        nargs=3,
-        default=[50, 200, 50],
-        help="Range for number of nodes [start, end, step]",
+        "-l", "--seq-len", type=int, default=100, help="Sequence length"
     )
     parser.add_argument(
-        "--seq-len-range",
-        type=int,
-        nargs=3,
-        default=[100, 300, 50],
-        help="Range for sequence length [start, end, step]",
+        "--min-changes", type=int, default=1, help="Number of change points"
     )
     parser.add_argument(
-        "--min-changes-range",
-        type=int,
-        nargs=3,
-        default=[2, 5, 1],
-        help="Range for min change points [start, end, step]",
+        "--max-changes", type=int, default=1, help="Number of change points"
     )
     parser.add_argument(
-        "--max-changes-range",
-        type=int,
-        nargs=3,
-        default=[2, 5, 1],
-        help="Range for max change points [start, end, step]",
+        "-s", "--min-segment", type=int, default=30, help="Min segment length"
     )
-    parser.add_argument(
-        "--min-segment-range",
-        type=int,
-        nargs=3,
-        default=[30, 70, 10],
-        help="Range for min segment length [start, end, step]",
-    )
-
-    # Fixed parameters
     parser.add_argument(
         "-w", "--prediction-window", type=int, default=5, help="Prediction steps"
     )
@@ -126,49 +97,16 @@ def parse_trial_args():
 
 
 def generate_parameter_combinations(args):
-    """Generate all parameter combinations to test."""
-    n_nodes_range = range(
-        args.n_nodes_range[0], args.n_nodes_range[1] + 1, args.n_nodes_range[2]
-    )
-    seq_len_range = range(
-        args.seq_len_range[0], args.seq_len_range[1] + 1, args.seq_len_range[2]
-    )
-    min_changes_range = range(
-        args.min_changes_range[0],
-        args.min_changes_range[1] + 1,
-        args.min_changes_range[2],
-    )
-    max_changes_range = range(
-        args.max_changes_range[0],
-        args.max_changes_range[1] + 1,
-        args.max_changes_range[2],
-    )
-    min_segment_range = range(
-        args.min_segment_range[0],
-        args.min_segment_range[1] + 1,
-        args.min_segment_range[2],
-    )
-
-    combinations = []
-    for n, l, min_c, max_c, seg in product(
-        n_nodes_range,
-        seq_len_range,
-        min_changes_range,
-        max_changes_range,
-        min_segment_range,
-    ):
-        if min_c <= max_c and seg * max_c < l:  # Ensure valid combinations
-            combinations.append(
-                {
-                    "n_nodes": n,
-                    "seq_len": l,
-                    "min_changes": min_c,
-                    "max_changes": max_c,
-                    "min_segment": seg,
-                }
-            )
-
-    return combinations
+    """Generate single parameter combination with fixed values."""
+    return [
+        {
+            "n_nodes": args.n_nodes,
+            "seq_len": args.seq_len,
+            "min_changes": args.min_changes,
+            "max_changes": args.max_changes,
+            "min_segment": args.min_segment,
+        }
+    ]
 
 
 def extract_trial_metrics(results):
@@ -177,19 +115,29 @@ def extract_trial_metrics(results):
         actual_martingales = results["actual_metrics"][1]
         pred_martingales = results["forecast_metrics"][2]
         change_points = results["ground_truth"]["change_points"]
+        if isinstance(change_points, np.ndarray):
+            change_points = change_points.tolist()
 
         # Extract feature-wise metrics
         feature_metrics = {}
         for feature_type in ["degree", "clustering", "betweenness", "closeness"]:
             if feature_type in actual_martingales["reset"]:
+                actual_values = actual_martingales["reset"][feature_type]["martingales"]
+                pred_values = pred_martingales["reset"][feature_type]["martingales"]
+                weight = actual_martingales["reset"][feature_type]["weight"]
+
+                # Convert numpy arrays to lists
+                if isinstance(actual_values, np.ndarray):
+                    actual_values = actual_values.tolist()
+                if isinstance(pred_values, np.ndarray):
+                    pred_values = pred_values.tolist()
+                if isinstance(weight, (np.floating, np.integer)):
+                    weight = float(weight)
+
                 feature_metrics[feature_type] = {
-                    "actual_values": actual_martingales["reset"][feature_type][
-                        "martingales"
-                    ],
-                    "pred_values": pred_martingales["reset"][feature_type][
-                        "martingales"
-                    ],
-                    "weight": actual_martingales["reset"][feature_type]["weight"],
+                    "actual_values": actual_values,
+                    "pred_values": pred_values,
+                    "weight": weight,
                 }
 
         # Compute detection metrics
@@ -199,6 +147,16 @@ def extract_trial_metrics(results):
         pred_delay, pred_false_alarms = compute_detection_metrics(
             pred_martingales, change_points, 50.0, 10
         )
+
+        # Convert any numpy types to Python types
+        if isinstance(actual_delay, (np.floating, np.integer)):
+            actual_delay = float(actual_delay)
+        if isinstance(pred_delay, (np.floating, np.integer)):
+            pred_delay = float(pred_delay)
+        if isinstance(actual_false_alarms, (np.floating, np.integer)):
+            actual_false_alarms = int(actual_false_alarms)
+        if isinstance(pred_false_alarms, (np.floating, np.integer)):
+            pred_false_alarms = int(pred_false_alarms)
 
         return {
             "actual_delay": actual_delay,
@@ -211,6 +169,9 @@ def extract_trial_metrics(results):
 
     except Exception as e:
         logger.error(f"Error in extract_trial_metrics: {str(e)}")
+        import traceback
+
+        logger.error(traceback.format_exc())
         raise
 
 
@@ -221,56 +182,135 @@ def plot_comprehensive_results(all_results, output_dir):
     plots_dir.mkdir(exist_ok=True)
 
     # Convert results to DataFrame for easier plotting
-    df = pd.DataFrame(all_results)
+    df = pd.DataFrame(
+        [{k: v for k, v in r.items() if not isinstance(v, dict)} for r in all_results]
+    )
 
     # 1. Detection Delay Distribution
     plt.figure(figsize=(12, 6))
-    sns.boxplot(
-        data=pd.melt(
-            df[["actual_delay", "pred_delay"]], value_name="Delay", var_name="Type"
-        )
+    delay_data = pd.DataFrame(
+        {
+            "Type": ["Actual"] * len(df) + ["Predicted"] * len(df),
+            "Delay": list(df["actual_delay"]) + list(df["pred_delay"]),
+        }
     )
+    sns.boxplot(data=delay_data, x="Type", y="Delay")
     plt.title("Detection Delay Distribution")
     plt.savefig(plots_dir / "detection_delays.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 2. False Alarms vs Network Size
+    # 2. False Alarms Distribution
     plt.figure(figsize=(12, 6))
-    sns.scatterplot(data=df, x="n_nodes", y="actual_false_alarms", label="Actual")
-    sns.scatterplot(data=df, x="n_nodes", y="pred_false_alarms", label="Predicted")
-    plt.title("False Alarms vs Network Size")
-    plt.savefig(plots_dir / "false_alarms_vs_size.png", dpi=300, bbox_inches="tight")
+    false_alarms_data = pd.DataFrame(
+        {
+            "Type": ["Actual"] * len(df) + ["Predicted"] * len(df),
+            "False Alarms": list(df["actual_false_alarms"])
+            + list(df["pred_false_alarms"]),
+        }
+    )
+    sns.boxplot(data=false_alarms_data, x="Type", y="False Alarms")
+    plt.title("False Alarms Distribution")
+    plt.savefig(plots_dir / "false_alarms.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # 3. Detection Performance vs Sequence Length
-    plt.figure(figsize=(12, 6))
-    sns.lineplot(data=df, x="seq_len", y="actual_delay", label="Actual Delay")
-    sns.lineplot(data=df, x="seq_len", y="pred_delay", label="Predicted Delay")
-    plt.title("Detection Performance vs Sequence Length")
-    plt.savefig(plots_dir / "performance_vs_seqlen.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    # 3. Feature-wise Performance
+    feature_data = []
+    for result in all_results:
+        if "feature_metrics" in result:
+            for feature, metrics in result["feature_metrics"].items():
+                try:
+                    # Handle ragged arrays by flattening all values
+                    actual_values = [
+                        val
+                        for sublist in metrics["actual_values"]
+                        for val in (
+                            sublist
+                            if isinstance(sublist, (list, np.ndarray))
+                            else [sublist]
+                        )
+                    ]
+                    pred_values = [
+                        val
+                        for sublist in metrics["pred_values"]
+                        for val in (
+                            sublist
+                            if isinstance(sublist, (list, np.ndarray))
+                            else [sublist]
+                        )
+                    ]
 
-    # 4. Feature-wise Performance
-    if "feature_metrics" in df.columns:
-        feature_df = pd.DataFrame(
-            [
-                {
-                    "feature": feature,
-                    "weight": metrics["weight"],
-                    "actual_avg": np.mean(metrics["actual_values"]),
-                    "pred_avg": np.mean(metrics["pred_values"]),
-                }
-                for result in df["feature_metrics"]
-                for feature, metrics in result.items()
-            ]
-        )
+                    # Convert to numpy arrays and filter finite values
+                    actual_values = np.array(
+                        [v for v in actual_values if np.isfinite(float(v))]
+                    )
+                    pred_values = np.array(
+                        [v for v in pred_values if np.isfinite(float(v))]
+                    )
 
+                    if len(actual_values) > 0 and len(pred_values) > 0:
+                        feature_data.append(
+                            {
+                                "Feature": feature,
+                                "Weight": float(metrics["weight"]),
+                                "Actual": float(np.mean(actual_values)),
+                                "Predicted": float(np.mean(pred_values)),
+                                "Trial": result.get("trial", 0),
+                            }
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing feature {feature} in trial {result.get('trial', 0)}: {str(e)}"
+                    )
+                    continue
+
+    if feature_data:
+        feature_df = pd.DataFrame(feature_data)
+
+        # Plot average feature values
         plt.figure(figsize=(12, 6))
-        sns.barplot(data=feature_df, x="feature", y="actual_avg", label="Actual")
-        sns.barplot(data=feature_df, x="feature", y="pred_avg", label="Predicted")
+        feature_means = feature_df.groupby("Feature")[["Actual", "Predicted"]].mean()
+        feature_means.plot(
+            kind="bar",
+            yerr=feature_df.groupby("Feature")[["Actual", "Predicted"]].std(),
+        )
         plt.title("Feature-wise Performance Comparison")
+        plt.xlabel("Feature")
+        plt.ylabel("Average Value")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
         plt.savefig(plots_dir / "feature_performance.png", dpi=300, bbox_inches="tight")
         plt.close()
+
+        # Plot feature weights
+        plt.figure(figsize=(12, 6))
+        sns.barplot(data=feature_df, x="Feature", y="Weight")
+        plt.title("Feature Weights")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(plots_dir / "feature_weights.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+    # 4. Trial Summary
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(df["trial"], df["actual_delay"], "b-", label="Actual")
+    plt.plot(df["trial"], df["pred_delay"], "r--", label="Predicted")
+    plt.title("Detection Delays Across Trials")
+    plt.xlabel("Trial")
+    plt.ylabel("Delay")
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(df["trial"], df["actual_false_alarms"], "b-", label="Actual")
+    plt.plot(df["trial"], df["pred_false_alarms"], "r--", label="Predicted")
+    plt.title("False Alarms Across Trials")
+    plt.xlabel("Trial")
+    plt.ylabel("False Alarms")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(plots_dir / "trial_summary.png", dpi=300, bbox_inches="tight")
+    plt.close()
 
 
 def save_comprehensive_results(all_results, output_dir):
@@ -439,8 +479,128 @@ def compute_detection_metrics(martingales, change_points, threshold, min_history
         raise
 
 
+def serialize_for_json(obj):
+    """Helper function to serialize objects for JSON."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(
+        obj,
+        (
+            np.int_,
+            np.intc,
+            np.intp,
+            np.int8,
+            np.int16,
+            np.int32,
+            np.int64,
+            np.uint8,
+            np.uint16,
+            np.uint32,
+            np.uint64,
+        ),
+    ):
+        return int(obj)
+    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (set, frozenset)):
+        return list(obj)
+    elif isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [serialize_for_json(item) for item in obj]
+    elif hasattr(obj, "__dict__"):  # Handle custom objects
+        return {
+            "class": obj.__class__.__name__,
+            "attributes": serialize_for_json(obj.__dict__),
+        }
+    return obj
+
+
+class MultiTrialExperimentRunner:
+    """Class to handle multiple trials with consistent parameters."""
+
+    def __init__(self, args, output_dir):
+        """Initialize runner with fixed parameters."""
+        self.args = args
+        self.output_dir = output_dir
+        self.base_seed = (
+            args.seed if args.seed is not None else np.random.randint(0, 10000)
+        )
+
+        # Initialize single experiment runner with fixed parameters
+        self.experiment_runner = ExperimentRunner(
+            args, output_dir=output_dir, seed=self.base_seed
+        )
+
+        # Store initial network parameters
+        self.initial_params = self.experiment_runner.config
+        logger.info(f"Initialized with parameters: {self.initial_params}")
+
+    def run_trials(self, n_trials):
+        """Run multiple trials with the same parameters."""
+        all_results = []
+
+        # Save experiment configuration first
+        config = {
+            "model": self.args.model,
+            "predictor": self.args.predictor,
+            "parameters": serialize_for_json(self.initial_params),
+            "base_seed": self.base_seed,
+            "args": serialize_for_json(vars(self.args)),
+        }
+        with open(self.output_dir / "experiment_config.json", "w") as f:
+            json.dump(config, f, indent=4)
+
+        for trial in tqdm(range(n_trials), desc="Running trials"):
+            try:
+                # Create trial directory
+                trial_dir = self.output_dir / f"trial_{trial}"
+                trial_dir.mkdir(parents=True, exist_ok=True)
+
+                # Update seed for this trial while keeping other parameters fixed
+                trial_seed = self.base_seed + trial
+                self.experiment_runner.seed = trial_seed
+
+                # Run single trial
+                results = self.experiment_runner.run_single_experiment()
+
+                # Extract and process metrics
+                metrics = extract_trial_metrics(results)
+
+                # Add trial information
+                metrics.update(
+                    {
+                        "trial": trial,
+                        "seed": trial_seed,
+                        "n_nodes": self.args.n_nodes,
+                        "seq_len": self.args.seq_len,
+                        "min_changes": self.args.min_changes,
+                        "max_changes": self.args.max_changes,
+                        "min_segment": self.args.min_segment,
+                    }
+                )
+
+                # Save individual trial results with proper serialization
+                serialized_metrics = serialize_for_json(metrics)
+                with open(trial_dir / "trial_results.json", "w") as f:
+                    json.dump(serialized_metrics, f, indent=4)
+
+                all_results.append(metrics)
+
+            except Exception as e:
+                logger.error(f"Trial {trial} failed: {str(e)}")
+                import traceback
+
+                logger.error(traceback.format_exc())
+                continue
+
+        return all_results
+
+
 def main():
-    """Main execution function for comprehensive parameter sweep experiments."""
+    """Main execution function for multiple trials with consistent parameters."""
     args = parse_trial_args()
 
     # Set up logging
@@ -455,55 +615,26 @@ def main():
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(
-        f"results/comprehensive_{args.model}_{args.predictor}_{timestamp}"
-    )
+    output_dir = Path(f"results/experiment_{args.model}_{args.predictor}_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate parameter combinations
-    param_combinations = generate_parameter_combinations(args)
-    logger.info(f"Generated {len(param_combinations)} parameter combinations")
+    # Initialize multi-trial runner
+    multi_runner = MultiTrialExperimentRunner(args, output_dir)
 
-    # Store all results
-    all_results = []
+    # Run all trials
+    all_results = multi_runner.run_trials(args.n_trials)
 
-    # Run experiments for each parameter combination
-    for params in tqdm(param_combinations, desc="Parameter combinations"):
-        # Update args with current parameters
-        for key, value in params.items():
-            setattr(args, key, value)
-
-        # Run trials for current parameter combination
-        for trial in range(args.n_trials):
-            try:
-                trial_seed = args.seed + trial if args.seed is not None else trial
-                trial_runner = ExperimentRunner(
-                    args,
-                    output_dir=output_dir
-                    / f"params_{params['n_nodes']}_{params['seq_len']}"
-                    / f"trial_{trial}",
-                    seed=trial_seed,
-                )
-
-                results = trial_runner.run_single_experiment()
-                metrics = extract_trial_metrics(results)
-
-                # Add parameter information to metrics
-                metrics.update(params)
-                metrics["trial"] = trial
-                all_results.append(metrics)
-
-            except Exception as e:
-                logger.error(
-                    f"Trial failed for params {params}, trial {trial}: {str(e)}"
-                )
-                continue
+    if not all_results:
+        logger.error(
+            "All trials failed. Check experiment_comprehensive.log for details."
+        )
+        return
 
     # Generate visualizations and save results
     plot_comprehensive_results(all_results, output_dir)
     save_comprehensive_results(all_results, output_dir)
 
-    print(f"\nComprehensive results saved to: {output_dir}")
+    print(f"\nResults saved to: {output_dir}")
     print("Check experiment_comprehensive.log for detailed execution information.")
 
 
