@@ -16,7 +16,7 @@ import seaborn as sns
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 
-from src.predictor.utils import (
+from src.runner import (
     generate_network_series,
     compute_network_features,
     compute_martingales,
