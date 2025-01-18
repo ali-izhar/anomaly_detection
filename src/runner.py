@@ -86,7 +86,7 @@ class ExperimentRunner:
 
     def _run_single(self) -> Dict[str, Any]:
         """Run a single experiment.
-        
+
         Returns:
             Dict containing experiment results
         """
@@ -112,18 +112,17 @@ class ExperimentRunner:
             "config": self.config,
         }
 
-        self._save_results(results)
-        self.visualize_results(results)
+        # Only save and visualize individual results if this is a single run
+        # or if explicitly requested for multiple runs
+        if self.config.n_runs == 1 or self.config.save_individual:
+            self._save_results(results)
+        if self.config.n_runs == 1 or self.config.visualize_individual:
+            self.visualize_results(results)
 
         return results
 
     def _run_multiple(self) -> Dict[str, Any]:
-        """Run multiple experiments and aggregate results.
-        
-        Returns:
-            Dict containing aggregated results with averaged features, martingales,
-            and change point analysis.
-        """
+        """Run multiple experiments and aggregate results."""
         all_results = []
         base_seed = self.seed if self.seed is not None else np.random.randint(0, 10000)
 
@@ -150,17 +149,10 @@ class ExperimentRunner:
             logger.info(f"\nRunning experiment {i+1}/{self.config.n_runs}")
             run_seed = base_seed + i if base_seed is not None else None
             
-            # Create run-specific output directory if needed
-            if self.config.save_individual:
-                run_dir = self.output_dir / f"run_{i+1}"
-                run_dir.mkdir(exist_ok=True)
-            else:
-                run_dir = None
-
-            # Create runner for this iteration
+            # Create runner for this iteration with minimal output
             runner = ExperimentRunner(
                 config=self.config,
-                output_dir=run_dir,
+                output_dir=None if not self.config.save_individual else self.output_dir / f"run_{i+1}",
                 seed=run_seed
             )
             
@@ -240,6 +232,10 @@ class ExperimentRunner:
             for feature, values in feature_data.items():
                 if values:
                     logger.debug(f"Aggregated {reset_type} {feature} shape: {np.array(values).shape}")
+
+        # Create final aggregated results directory if it doesn't exist
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
 
         # Compute averages and create final aggregated results
         aggregated = self._create_aggregated_results(
