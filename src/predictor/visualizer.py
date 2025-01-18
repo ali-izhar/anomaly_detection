@@ -1137,8 +1137,23 @@ class Visualizer:
         epsilon: float = 0.8,
         change_points: List[int] = None,
         prediction_window: int = 3,
+        min_segment: int = 50,
     ) -> None:
-        """Create a dashboard comparing actual and predicted martingales with SHAP values."""
+        """Create a dashboard comparing actual and predicted martingales with SHAP values.
+        
+        Args:
+            network_series: List of network states
+            actual_martingales: Dict of actual martingale values
+            pred_martingales: Dict of predicted martingale values
+            actual_shap: Array of actual SHAP values
+            pred_shap: Array of predicted SHAP values
+            output_path: Path to save the visualization
+            threshold: Threshold for martingale values
+            epsilon: Epsilon parameter for martingale calculation
+            change_points: List of change point indices
+            prediction_window: Window size for predictions
+            min_segment: Minimum number of timesteps between change points
+        """
         # Get feature names from network metrics
         feature_names = ["degree", "clustering", "betweenness", "closeness"]
 
@@ -1199,26 +1214,15 @@ class Visualizer:
             label="Threshold",
         )
 
-        # Find detected changepoints for each actual change point
+        # Find detected changepoints for each actual change point based on sum exceeding threshold
         detected_cps = []
         for cp in change_points:
-            # Get all detections from all features
-            all_detections = []
-            for feature in feature_names:
-                if "change_detected_instant" in actual_martingales["reset"][feature]:
-                    feature_detections = actual_martingales["reset"][feature][
-                        "change_detected_instant"
-                    ]
-                    # Only consider detections after the change point
-                    for detection in feature_detections:
-                        if (
-                            0 <= (detection - cp) <= 10
-                        ):  # Only look at detections up to 10 steps after CP
-                            all_detections.append(detection)
-
-            # If we found any detections for this CP, take the earliest one
-            if all_detections:
-                detected_cps.append(min(all_detections))
+            # Look for the first time the sum exceeds threshold after the change point
+            # Use min_segment instead of hardcoded 10 steps
+            for t in range(cp, min(cp + min_segment, len(M_sum))):
+                if M_sum[t] > threshold:
+                    detected_cps.append(t)
+                    break
 
         # Plot actual change points and their corresponding detections
         for i, cp in enumerate(change_points):
@@ -1301,26 +1305,15 @@ class Visualizer:
             label="Threshold",
         )
 
-        # Find predicted changepoints for each actual change point
+        # Find predicted changepoints for each actual change point based on sum exceeding threshold
         predicted_cps = []
         for cp in change_points:
-            # Get all predictions from all features
-            all_predictions = []
-            for feature in feature_names:
-                if "change_detected_instant" in pred_martingales["reset"][feature]:
-                    feature_predictions = pred_martingales["reset"][feature][
-                        "change_detected_instant"
-                    ]
-                    # Only consider predictions after the change point
-                    for prediction in feature_predictions:
-                        if (
-                            0 <= (prediction - cp) <= 10
-                        ):  # Only look at predictions up to 10 steps after CP
-                            all_predictions.append(prediction)
-
-            # If we found any predictions for this CP, take the earliest one
-            if all_predictions:
-                predicted_cps.append(min(all_predictions))
+            # Look for the first time the sum exceeds threshold after the change point
+            # Use min_segment instead of hardcoded 10 steps
+            for t in range(cp, min(cp + min_segment, len(P_sum))):
+                if P_sum[t] > threshold:
+                    predicted_cps.append(t)
+                    break
 
         # Plot actual change points and their corresponding predictions
         for i, cp in enumerate(change_points):

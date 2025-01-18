@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 import argparse
 import logging
-from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -21,6 +20,7 @@ from src.runner import ExperimentRunner, ExperimentConfig
 from config.graph_configs import GRAPH_CONFIGS
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 #######################
 # Global Configurations
