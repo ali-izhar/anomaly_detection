@@ -76,7 +76,9 @@ class ExperimentRunner:
             base_dir = Path(f"results/multi_{self.config.model}_{timestamp}")
         else:
             base_dir = Path(f"results/{self.config.model}_{timestamp}")
+        
         base_dir.mkdir(parents=True, exist_ok=True)
+        self.aggregated_dir = base_dir  # Use the same directory for all results
         return base_dir
 
     def run(self) -> Dict[str, Any]:
@@ -92,8 +94,12 @@ class ExperimentRunner:
         else:
             return self._run_single()
 
-    def _run_single(self) -> Dict[str, Any]:
+    def _run_single(self, run_number: Optional[int] = None, reuse_dir: bool = False) -> Dict[str, Any]:
         """Run a single experiment.
+
+        Args:
+            run_number: Optional run number for multiple experiments
+            reuse_dir: Whether to reuse the existing output directory
 
         Returns:
             Dict containing experiment results
@@ -117,7 +123,7 @@ class ExperimentRunner:
             "actual_metrics": actual_metrics,
             "forecast_metrics": forecast_metrics,
             "seed": self.seed,
-            "config": self.config,
+            "run_number": run_number,
         }
 
         # Only save and visualize individual results if this is a single run
@@ -167,19 +173,8 @@ class ExperimentRunner:
             logger.info(f"\nRunning experiment {i+1}/{self.config.n_runs}")
             run_seed = base_seed + i if base_seed is not None else None
 
-            # Create runner for this iteration with minimal output
-            runner = ExperimentRunner(
-                config=self.config,
-                output_dir=(
-                    None
-                    if not self.config.save_individual
-                    else self.output_dir / f"run_{i+1}"
-                ),
-                seed=run_seed,
-            )
-
-            # Run experiment
-            results = runner._run_single()
+            # Run single experiment with the current seed
+            results = self._run_single(run_number=i+1, reuse_dir=True)
             all_results.append(results)
 
             # Debug log for martingale structure
@@ -276,20 +271,7 @@ class ExperimentRunner:
             all_delays["detection"].extend(detection_delays)
             all_delays["prediction"].extend(prediction_delays)
 
-        # Debug log final aggregated structure
-        logger.debug("\nFinal aggregated structure:")
-        for reset_type, feature_data in aggregated_martingales["actual"].items():
-            for feature, values in feature_data.items():
-                if values:
-                    logger.debug(
-                        f"Aggregated {reset_type} {feature} shape: {np.array(values).shape}"
-                    )
-
-        # Create final aggregated results directory if it doesn't exist
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True)
-
-        # Compute averages and create final aggregated results
+        # Create final aggregated results
         aggregated = self._create_aggregated_results(
             all_results,
             aggregated_features,
@@ -579,7 +561,7 @@ class ExperimentRunner:
 
         plt.tight_layout()
         plt.savefig(
-            self.output_dir / "aggregated_features.png", dpi=300, bbox_inches="tight"
+            self.aggregated_dir / "aggregated_features.png", dpi=300, bbox_inches="tight"
         )
         plt.close()
 
@@ -650,7 +632,7 @@ class ExperimentRunner:
 
         plt.tight_layout()
         plt.savefig(
-            self.output_dir / "aggregated_martingales.png", dpi=300, bbox_inches="tight"
+            self.aggregated_dir / "aggregated_martingales.png", dpi=300, bbox_inches="tight"
         )
         plt.close()
 
@@ -793,7 +775,15 @@ class ExperimentRunner:
                 "seed": self.seed,
             }
 
-            with open(self.output_dir / "results.json", "w") as f:
+            # For multiple runs, save individual results in numbered subdirectories
+            if self.config.n_runs > 1 and self.config.save_individual:
+                run_dir = self.output_dir / f"run_{results.get('run_number', 'unknown')}"
+                run_dir.mkdir(parents=True, exist_ok=True)
+                save_path = run_dir / "results.json"
+            else:
+                save_path = self.output_dir / "results.json"
+
+            with open(save_path, "w") as f:
                 json.dump(serializable_data, f, indent=4)
         except Exception as e:
             logger.error(f"Error saving results: {str(e)}")
@@ -803,13 +793,18 @@ class ExperimentRunner:
                 "seed": self.seed,
                 "error": str(e),
             }
-            with open(self.output_dir / "results_error.json", "w") as f:
+            error_path = (
+                self.output_dir / f"run_{results.get('run_number', 'unknown')}" / "results_error.json"
+                if self.config.n_runs > 1 and self.config.save_individual
+                else self.output_dir / "results_error.json"
+            )
+            with open(error_path, "w") as f:
                 json.dump(simple_data, f, indent=4)
 
     def _save_aggregated_results(self, aggregated: Dict[str, Any]):
         """Save aggregated results from multiple runs."""
         try:
-            with open(self.output_dir / "aggregated_results.json", "w") as f:
+            with open(self.aggregated_dir / "aggregated_results.json", "w") as f:
                 json.dump(self._convert_to_serializable(aggregated), f, indent=4)
 
             # Print summary statistics
@@ -837,7 +832,7 @@ class ExperimentRunner:
         except Exception as e:
             logger.error(f"Error saving aggregated results: {e}")
             # Save basic information if there's an error
-            with open(self.output_dir / "aggregated_results_error.json", "w") as f:
+            with open(self.aggregated_dir / "aggregated_results_error.json", "w") as f:
                 json.dump(
                     {"error": str(e), "n_runs": aggregated.get("n_runs", None)},
                     f,
