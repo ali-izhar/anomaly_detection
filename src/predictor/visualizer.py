@@ -329,7 +329,13 @@ class Visualizer:
         pred_metrics = [
             feature_extractor.get_all_metrics(p["graph"]).__dict__ for p in predictions
         ]
+
+        # Use the actual time points from predictions, which should already account for min_history
         pred_times = [p["time"] for p in predictions]
+        # For actual values, we only want to plot the same timespan as predictions
+        plot_start = min_history
+        plot_end = plot_start + len(predictions)
+        times = list(range(plot_start, plot_end))
 
         # Use provided change points or extract from series
         if change_points is None:
@@ -372,8 +378,6 @@ class Visualizer:
             ("density", "Network Density", "Ratio of actual to possible edges"),
         ]
 
-        times = list(range(len(actual_series)))
-
         # Create legend axes
         actual_style = PlotStyle.LINE_STYLES["actual"]
         pred_style = PlotStyle.LINE_STYLES["predicted"]
@@ -401,7 +405,10 @@ class Visualizer:
                     **PlotStyle.LINE_STYLES["change_point"],
                 )
 
-            actual_values = [m[metric_name] for m in actual_metrics]
+            # Get actual values only for the prediction timespan
+            actual_values = [
+                m[metric_name] for m in actual_metrics[min_history:plot_end]
+            ]
             pred_values = [m[metric_name] for m in pred_metrics]
 
             ax.plot(
@@ -431,7 +438,9 @@ class Visualizer:
 
             # Calculate and display error metrics
             if len(pred_values) > 0:
-                actual_pred_range = actual_values[min_history:][: len(pred_values)]
+                actual_pred_range = (
+                    actual_values  # Now actual_values is already properly sliced
+                )
                 if len(actual_pred_range) > 0:
                     mae = np.mean(
                         np.abs(np.array(pred_values) - np.array(actual_pred_range))
@@ -1139,21 +1148,7 @@ class Visualizer:
         prediction_window: int = 3,
         min_segment: int = 50,
     ) -> None:
-        """Create a dashboard comparing actual and predicted martingales with SHAP values.
-        
-        Args:
-            network_series: List of network states
-            actual_martingales: Dict of actual martingale values
-            pred_martingales: Dict of predicted martingale values
-            actual_shap: Array of actual SHAP values
-            pred_shap: Array of predicted SHAP values
-            output_path: Path to save the visualization
-            threshold: Threshold for martingale values
-            epsilon: Epsilon parameter for martingale calculation
-            change_points: List of change point indices
-            prediction_window: Window size for predictions
-            min_segment: Minimum number of timesteps between change points
-        """
+        """Create a comprehensive dashboard comparing actual and predicted martingale measures."""
         # Get feature names from network metrics
         feature_names = ["degree", "clustering", "betweenness", "closeness"]
 
@@ -1174,13 +1169,29 @@ class Visualizer:
         # Color palette for features
         colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
 
+        # Calculate proper time indices
+        min_history = len(network_series) - len(
+            pred_martingales["reset"][feature_names[0]]["martingales"]
+        )
+        time_points = range(
+            min_history,
+            min_history
+            + len(pred_martingales["reset"][feature_names[0]]["martingales"]),
+        )
+
         # 1. Reset Martingales - Actual (Top Left)
         ax_actual_mart = fig.add_subplot(gs[0, 0])
 
         # First plot individual feature martingales with thinner lines
+        martingale_arrays = []
         for idx, feature in enumerate(feature_names):
-            values = actual_martingales["reset"][feature]["martingales"]
+            # Get only the values corresponding to the prediction timespan
+            values = actual_martingales["reset"][feature]["martingales"][
+                -len(time_points) :
+            ]
+            martingale_arrays.append(values)
             ax_actual_mart.plot(
+                time_points,
                 values,
                 label=feature.capitalize(),
                 color=colors[idx],
@@ -1188,21 +1199,25 @@ class Visualizer:
                 alpha=0.3,
             )
 
-        # Calculate and plot sum and average martingales
-        martingale_arrays = []
-        for feature in feature_names:
-            values = actual_martingales["reset"][feature]["martingales"]
-            martingale_arrays.append(values)
-
         M_sum = np.sum(martingale_arrays, axis=0)
         M_avg = M_sum / len(feature_names)
 
         # Plot sum and average with thicker lines
         ax_actual_mart.plot(
-            M_sum, color="#2F2F2F", label="Sum", linewidth=2.5, alpha=0.9
+            time_points,
+            M_sum,
+            color="#2F2F2F",
+            label="Sum",
+            linewidth=2.5,
+            alpha=0.9,
         )
         ax_actual_mart.plot(
-            M_avg, color="#FF4B4B", label="Average", linewidth=2.5, alpha=0.9
+            time_points,
+            M_avg,
+            color="#FF4B4B",
+            label="Average",
+            linewidth=2.5,
+            alpha=0.9,
         )
 
         # Plot threshold line for sum only
@@ -1217,33 +1232,36 @@ class Visualizer:
         # Find detected changepoints for each actual change point based on sum exceeding threshold
         detected_cps = []
         for cp in change_points:
-            # Look for the first time the sum exceeds threshold after the change point
-            # Use min_segment instead of hardcoded 10 steps
-            for t in range(cp, min(cp + min_segment, len(M_sum))):
-                if M_sum[t] > threshold:
-                    detected_cps.append(t)
-                    break
+            if cp >= min_history:  # Only consider change points in our plotting window
+                # Look for the first time the sum exceeds threshold after the change point
+                for t in range(
+                    cp - min_history, min(cp - min_history + min_segment, len(M_sum))
+                ):
+                    if M_sum[t] > threshold:
+                        detected_cps.append(t + min_history)
+                        break
 
         # Plot actual change points and their corresponding detections
         for i, cp in enumerate(change_points):
-            # Plot actual CP
-            ax_actual_mart.axvline(
-                x=cp,
-                color="red",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Actual CP {i+1} (t={cp})",
-            )
-
-            # Plot corresponding detected CP if it exists
-            if i < len(detected_cps):
+            if cp >= min_history:  # Only plot change points in our window
+                # Plot actual CP
                 ax_actual_mart.axvline(
-                    x=detected_cps[i],
-                    color="green",
+                    x=cp,
+                    color="red",
                     linestyle="-",
                     alpha=0.5,
-                    label=f"Detected CP {i+1} (t={detected_cps[i]})",
+                    label=f"Actual CP {i+1} (t={cp})",
                 )
+
+                # Plot corresponding detected CP if it exists
+                if i < len(detected_cps):
+                    ax_actual_mart.axvline(
+                        x=detected_cps[i],
+                        color="green",
+                        linestyle="-",
+                        alpha=0.5,
+                        label=f"Detected CP {i+1} (t={detected_cps[i]})",
+                    )
 
         ax_actual_mart.set_title("Actual Reset Martingale Measures", pad=20)
         ax_actual_mart.set_xlabel("Time Steps")
@@ -1253,13 +1271,12 @@ class Visualizer:
 
         # 2. Reset Martingales - Predicted (Top Right)
         ax_pred_mart = fig.add_subplot(gs[0, 1])
-        time_points = np.arange(
-            len(pred_martingales["reset"][feature_names[0]]["martingales"])
-        )
 
         # First plot individual feature martingales with thinner lines
+        pred_martingale_arrays = []
         for idx, feature in enumerate(feature_names):
             pred_values = pred_martingales["reset"][feature]["martingales"]
+            pred_martingale_arrays.append(pred_values)
             ax_pred_mart.plot(
                 time_points,
                 pred_values,
@@ -1268,12 +1285,6 @@ class Visualizer:
                 linewidth=1.0,
                 alpha=0.3,
             )
-
-        # Calculate and plot sum and average predicted martingales
-        pred_martingale_arrays = []
-        for feature in feature_names:
-            pred_values = pred_martingales["reset"][feature]["martingales"]
-            pred_martingale_arrays.append(pred_values)
 
         P_sum = np.sum(pred_martingale_arrays, axis=0)
         P_avg = P_sum / len(feature_names)
@@ -1308,33 +1319,36 @@ class Visualizer:
         # Find predicted changepoints for each actual change point based on sum exceeding threshold
         predicted_cps = []
         for cp in change_points:
-            # Look for the first time the sum exceeds threshold after the change point
-            # Use min_segment instead of hardcoded 10 steps
-            for t in range(cp, min(cp + min_segment, len(P_sum))):
-                if P_sum[t] > threshold:
-                    predicted_cps.append(t)
-                    break
+            if cp >= min_history:  # Only consider change points in our plotting window
+                # Look for the first time the sum exceeds threshold after the change point
+                for t in range(
+                    cp - min_history, min(cp - min_history + min_segment, len(P_sum))
+                ):
+                    if P_sum[t] > threshold:
+                        predicted_cps.append(t + min_history)
+                        break
 
         # Plot actual change points and their corresponding predictions
         for i, cp in enumerate(change_points):
-            # Plot actual CP
-            ax_pred_mart.axvline(
-                x=cp,
-                color="red",
-                linestyle="-",
-                alpha=0.5,
-                label=f"Actual CP {i+1} (t={cp})",
-            )
-
-            # Plot corresponding predicted CP if it exists
-            if i < len(predicted_cps):
+            if cp >= min_history:  # Only plot change points in our window
+                # Plot actual CP
                 ax_pred_mart.axvline(
-                    x=predicted_cps[i],
-                    color="blue",
+                    x=cp,
+                    color="red",
                     linestyle="-",
                     alpha=0.5,
-                    label=f"Predicted CP {i+1} (t={predicted_cps[i]})",
+                    label=f"Actual CP {i+1} (t={cp})",
                 )
+
+                # Plot corresponding predicted CP if it exists
+                if i < len(predicted_cps):
+                    ax_pred_mart.axvline(
+                        x=predicted_cps[i],
+                        color="blue",
+                        linestyle="-",
+                        alpha=0.5,
+                        label=f"Predicted CP {i+1} (t={predicted_cps[i]})",
+                    )
 
         ax_pred_mart.set_title(
             "Predicted Reset Martingale Measures",
@@ -1347,9 +1361,12 @@ class Visualizer:
 
         # 3. SHAP Values - Actual (Bottom Left)
         ax_actual_shap = fig.add_subplot(gs[1, 0])
+        # Get only the SHAP values corresponding to the prediction timespan
+        actual_shap_values = actual_shap[-len(time_points) :]
         for idx, feature in enumerate(feature_names):
             ax_actual_shap.plot(
-                actual_shap[:, idx],
+                time_points,
+                actual_shap_values[:, idx],
                 label=feature.capitalize(),
                 color=colors[idx],
                 linewidth=1.5,
@@ -1358,7 +1375,8 @@ class Visualizer:
 
         # Add actual change point indicators
         for cp in change_points:
-            ax_actual_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+            if cp >= min_history:  # Only plot change points in our window
+                ax_actual_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
         ax_actual_shap.set_title("Actual SHAP Values Over Time", pad=20)
         ax_actual_shap.set_xlabel("Time Steps")
@@ -1380,7 +1398,8 @@ class Visualizer:
 
         # Add actual change point indicators
         for cp in change_points:
-            ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
+            if cp >= min_history:  # Only plot change points in our window
+                ax_pred_shap.axvline(x=cp, color="red", linestyle="--", alpha=0.3)
 
         ax_pred_shap.set_title(
             "Predicted SHAP Values Over Time",

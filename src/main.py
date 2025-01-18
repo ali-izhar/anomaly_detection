@@ -54,12 +54,13 @@ MODEL_PREDICTOR_RECOMMENDATIONS = {
     "sbm": ["weighted", "hybrid"],
 }
 
+
 def get_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Network prediction framework")
 
     # Model and predictor arguments
-    model_group = parser.add_argument_group('Model Configuration')
+    model_group = parser.add_argument_group("Model Configuration")
     model_group.add_argument(
         "--model",
         type=str,
@@ -75,7 +76,7 @@ def get_args():
     )
 
     # Network parameters
-    network_group = parser.add_argument_group('Network Parameters')
+    network_group = parser.add_argument_group("Network Parameters")
     network_group.add_argument(
         "--nodes",
         type=int,
@@ -108,7 +109,7 @@ def get_args():
     )
 
     # Prediction parameters
-    pred_group = parser.add_argument_group('Prediction Parameters')
+    pred_group = parser.add_argument_group("Prediction Parameters")
     pred_group.add_argument(
         "--prediction-window",
         type=int,
@@ -123,7 +124,7 @@ def get_args():
     )
 
     # Experiment parameters
-    exp_group = parser.add_argument_group('Experiment Configuration')
+    exp_group = parser.add_argument_group("Experiment Configuration")
     exp_group.add_argument(
         "--seed",
         type=int,
@@ -156,6 +157,7 @@ def get_args():
 
     return args
 
+
 def create_experiment_config(args) -> ExperimentConfig:
     """Create ExperimentConfig from command line arguments."""
     graph_config = GRAPH_CONFIGS[args.model](
@@ -165,7 +167,7 @@ def create_experiment_config(args) -> ExperimentConfig:
         min_changes=args.min_changes,
         max_changes=args.max_changes,
     )
-    
+
     config = ExperimentConfig(
         model=args.model,
         params=graph_config["params"],
@@ -173,13 +175,14 @@ def create_experiment_config(args) -> ExperimentConfig:
         prediction_window=args.prediction_window,
         n_runs=args.runs,
         save_individual=args.save_individual,
-        visualize_individual=args.visualize_individual
+        visualize_individual=args.visualize_individual,
     )
-    
+
     # Add predictor type as an attribute
     config.predictor_type = args.predictor
-    
+
     return config
+
 
 def main():
     """Main execution function."""
@@ -188,12 +191,13 @@ def main():
 
     # Create experiment configuration
     config = create_experiment_config(args)
-    
+
     # Create and run experiment
     runner = ExperimentRunner(config=config, seed=args.seed)
     results = runner.run()
-    
+
     logger.info(f"Experiment completed. Results saved to: {runner.output_dir}")
+
 
 if __name__ == "__main__":
     main()
