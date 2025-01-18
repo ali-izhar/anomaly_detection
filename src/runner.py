@@ -76,7 +76,7 @@ class ExperimentRunner:
             base_dir = Path(f"results/multi_{self.config.model}_{timestamp}")
         else:
             base_dir = Path(f"results/{self.config.model}_{timestamp}")
-        
+
         base_dir.mkdir(parents=True, exist_ok=True)
         self.aggregated_dir = base_dir  # Use the same directory for all results
         return base_dir
@@ -94,7 +94,9 @@ class ExperimentRunner:
         else:
             return self._run_single()
 
-    def _run_single(self, run_number: Optional[int] = None, reuse_dir: bool = False) -> Dict[str, Any]:
+    def _run_single(
+        self, run_number: Optional[int] = None, reuse_dir: bool = False
+    ) -> Dict[str, Any]:
         """Run a single experiment.
 
         Args:
@@ -174,7 +176,7 @@ class ExperimentRunner:
             run_seed = base_seed + i if base_seed is not None else None
 
             # Run single experiment with the current seed
-            results = self._run_single(run_number=i+1, reuse_dir=True)
+            results = self._run_single(run_number=i + 1, reuse_dir=True)
             all_results.append(results)
 
             # Debug log for martingale structure
@@ -538,6 +540,12 @@ class ExperimentRunner:
                     + len(aggregated["features"]["actual"][feature]),
                 )
 
+                # Calculate error metrics for this feature
+                actual = np.array(aggregated["features"]["actual"][feature])
+                predicted = np.array(aggregated["features"]["predicted"][feature])
+                mae = np.mean(np.abs(actual - predicted))
+                rmse = np.sqrt(np.mean((actual - predicted) ** 2))
+
                 plt.plot(
                     time_points,
                     aggregated["features"]["actual"][feature],
@@ -548,6 +556,15 @@ class ExperimentRunner:
                     aggregated["features"]["predicted"][feature],
                     label="Predicted (avg)",
                 )
+
+                # Add change point marker explanation
+                plt.plot([], [], "r--", alpha=0.5, label="Change Point")
+
+                # Add metrics to legend
+                plt.plot([], [], " ", label=f"Trials = {self.config.n_runs}")
+                plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
+                plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
+
                 plt.title(f"Average {feature.capitalize()} Evolution")
                 plt.xlabel("Time")
                 plt.ylabel(feature.capitalize())
@@ -561,7 +578,9 @@ class ExperimentRunner:
 
         plt.tight_layout()
         plt.savefig(
-            self.aggregated_dir / "aggregated_features.png", dpi=300, bbox_inches="tight"
+            self.aggregated_dir / "aggregated_features.png",
+            dpi=300,
+            bbox_inches="tight",
         )
         plt.close()
 
@@ -611,6 +630,11 @@ class ExperimentRunner:
                     alpha=0.2,
                 )
 
+                # Add threshold line and change point markers to legend
+                plt.plot([], [], "r--", alpha=0.5, label="Threshold")
+                plt.plot([], [], "g--", alpha=0.5, label="Change Point")
+                plt.plot([], [], " ", label=f"Trials = {self.config.n_runs}")
+
                 # Add threshold line
                 plt.axhline(
                     y=self.config.martingale_threshold,
@@ -632,7 +656,9 @@ class ExperimentRunner:
 
         plt.tight_layout()
         plt.savefig(
-            self.aggregated_dir / "aggregated_martingales.png", dpi=300, bbox_inches="tight"
+            self.aggregated_dir / "aggregated_martingales.png",
+            dpi=300,
+            bbox_inches="tight",
         )
         plt.close()
 
@@ -777,7 +803,9 @@ class ExperimentRunner:
 
             # For multiple runs, save individual results in numbered subdirectories
             if self.config.n_runs > 1 and self.config.save_individual:
-                run_dir = self.output_dir / f"run_{results.get('run_number', 'unknown')}"
+                run_dir = (
+                    self.output_dir / f"run_{results.get('run_number', 'unknown')}"
+                )
                 run_dir.mkdir(parents=True, exist_ok=True)
                 save_path = run_dir / "results.json"
             else:
@@ -794,7 +822,9 @@ class ExperimentRunner:
                 "error": str(e),
             }
             error_path = (
-                self.output_dir / f"run_{results.get('run_number', 'unknown')}" / "results_error.json"
+                self.output_dir
+                / f"run_{results.get('run_number', 'unknown')}"
+                / "results_error.json"
                 if self.config.n_runs > 1 and self.config.save_individual
                 else self.output_dir / "results_error.json"
             )
