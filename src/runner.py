@@ -761,15 +761,6 @@ class ExperimentRunner:
                     alpha=0.2,
                 )
 
-                # Add threshold line
-                ax.axhline(
-                    y=self.config.martingale_threshold,
-                    color="r",
-                    linestyle="--",
-                    alpha=0.5,
-                    label="Threshold",
-                )
-
                 # Add change point frequencies as vertical lines
                 for pos, freq in aggregated["change_points"]["actual"][
                     "positions"
