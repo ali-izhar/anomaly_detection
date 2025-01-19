@@ -703,6 +703,24 @@ class ExperimentRunner:
             alpha=0.1
         )
 
+        # Plot averages with different colors
+        ax_main.plot(time_points_actual, actual_avg, label="Actual (Average)", color='#2ecc71', linestyle='--', linewidth=2)
+        ax_main.fill_between(
+            time_points_actual,
+            actual_avg - actual_avg_std,
+            actual_avg + actual_avg_std,
+            color='#2ecc71',
+            alpha=0.1
+        )
+        ax_main.plot(time_points_pred, pred_avg, label="Predicted (Average)", color='#e74c3c', linestyle='--', linewidth=2)
+        ax_main.fill_between(
+            time_points_pred,
+            pred_avg - pred_avg_std,
+            pred_avg + pred_avg_std,
+            color='#e74c3c',
+            alpha=0.1
+        )
+
         # Add arrows and annotations for delays
         delay_stats = aggregated["delays"]
         max_mart_value = max(np.max(actual_sum), np.max(pred_sum))
