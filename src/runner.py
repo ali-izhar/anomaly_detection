@@ -27,8 +27,8 @@ class ExperimentConfig:
     params: Dict[str, Any]
     min_history: int
     prediction_window: int
-    martingale_threshold: float = 70.0
-    martingale_epsilon: float = 0.8
+    martingale_threshold: float = 60.0
+    martingale_epsilon: float = 0.85
     shap_threshold: float = 30.0
     shap_window_size: int = 5
     n_runs: int = 1
@@ -590,22 +590,43 @@ class ExperimentRunner:
         # Create GridSpec first
         gs = plt.GridSpec(3, 2, height_ratios=[1.5, 0.75, 0.75], figure=fig)
 
+        # Calculate proper time indices for actual and predicted values
+        time_points_actual = range(
+            self.config.min_history,
+            self.config.min_history
+            + len(
+                aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"]
+            ),
+        )
+        time_points_pred = range(
+            self.config.min_history - self.config.prediction_window,
+            self.config.min_history
+            - self.config.prediction_window
+            + len(
+                aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"]
+            ),
+        )
+
         # Calculate sum and average of martingales across features
         features = ["degree", "clustering", "betweenness", "closeness"]
-        actual_sum = np.zeros(len(time_points))
-        actual_sum_std = np.zeros(len(time_points))
-        pred_sum = np.zeros(len(time_points))
-        pred_sum_std = np.zeros(len(time_points))
+        actual_sum = np.zeros(len(time_points_actual))
+        actual_sum_std = np.zeros(len(time_points_actual))
+        pred_sum = np.zeros(len(time_points_pred))
+        pred_sum_std = np.zeros(len(time_points_pred))
 
         for feature in features:
             if feature in aggregated["martingales"]["actual"]["reset"]:
-                # Add to sum
+                # Add to sum for actual
                 actual_mart = np.array(
                     aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
                 )
                 actual_std = np.array(
                     aggregated["martingales"]["actual"]["reset"][feature]["std"]
                 )
+                actual_sum += actual_mart
+                actual_sum_std += actual_std**2  # Add variances
+
+                # Add to sum for predicted
                 pred_mart = np.array(
                     aggregated["martingales"]["predicted"]["reset"][feature][
                         "martingales"
@@ -614,26 +635,23 @@ class ExperimentRunner:
                 pred_std = np.array(
                     aggregated["martingales"]["predicted"]["reset"][feature]["std"]
                 )
-
-                actual_sum += actual_mart
-                actual_sum_std += actual_std**2  # Add variances
                 pred_sum += pred_mart
                 pred_sum_std += pred_std**2  # Add variances
 
-        # Calculate average
+        # Calculate averages
         actual_avg = actual_sum / len(features)
         actual_avg_std = np.sqrt(actual_sum_std) / len(features)
         pred_avg = pred_sum / len(features)
         pred_avg_std = np.sqrt(pred_sum_std) / len(features)
 
-        # First row: Combined aggregated martingales (sum and average)
+        # Plot actual sum and average
         ax_top = fig.add_subplot(
             gs[0, :]
         )  # Top plot takes full width and 1.5 parts of height
 
-        # Plot sum
+        # Plot actual sum and average
         ax_top.plot(
-            time_points,
+            time_points_actual,
             actual_sum,
             label="Actual (Sum)",
             color="blue",
@@ -641,31 +659,14 @@ class ExperimentRunner:
             linewidth=2,
         )
         ax_top.fill_between(
-            time_points,
+            time_points_actual,
             actual_sum - np.sqrt(actual_sum_std),
             actual_sum + np.sqrt(actual_sum_std),
             color="blue",
             alpha=0.1,
         )
         ax_top.plot(
-            time_points,
-            pred_sum,
-            label="Predicted (Sum)",
-            color="orange",
-            linestyle="-",
-            linewidth=2,
-        )
-        ax_top.fill_between(
-            time_points,
-            pred_sum - np.sqrt(pred_sum_std),
-            pred_sum + np.sqrt(pred_sum_std),
-            color="orange",
-            alpha=0.1,
-        )
-
-        # Plot average
-        ax_top.plot(
-            time_points,
+            time_points_actual,
             actual_avg,
             label="Actual (Average)",
             color="blue",
@@ -673,14 +674,31 @@ class ExperimentRunner:
             linewidth=2,
         )
         ax_top.fill_between(
-            time_points,
+            time_points_actual,
             actual_avg - actual_avg_std,
             actual_avg + actual_avg_std,
             color="blue",
             alpha=0.1,
         )
+
+        # Plot predicted sum and average (shifted left by prediction_window)
         ax_top.plot(
-            time_points,
+            time_points_pred,
+            pred_sum,
+            label="Predicted (Sum)",
+            color="orange",
+            linestyle="-",
+            linewidth=2,
+        )
+        ax_top.fill_between(
+            time_points_pred,
+            pred_sum - np.sqrt(pred_sum_std),
+            pred_sum + np.sqrt(pred_sum_std),
+            color="orange",
+            alpha=0.1,
+        )
+        ax_top.plot(
+            time_points_pred,
             pred_avg,
             label="Predicted (Average)",
             color="orange",
@@ -688,7 +706,7 @@ class ExperimentRunner:
             linewidth=2,
         )
         ax_top.fill_between(
-            time_points,
+            time_points_pred,
             pred_avg - pred_avg_std,
             pred_avg + pred_avg_std,
             color="orange",
@@ -729,17 +747,21 @@ class ExperimentRunner:
                     "std"
                 ]
                 ax.plot(
-                    time_points, actual_mart, label="Actual", color="blue", linewidth=1
+                    time_points_actual,
+                    actual_mart,
+                    label="Actual",
+                    color="blue",
+                    linewidth=1,
                 )
                 ax.fill_between(
-                    time_points,
+                    time_points_actual,
                     [m - s for m, s in zip(actual_mart, actual_std)],
                     [m + s for m, s in zip(actual_mart, actual_std)],
                     color="blue",
                     alpha=0.2,
                 )
 
-                # Plot predicted martingales
+                # Plot predicted martingales (shifted left)
                 pred_mart = aggregated["martingales"]["predicted"]["reset"][feature][
                     "martingales"
                 ]
@@ -747,14 +769,14 @@ class ExperimentRunner:
                     "std"
                 ]
                 ax.plot(
-                    time_points,
+                    time_points_pred,
                     pred_mart,
                     label="Predicted",
                     color="orange",
                     linewidth=1,
                 )
                 ax.fill_between(
-                    time_points,
+                    time_points_pred,
                     [m - s for m, s in zip(pred_mart, pred_std)],
                     [m + s for m, s in zip(pred_mart, pred_std)],
                     color="orange",
