@@ -1,3 +1,5 @@
+# src/runner.py
+
 """Utility functions for network prediction and analysis."""
 
 from typing import Dict, List, Any, Optional, Union
@@ -9,13 +11,13 @@ import logging
 import json
 from datetime import datetime
 import matplotlib.pyplot as plt
-from collections import defaultdict
 
 from graph.generator import GraphGenerator
 from graph.features import NetworkFeatureExtractor, calculate_error_metrics
 from changepoint.detector import ChangePointDetector
 from changepoint.threshold import CustomThresholdModel
 from predictor.visualizer import Visualizer
+from analysis import analyze_martingale_distributions
 
 logger = logging.getLogger(__name__)
 
@@ -176,16 +178,6 @@ class ExperimentRunner:
             results = self._run_single(run_number=i + 1, reuse_dir=True)
             all_results.append(results)
 
-            # Debug log for martingale structure
-            logger.debug(f"\nMartingale structure for run {i+1}:")
-            logger.debug(
-                f"Actual martingales reset keys: {list(results['actual_metrics'][1]['reset'].keys())}"
-            )
-            for feature, data in results["actual_metrics"][1]["reset"].items():
-                logger.debug(
-                    f"Feature {feature} martingale shape: {np.array(data['martingales']).shape}"
-                )
-
             # Collect actual features
             for feature in aggregated_features["actual"].keys():
                 actual_feature_values = [
@@ -280,6 +272,87 @@ class ExperimentRunner:
         # Create and save aggregated visualizations
         self._visualize_aggregated_results(aggregated)
 
+        # Compute KL divergence between actual and predicted martingales
+        # Calculate proper time indices for actual and predicted values
+        time_points_actual = range(
+            self.config.min_history,
+            self.config.min_history
+            + len(
+                aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"]
+            ),
+        )
+        time_points_pred = range(
+            self.config.min_history - self.config.prediction_window,
+            self.config.min_history
+            - self.config.prediction_window
+            + len(
+                aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"]
+            ),
+        )
+
+        # Calculate sum of martingales across features
+        features = ["degree", "clustering", "betweenness", "closeness"]
+        actual_sum = np.zeros(len(time_points_actual))
+        pred_sum = np.zeros(len(time_points_pred))
+
+        # Also track averages
+        actual_avg = np.zeros(len(time_points_actual))
+        pred_avg = np.zeros(len(time_points_pred))
+        n_features = 0
+
+        for feature in features:
+            if feature in aggregated["martingales"]["actual"]["reset"]:
+                n_features += 1
+                # Add to sums
+                actual_sum += np.array(
+                    aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
+                )
+                pred_sum += np.array(
+                    aggregated["martingales"]["predicted"]["reset"][feature][
+                        "martingales"
+                    ]
+                )
+
+                # Add to running averages
+                actual_avg = actual_sum / n_features
+                pred_avg = pred_sum / n_features
+
+        # Compute distribution analysis
+        distribution_analysis = analyze_martingale_distributions(
+            actual_sum=actual_sum,
+            pred_sum=pred_sum,
+            time_points_actual=time_points_actual,
+            time_points_pred=time_points_pred,
+            prediction_window=self.config.prediction_window,
+        )
+
+        # Create distribution visualization
+        from analysis import visualize_distribution_analysis
+
+        visualize_distribution_analysis(
+            actual_sum=actual_sum,
+            pred_sum=pred_sum,
+            actual_avg=actual_avg,
+            pred_avg=pred_avg,
+            time_points_actual=time_points_actual,
+            time_points_pred=time_points_pred,
+            prediction_window=self.config.prediction_window,
+            output_path=self.aggregated_dir / "martingale_distributions.png",
+        )
+
+        # Log the analysis results
+        logger.info("\nMartingale Distribution Analysis:")
+        logger.info("-" * 50)
+        logger.info(
+            f"KL Divergence (Histogram): {distribution_analysis['kl_div_hist']:.3f}"
+        )
+        logger.info(f"KL Divergence (KDE): {distribution_analysis['kl_div_kde']:.3f}")
+        logger.info(f"Jensen-Shannon Divergence: {distribution_analysis['js_div']:.3f}")
+        logger.info(f"Correlation: {distribution_analysis['correlation']:.3f}")
+
+        # Add distribution analysis to aggregated results
+        aggregated["distribution_analysis"] = distribution_analysis
+
         return aggregated
 
     def _get_detected_change_points(self, martingales: Dict[str, Dict]) -> List[int]:
@@ -291,12 +364,16 @@ class ExperimentRunner:
         return sorted(list(set(all_cps)))
 
     def _calculate_cp_delays(
-        self, actual_sum: np.ndarray, pred_sum: np.ndarray, 
-        time_points_actual: range, time_points_pred: range,
-        change_points: Dict[int, float], threshold: float
+        self,
+        actual_sum: np.ndarray,
+        pred_sum: np.ndarray,
+        time_points_actual: range,
+        time_points_pred: range,
+        change_points: Dict[int, float],
+        threshold: float,
     ) -> Dict[str, Dict[int, Dict[str, float]]]:
         """Calculate delays based on threshold crossings for each change point.
-        
+
         Args:
             actual_sum: Array of actual sum martingale values
             pred_sum: Array of predicted sum martingale values
@@ -304,27 +381,27 @@ class ExperimentRunner:
             time_points_pred: Range of timesteps for predicted values
             change_points: Dict mapping change points to their frequencies
             threshold: Martingale threshold value
-            
+
         Returns:
             Dict containing detection and prediction delays for each CP
         """
         delays = {
             "detection": {},  # CP -> {"mean": float, "std": float}
-            "prediction": {}
+            "prediction": {},
         }
-        
+
         # Convert ranges to lists for easier indexing
         actual_times = list(time_points_actual)
         pred_times = list(time_points_pred)
-        
+
         for cp in change_points.keys():
             # Find first threshold crossing after CP
             detection_times = []
             prediction_times = []
-            
+
             # Look for threshold crossings within min_segment//2 steps after CP
             window = self.config.params.min_segment // 2
-            
+
             # For actual detections
             try:
                 cp_idx = actual_times.index(cp)
@@ -335,7 +412,7 @@ class ExperimentRunner:
                         break
             except ValueError:
                 pass  # CP not in actual time range
-                
+
             # For predictions
             try:
                 cp_idx = pred_times.index(cp)
@@ -346,20 +423,28 @@ class ExperimentRunner:
                         break
             except ValueError:
                 pass  # CP not in prediction time range
-            
+
             # Calculate statistics if we found any crossings
             if detection_times:
                 delays["detection"][cp] = {
                     "mean": float(np.mean(detection_times)),
-                    "std": float(np.std(detection_times)) if len(detection_times) > 1 else 0.0
+                    "std": (
+                        float(np.std(detection_times))
+                        if len(detection_times) > 1
+                        else 0.0
+                    ),
                 }
-            
+
             if prediction_times:
                 delays["prediction"][cp] = {
                     "mean": float(np.mean(prediction_times)),
-                    "std": float(np.std(prediction_times)) if len(prediction_times) > 1 else 0.0
+                    "std": (
+                        float(np.std(prediction_times))
+                        if len(prediction_times) > 1
+                        else 0.0
+                    ),
                 }
-        
+
         return delays
 
     def _create_aggregated_results(
@@ -647,7 +732,7 @@ class ExperimentRunner:
             time_points_actual=time_points_actual,
             time_points_pred=time_points_pred,
             change_points=aggregated["change_points"]["actual"]["positions"],
-            threshold=self.config.martingale_threshold
+            threshold=self.config.martingale_threshold,
         )
 
         # 1. Main plot (Sum and Average)
@@ -738,12 +823,12 @@ class ExperimentRunner:
             if cp in delays["prediction"]:
                 det_delay = delays["detection"][cp]
                 pred_delay = delays["prediction"][cp]
-                
+
                 # For predictions
                 arrow_start = cp - 20  # Start 20 steps before CP
                 y_start = threshold * 1.3  # Position above threshold
                 y_end = threshold * 1.5
-                
+
                 # Add prediction arrow
                 ax_main.annotate(
                     f'prediction\ndelay: {pred_delay["mean"]:.1f}±{pred_delay["std"]:.1f}',
@@ -754,7 +839,7 @@ class ExperimentRunner:
                         color="orange",
                         connectionstyle="arc3,rad=-0.3",
                         linewidth=2,
-                        mutation_scale=15
+                        mutation_scale=15,
                     ),
                     color="orange",
                     fontsize=10,
@@ -765,14 +850,14 @@ class ExperimentRunner:
                         edgecolor="orange",
                         alpha=0.8,
                         pad=0.5,
-                        boxstyle="round,pad=0.5"
-                    )
+                        boxstyle="round,pad=0.5",
+                    ),
                 )
-                
+
                 # For detections (positioned higher)
                 y_start = threshold * 1.8
                 y_end = threshold * 2.0
-                
+
                 # Add detection arrow
                 ax_main.annotate(
                     f'detection\ndelay: {det_delay["mean"]:.1f}±{det_delay["std"]:.1f}',
@@ -783,7 +868,7 @@ class ExperimentRunner:
                         color="blue",
                         connectionstyle="arc3,rad=-0.3",
                         linewidth=2,
-                        mutation_scale=15
+                        mutation_scale=15,
                     ),
                     color="blue",
                     fontsize=10,
@@ -794,8 +879,8 @@ class ExperimentRunner:
                         edgecolor="blue",
                         alpha=0.8,
                         pad=0.5,
-                        boxstyle="round,pad=0.5"
-                    )
+                        boxstyle="round,pad=0.5",
+                    ),
                 )
 
         ax_main.set_xlabel("Time", fontsize=12)
@@ -886,13 +971,16 @@ class ExperimentRunner:
         plt.close()
 
         # Print summary statistics
-        logger.info("\nChange Point Detection Analysis:")
+        logger.info("\nMartingale Distribution Analysis:")
         logger.info("-" * 50)
-        logger.info(
-            f"Average number of actual change points: "
-            f"{aggregated['change_points']['actual']['mean_count']:.2f} ± "
-            f"{aggregated['change_points']['actual']['std_count']:.2f}"
-        )
+        if "distribution_analysis" in aggregated:
+            dist_analysis = aggregated["distribution_analysis"]
+            logger.info(
+                f"KL Divergence (Histogram): {dist_analysis['kl_div_hist']:.3f}"
+            )
+            logger.info(f"KL Divergence (KDE): {dist_analysis['kl_div_kde']:.3f}")
+            logger.info(f"Jensen-Shannon Divergence: {dist_analysis['js_div']:.3f}")
+            logger.info(f"Correlation: {dist_analysis['correlation']:.3f}")
 
     def _generate_data(self) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Generate synthetic network data."""
@@ -1045,15 +1133,6 @@ class ExperimentRunner:
         try:
             with open(self.aggregated_dir / "aggregated_results.json", "w") as f:
                 json.dump(self._convert_to_serializable(aggregated), f, indent=4)
-
-            # Print summary statistics
-            print("\nSummary Statistics:")
-            print("-" * 50)
-            print(
-                f"Average number of change points: "
-                f"{aggregated['change_points']['actual']['mean_count']:.2f} ± "
-                f"{aggregated['change_points']['actual']['std_count']:.2f}"
-            )
         except Exception as e:
             logger.error(f"Error saving aggregated results: {e}")
             # Save basic information if there's an error
