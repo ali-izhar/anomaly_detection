@@ -168,7 +168,9 @@ class ExperimentRunner:
             "predicted": [],  # CPs predicted from predicted features
         }
         delays_per_cp = {
-            "detection": defaultdict(list),  # Dict mapping CP -> list of delays across runs
+            "detection": defaultdict(
+                list
+            ),  # Dict mapping CP -> list of delays across runs
             "prediction": defaultdict(list),
         }
         earliest_delays = {
@@ -273,20 +275,26 @@ class ExperimentRunner:
             all_change_points["predicted"].append(predicted_cps)
 
             # Calculate delays for each CP
-            detection_delays_dict = self._calculate_cp_delays(actual_cps, detected_cps, is_prediction=False)
-            prediction_delays_dict = self._calculate_cp_delays(actual_cps, predicted_cps, is_prediction=True)
-            
+            detection_delays_dict = self._calculate_cp_delays(
+                actual_cps, detected_cps, is_prediction=False
+            )
+            prediction_delays_dict = self._calculate_cp_delays(
+                actual_cps, predicted_cps, is_prediction=True
+            )
+
             # Store delays per CP
             for cp, delay in detection_delays_dict.items():
                 delays_per_cp["detection"][cp].append(delay)
             for cp, delay in prediction_delays_dict.items():
                 delays_per_cp["prediction"][cp].append(delay)
-            
+
             # Store earliest delays for overall statistics
             if detection_delays_dict:
                 earliest_delays["detection"].append(min(detection_delays_dict.values()))
             if prediction_delays_dict:
-                earliest_delays["prediction"].append(min(prediction_delays_dict.values()))
+                earliest_delays["prediction"].append(
+                    min(prediction_delays_dict.values())
+                )
 
         # Create final aggregated results with per-CP delays
         aggregated = self._create_aggregated_results(
@@ -315,37 +323,61 @@ class ExperimentRunner:
         return sorted(list(set(all_cps)))
 
     def _calculate_cp_delays(
-        self, actual_cps: List[int], detected_cps: List[int], is_prediction: bool = False
+        self,
+        actual_cps: List[int],
+        detected_cps: List[int],
+        is_prediction: bool = False,
     ) -> Dict[int, float]:
         """Calculate delays between actual and detected change points.
-        
-        For each actual change point, finds the delay to its first valid detection.
-        For predictions, the detected_cps are already offset by prediction_window,
-        so we need to adjust the delay calculation accordingly.
-        
+
+        For predictions:
+        - detected_cps are already shifted left by prediction_window
+        - a negative delay means we detected the change before it happened
+        - delay = detected_time - actual_cp
+
+        For actual detections:
+        - delay = detected_time - actual_cp
+
         Args:
             actual_cps: List of actual change point timestamps
             detected_cps: List of detected change point timestamps
             is_prediction: Whether these are predicted change points
-            
+
         Returns:
             Dict mapping each actual CP to its delay (if detected within threshold)
         """
         delays = {}
         for actual_cp in actual_cps:
-            comparison_point = actual_cp - (self.config.prediction_window if is_prediction else 0)
-            
-            future_detections = [cp for cp in detected_cps if cp >= comparison_point]
-            if future_detections:
-                earliest_detection = min(future_detections)
-                
-                if is_prediction:
-                    delay = (earliest_detection + self.config.prediction_window) - actual_cp
-                else:
+            if is_prediction:
+                # For predictions, we want to find detections that happen before the CP
+                # The detected_cps are already shifted left by prediction_window
+                relevant_detections = [
+                    cp
+                    for cp in detected_cps
+                    if cp >= (actual_cp - self.config.prediction_window - 10)
+                    and cp <= actual_cp
+                ]
+
+                if relevant_detections:
+                    # Get the earliest valid detection
+                    earliest_detection = max(
+                        relevant_detections
+                    )  # Latest among early detections
+                    # The delay will be negative (prediction) or positive (late detection)
+                    delay = earliest_detection - (
+                        actual_cp - self.config.prediction_window
+                    )
+                    if delay <= 10:  # Still enforce max delay
+                        delays[actual_cp] = delay
+            else:
+                # For actual detections, find the earliest detection after the CP
+                future_detections = [cp for cp in detected_cps if cp >= actual_cp]
+                if future_detections:
+                    earliest_detection = min(future_detections)
                     delay = earliest_detection - actual_cp
-                    
-                if delay <= 10:  # Only consider detections within 10 time steps
-                    delays[actual_cp] = delay
+                    if delay <= 10:  # Only consider detections within 10 time steps
+                        delays[actual_cp] = delay
+
         return delays
 
     def _create_aggregated_results(
@@ -630,7 +662,9 @@ class ExperimentRunner:
                 plt.legend()
 
                 # Add change point frequencies as vertical lines
-                for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
+                for pos, freq in aggregated["change_points"]["actual"][
+                    "positions"
+                ].items():
                     plt.axvline(x=int(pos), color="r", alpha=freq * 0.5, linestyle="--")
 
         plt.tight_layout()
@@ -642,15 +676,22 @@ class ExperimentRunner:
         plt.close()
 
         # Create aggregated martingale plots
-        
+
         # Calculate proper time indices for actual and predicted values
         time_points_actual = range(
             self.config.min_history,
-            self.config.min_history + len(aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"])
+            self.config.min_history
+            + len(
+                aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"]
+            ),
         )
         time_points_pred = range(
             self.config.min_history - self.config.prediction_window,
-            self.config.min_history - self.config.prediction_window + len(aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"])
+            self.config.min_history
+            - self.config.prediction_window
+            + len(
+                aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"]
+            ),
         )
 
         # Calculate sum and average of martingales across features
@@ -659,19 +700,29 @@ class ExperimentRunner:
         actual_sum_std = np.zeros(len(time_points_actual))
         pred_sum = np.zeros(len(time_points_pred))
         pred_sum_std = np.zeros(len(time_points_pred))
-        
+
         # Calculate sums and averages
         for feature in features:
             if feature in aggregated["martingales"]["actual"]["reset"]:
                 # Add to sum for actual
-                actual_mart = np.array(aggregated["martingales"]["actual"]["reset"][feature]["martingales"])
-                actual_std = np.array(aggregated["martingales"]["actual"]["reset"][feature]["std"])
+                actual_mart = np.array(
+                    aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
+                )
+                actual_std = np.array(
+                    aggregated["martingales"]["actual"]["reset"][feature]["std"]
+                )
                 actual_sum += actual_mart
                 actual_sum_std += actual_std**2  # Add variances
 
                 # Add to sum for predicted
-                pred_mart = np.array(aggregated["martingales"]["predicted"]["reset"][feature]["martingales"])
-                pred_std = np.array(aggregated["martingales"]["predicted"]["reset"][feature]["std"])
+                pred_mart = np.array(
+                    aggregated["martingales"]["predicted"]["reset"][feature][
+                        "martingales"
+                    ]
+                )
+                pred_std = np.array(
+                    aggregated["martingales"]["predicted"]["reset"][feature]["std"]
+                )
                 pred_sum += pred_mart
                 pred_sum_std += pred_std**2  # Add variances
 
@@ -686,46 +737,74 @@ class ExperimentRunner:
         ax_main = fig_main.add_subplot(111)
 
         # Plot actual and predicted sums
-        ax_main.plot(time_points_actual, actual_sum, label="Actual (Sum)", color='blue', linestyle='-', linewidth=2)
+        ax_main.plot(
+            time_points_actual,
+            actual_sum,
+            label="Actual (Sum)",
+            color="blue",
+            linestyle="-",
+            linewidth=2,
+        )
         ax_main.fill_between(
             time_points_actual,
             actual_sum - np.sqrt(actual_sum_std),
             actual_sum + np.sqrt(actual_sum_std),
-            color='blue',
-            alpha=0.1
+            color="blue",
+            alpha=0.1,
         )
-        ax_main.plot(time_points_pred, pred_sum, label="Predicted (Sum)", color='orange', linestyle='-', linewidth=2)
+        ax_main.plot(
+            time_points_pred,
+            pred_sum,
+            label="Predicted (Sum)",
+            color="orange",
+            linestyle="-",
+            linewidth=2,
+        )
         ax_main.fill_between(
             time_points_pred,
             pred_sum - np.sqrt(pred_sum_std),
             pred_sum + np.sqrt(pred_sum_std),
-            color='orange',
-            alpha=0.1
+            color="orange",
+            alpha=0.1,
         )
 
         # Plot averages with different colors
-        ax_main.plot(time_points_actual, actual_avg, label="Actual (Average)", color='#2ecc71', linestyle='--', linewidth=2)
+        ax_main.plot(
+            time_points_actual,
+            actual_avg,
+            label="Actual (Average)",
+            color="#2ecc71",
+            linestyle="--",
+            linewidth=2,
+        )
         ax_main.fill_between(
             time_points_actual,
             actual_avg - actual_avg_std,
             actual_avg + actual_avg_std,
-            color='#2ecc71',
-            alpha=0.1
+            color="#2ecc71",
+            alpha=0.1,
         )
-        ax_main.plot(time_points_pred, pred_avg, label="Predicted (Average)", color='#e74c3c', linestyle='--', linewidth=2)
+        ax_main.plot(
+            time_points_pred,
+            pred_avg,
+            label="Predicted (Average)",
+            color="#e74c3c",
+            linestyle="--",
+            linewidth=2,
+        )
         ax_main.fill_between(
             time_points_pred,
             pred_avg - pred_avg_std,
             pred_avg + pred_avg_std,
-            color='#e74c3c',
-            alpha=0.1
+            color="#e74c3c",
+            alpha=0.1,
         )
 
         # Add arrows and annotations for delays
         delay_stats = aggregated["delays"]
         max_mart_value = max(np.max(actual_sum), np.max(pred_sum))
         threshold = self.config.martingale_threshold
-        
+
         for cp_type in ["detection", "prediction"]:
             for cp, stats in delay_stats[cp_type]["per_cp"].items():
                 # For predictions, adjust the arrow start point with longer extension
@@ -733,59 +812,69 @@ class ExperimentRunner:
                     # Extend prediction arrows far to the left
                     arrow_start = cp - 25  # Extend 25 steps left
                     y_start = threshold * 1.3  # Start above threshold
-                    y_end = threshold * 1.5    # End higher for text box
+                    y_end = threshold * 1.5  # End higher for text box
                 else:
                     # Position detection arrows above prediction arrows
                     arrow_start = cp - 25  # Also extend left
                     y_start = threshold * 1.8  # Much higher than predictions
-                    y_end = threshold * 2.0    # End higher for text box
-                
+                    y_end = threshold * 2.0  # End higher for text box
+
                 # Calculate arrow end based on mean delay
                 arrow_end = cp + stats["mean"]
-                
+
                 # Convert time points to array indices
                 start_idx = int(arrow_start - self.config.min_history)
                 if start_idx < 0 or start_idx >= len(actual_sum):
                     continue  # Skip if out of bounds
-                
+
                 # Add arrow
-                color = 'orange' if cp_type == "prediction" else 'blue'
+                color = "orange" if cp_type == "prediction" else "blue"
                 ax_main.annotate(
                     f'{cp_type}\ndelay: {stats["mean"]:.1f}±{stats["std"]:.1f}',
                     xy=(arrow_end, y_start),  # Arrow end (where the arrow points to)
                     xytext=(arrow_start, y_end),  # Text and arrow start position
                     arrowprops=dict(
-                        arrowstyle='->',
+                        arrowstyle="->",
                         color=color,
                         connectionstyle="arc3,rad=-0.3",  # Curved arrows
                         linewidth=2,
-                        mutation_scale=15  # Larger arrow head
+                        mutation_scale=15,  # Larger arrow head
                     ),
                     color=color,
                     fontsize=10,
-                    horizontalalignment='right',  # Align text at arrow start
-                    verticalalignment='bottom',
+                    horizontalalignment="right",  # Align text at arrow start
+                    verticalalignment="bottom",
                     bbox=dict(
-                        facecolor='white',
+                        facecolor="white",
                         edgecolor=color,
                         alpha=0.8,
                         pad=0.5,
-                        boxstyle='round,pad=0.5'  # Rounded corners
-                    )
+                        boxstyle="round,pad=0.5",  # Rounded corners
+                    ),
                 )
 
         # Add threshold line and change points
-        ax_main.axhline(y=self.config.martingale_threshold, color='r', linestyle='--', alpha=0.5, label='Threshold')
+        ax_main.axhline(
+            y=self.config.martingale_threshold,
+            color="r",
+            linestyle="--",
+            alpha=0.5,
+            label="Threshold",
+        )
         for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-            ax_main.axvline(x=int(pos), color='g', alpha=freq * 0.5, linestyle='--')
+            ax_main.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
 
         ax_main.set_xlabel("Time", fontsize=12)
         ax_main.set_ylabel("Martingale Value", fontsize=12)
-        ax_main.legend(loc='upper right', fontsize=10)
-        ax_main.tick_params(axis='both', which='major', labelsize=10)
+        ax_main.legend(loc="upper right", fontsize=10)
+        ax_main.tick_params(axis="both", which="major", labelsize=10)
 
         plt.tight_layout()
-        plt.savefig(self.aggregated_dir / "aggregated_martingales_main.png", dpi=300, bbox_inches="tight")
+        plt.savefig(
+            self.aggregated_dir / "aggregated_martingales_main.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
         plt.close()
 
         # 2. Individual feature plots (2x2 grid)
@@ -794,44 +883,72 @@ class ExperimentRunner:
 
         for i, feature in enumerate(features):
             if feature in aggregated["martingales"]["actual"]["reset"]:
-                ax = fig_features.add_subplot(gs[i//2, i%2])  # Fixed: using fig_features instead of fig
+                ax = fig_features.add_subplot(
+                    gs[i // 2, i % 2]
+                )  # Fixed: using fig_features instead of fig
 
                 # Plot actual martingales
-                actual_mart = aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
-                actual_std = aggregated["martingales"]["actual"]["reset"][feature]["std"]
-                ax.plot(time_points_actual, actual_mart, label="Actual", color='blue', linewidth=1)
+                actual_mart = aggregated["martingales"]["actual"]["reset"][feature][
+                    "martingales"
+                ]
+                actual_std = aggregated["martingales"]["actual"]["reset"][feature][
+                    "std"
+                ]
+                ax.plot(
+                    time_points_actual,
+                    actual_mart,
+                    label="Actual",
+                    color="blue",
+                    linewidth=1,
+                )
                 ax.fill_between(
                     time_points_actual,
                     [m - s for m, s in zip(actual_mart, actual_std)],
                     [m + s for m, s in zip(actual_mart, actual_std)],
-                    color='blue',
-                    alpha=0.2
+                    color="blue",
+                    alpha=0.2,
                 )
 
                 # Plot predicted martingales (shifted left)
-                pred_mart = aggregated["martingales"]["predicted"]["reset"][feature]["martingales"]
-                pred_std = aggregated["martingales"]["predicted"]["reset"][feature]["std"]
-                ax.plot(time_points_pred, pred_mart, label="Predicted", color='orange', linewidth=1)
+                pred_mart = aggregated["martingales"]["predicted"]["reset"][feature][
+                    "martingales"
+                ]
+                pred_std = aggregated["martingales"]["predicted"]["reset"][feature][
+                    "std"
+                ]
+                ax.plot(
+                    time_points_pred,
+                    pred_mart,
+                    label="Predicted",
+                    color="orange",
+                    linewidth=1,
+                )
                 ax.fill_between(
                     time_points_pred,
                     [m - s for m, s in zip(pred_mart, pred_std)],
                     [m + s for m, s in zip(pred_mart, pred_std)],
-                    color='orange',
-                    alpha=0.2
+                    color="orange",
+                    alpha=0.2,
                 )
 
                 # Add change point frequencies as vertical lines
-                for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-                    ax.axvline(x=int(pos), color='g', alpha=freq * 0.5, linestyle='--')
+                for pos, freq in aggregated["change_points"]["actual"][
+                    "positions"
+                ].items():
+                    ax.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
 
                 ax.set_title(f"{feature.capitalize()} Martingales", fontsize=10)
                 ax.set_xlabel("Time", fontsize=8)
                 ax.set_ylabel("Martingale Value", fontsize=8)
                 ax.legend(fontsize=8)
-                ax.tick_params(axis='both', which='major', labelsize=8)
+                ax.tick_params(axis="both", which="major", labelsize=8)
 
         plt.tight_layout()
-        plt.savefig(self.aggregated_dir / "aggregated_martingales_features.png", dpi=300, bbox_inches="tight")
+        plt.savefig(
+            self.aggregated_dir / "aggregated_martingales_features.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
         plt.close()
 
         # Print delay analysis
