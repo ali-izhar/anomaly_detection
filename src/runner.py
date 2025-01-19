@@ -610,11 +610,24 @@ class ExperimentRunner:
 
     def _visualize_aggregated_results(self, aggregated: Dict[str, Any]):
         """Create visualizations for aggregated results."""
+        # Set high-quality plotting defaults
+        plt.rcParams['figure.dpi'] = 600  # High DPI for the figure
+        plt.rcParams['savefig.dpi'] = 600  # High DPI for saving
+        plt.rcParams['pdf.fonttype'] = 42  # Ensure text is exported as text, not paths
+        plt.rcParams['ps.fonttype'] = 42
+        plt.rcParams['svg.fonttype'] = 'none'
+        plt.rcParams['axes.linewidth'] = 0.5  # Thinner spines
+        plt.rcParams['lines.linewidth'] = 0.8  # Default line width
+        plt.rcParams['grid.linewidth'] = 0.5  # Thinner grid lines
+        plt.rcParams['xtick.major.width'] = 0.5  # Thinner ticks
+        plt.rcParams['ytick.major.width'] = 0.5
+        plt.rcParams['axes.unicode_minus'] = False  # Ensure proper minus signs
+
         # Create aggregated feature evolution plot
-        plt.figure(figsize=(15, 10))
+        plt.figure(figsize=(7, 5))  # Adjusted for 2-column width
         for feature in ["degree", "clustering", "betweenness", "closeness"]:
             if feature in aggregated["features"]["actual"]:
-                plt.subplot(
+                ax = plt.subplot(
                     2,
                     2,
                     list(aggregated["features"]["actual"].keys()).index(feature) + 1,
@@ -636,36 +649,60 @@ class ExperimentRunner:
                     time_points,
                     aggregated["features"]["actual"][feature],
                     label="Actual",
+                    linewidth=0.8,
+                    color="blue",
+                    alpha=0.8,
+                    solid_capstyle='round',
+                    solid_joinstyle='round',
                 )
                 plt.plot(
                     time_points,
                     aggregated["features"]["predicted"][feature],
                     label="Predicted",
+                    linewidth=0.8,
+                    color="orange",
+                    alpha=0.8,
+                    solid_capstyle='round',
+                    solid_joinstyle='round',
                 )
 
                 # Add change point marker explanation
-                plt.plot([], [], "r--", alpha=0.5, label="Change Point")
+                plt.plot([], [], "r--", alpha=0.5, label="Change Point", linewidth=0.8)
 
-                # Add metrics to legend
+                # Add metrics to legend with smaller font
                 plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
                 plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
 
-                plt.title(f"Average {feature.capitalize()} Evolution")
-                plt.xlabel("Time")
-                plt.ylabel(feature.capitalize())
-                plt.legend()
+                plt.title(f"Average {feature.capitalize()} Evolution", fontsize=8, pad=3)
+                
+                # Only show x-axis label and ticks for bottom plots
+                if list(aggregated["features"]["actual"].keys()).index(feature) >= 2:  # Bottom row
+                    plt.xlabel("Time", fontsize=8)
+                else:  # Top row
+                    plt.xlabel("")
+                    ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
+                
+                plt.ylabel(feature.capitalize(), fontsize=8)
+                plt.legend(fontsize=6, ncol=2, loc='upper right', 
+                         borderaxespad=0.1, handlelength=1.5,
+                         columnspacing=1.0)
+                plt.tick_params(axis='both', which='major', labelsize=6, pad=2)
+                plt.grid(True, linestyle=':', alpha=0.3, linewidth=0.5)
 
                 # Add change point frequencies as vertical lines
                 for pos, freq in aggregated["change_points"]["actual"][
                     "positions"
                 ].items():
-                    plt.axvline(x=int(pos), color="r", alpha=freq * 0.5, linestyle="--")
+                    plt.axvline(x=int(pos), color="r", alpha=freq * 0.5, linestyle="--", linewidth=0.5)
 
         plt.tight_layout()
         plt.savefig(
             self.aggregated_dir / "aggregated_features.png",
-            dpi=300,
+            dpi=600,
             bbox_inches="tight",
+            pad_inches=0.02,
+            format='png',
+            metadata={'Creator': 'Matplotlib'}
         )
         plt.close()
 
@@ -735,17 +772,20 @@ class ExperimentRunner:
         )
 
         # 1. Main plot (Sum and Average)
-        fig_main = plt.figure(figsize=(15, 8))
+        fig_main = plt.figure(figsize=(3.3, 2.5))  # Single column width
         ax_main = fig_main.add_subplot(111)
 
-        # Plot actual and predicted sums
+        # Plot actual and predicted sums with thinner lines
         ax_main.plot(
             time_points_actual,
             actual_sum,
-            label="Sum Martingale",
+            label="Sum Mart.",
             color="blue",
             linestyle="-",
-            linewidth=2,
+            linewidth=0.8,
+            alpha=0.8,
+            solid_capstyle='round',
+            solid_joinstyle='round',
         )
         ax_main.fill_between(
             time_points_actual,
@@ -757,10 +797,13 @@ class ExperimentRunner:
         ax_main.plot(
             time_points_pred,
             pred_sum,
-            label="Predicted Sum",
+            label="Pred. Sum",
             color="orange",
             linestyle="-",
-            linewidth=2,
+            linewidth=0.8,
+            alpha=0.8,
+            solid_capstyle='round',
+            solid_joinstyle='round',
         )
         ax_main.fill_between(
             time_points_pred,
@@ -770,14 +813,17 @@ class ExperimentRunner:
             alpha=0.1,
         )
 
-        # Plot averages with different colors
+        # Plot averages with different colors and thinner lines
         ax_main.plot(
             time_points_actual,
             actual_avg,
-            label="Avg Martingale",
+            label="Avg Mart.",
             color="#2ecc71",
             linestyle="--",
-            linewidth=2,
+            linewidth=0.8,
+            alpha=0.8,
+            dash_capstyle='round',
+            dash_joinstyle='round',
         )
         ax_main.fill_between(
             time_points_actual,
@@ -789,10 +835,13 @@ class ExperimentRunner:
         ax_main.plot(
             time_points_pred,
             pred_avg,
-            label="Predicted Avg",
+            label="Pred. Avg",
             color="#e74c3c",
             linestyle="--",
-            linewidth=2,
+            linewidth=0.8,
+            alpha=0.8,
+            dash_capstyle='round',
+            dash_joinstyle='round',
         )
         ax_main.fill_between(
             time_points_pred,
@@ -808,102 +857,87 @@ class ExperimentRunner:
             color="r",
             linestyle="--",
             alpha=0.5,
+            linewidth=0.8,
             label="Threshold",
+            dash_capstyle='round',
         )
         for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-            ax_main.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
+            ax_main.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--", linewidth=0.5)
 
-        # Add arrows and annotations for delays
-        max_mart_value = max(np.max(actual_sum), np.max(pred_sum))
-        threshold = self.config.martingale_threshold
-
+        # Reorganized delay annotations - place them to the left of change points
         for cp in delays["detection"].keys():
-            # Only add arrows if we have both detection and prediction delays for this CP
             if cp in delays["prediction"]:
                 det_delay = delays["detection"][cp]
                 pred_delay = delays["prediction"][cp]
 
-                # For predictions
-                arrow_start = cp - 20  # Start 20 steps before CP
-                y_start = threshold * 1.3  # Position above threshold
-                y_end = threshold * 1.5
+                # Base vertical positions for annotations
+                base_y = self.config.martingale_threshold * 1.5
+                spacing = self.config.martingale_threshold * 0.3  # Increased spacing
 
-                # Add prediction arrow
+                # Detection delay (top)
                 ax_main.annotate(
-                    f'prediction\ndelay: {pred_delay["mean"]:.1f}±{pred_delay["std"]:.1f}',
-                    xy=(cp + pred_delay["mean"], y_start),  # Arrow end
-                    xytext=(arrow_start, y_end),  # Text position
-                    arrowprops=dict(
-                        arrowstyle="->",
-                        color="orange",
-                        connectionstyle="arc3,rad=-0.3",
-                        linewidth=2,
-                        mutation_scale=15,
-                    ),
-                    color="orange",
-                    fontsize=10,
-                    horizontalalignment="right",
-                    verticalalignment="bottom",
-                    bbox=dict(
-                        facecolor="white",
-                        edgecolor="orange",
-                        alpha=0.8,
-                        pad=0.5,
-                        boxstyle="round,pad=0.5",
-                    ),
-                )
-
-                # For detections (positioned higher)
-                y_start = threshold * 1.8
-                y_end = threshold * 2.0
-
-                # Add detection arrow
-                ax_main.annotate(
-                    f'detection\ndelay: {det_delay["mean"]:.1f}±{det_delay["std"]:.1f}',
-                    xy=(cp + det_delay["mean"], y_start),  # Arrow end
-                    xytext=(arrow_start, y_end),  # Text position
+                    f'd:{det_delay["mean"]:.1f}',
+                    xy=(cp + det_delay["mean"], base_y),
+                    xytext=(cp - 20, base_y + spacing),  # Extended arrow, moved text further left
                     arrowprops=dict(
                         arrowstyle="->",
                         color="blue",
-                        connectionstyle="arc3,rad=-0.3",
-                        linewidth=2,
-                        mutation_scale=15,
+                        connectionstyle="arc3,rad=0.2",
+                        linewidth=0.5,
+                        shrinkA=0,  # Don't shrink from the text
+                        shrinkB=0,  # Don't shrink from the point
                     ),
                     color="blue",
-                    fontsize=10,
-                    horizontalalignment="right",
-                    verticalalignment="bottom",
-                    bbox=dict(
-                        facecolor="white",
-                        edgecolor="blue",
-                        alpha=0.8,
-                        pad=0.5,
-                        boxstyle="round,pad=0.5",
+                    fontsize=6,
+                    ha='right',
+                    va='bottom',
+                )
+                
+                # Prediction delay (bottom)
+                ax_main.annotate(
+                    f'p:{pred_delay["mean"]:.1f}',
+                    xy=(cp + pred_delay["mean"], base_y),
+                    xytext=(cp - 20, base_y),  # Extended arrow, moved text further left
+                    arrowprops=dict(
+                        arrowstyle="->",
+                        color="orange",
+                        connectionstyle="arc3,rad=-0.2",
+                        linewidth=0.5,
+                        shrinkA=0,  # Don't shrink from the text
+                        shrinkB=0,  # Don't shrink from the point
                     ),
+                    color="orange",
+                    fontsize=6,
+                    ha='right',
+                    va='top',
                 )
 
-        ax_main.set_xlabel("Time", fontsize=12)
-        ax_main.set_ylabel("Martingale Value", fontsize=12)
-        ax_main.legend(loc="upper right", fontsize=10)
-        ax_main.tick_params(axis="both", which="major", labelsize=10)
+        ax_main.set_xlabel("Time", fontsize=8)
+        ax_main.set_ylabel("Martingale Value", fontsize=8)
+        ax_main.legend(fontsize=6, ncol=2, loc='upper right', bbox_to_anchor=(1.0, 1.0))
+        ax_main.tick_params(axis='both', which='major', labelsize=6, pad=2)
+        ax_main.grid(True, linestyle=':', alpha=0.3, linewidth=0.5)
 
         plt.tight_layout()
         plt.savefig(
             self.aggregated_dir / "aggregated_martingales_main.png",
-            dpi=300,
+            dpi=600,
             bbox_inches="tight",
+            pad_inches=0.02,
+            format='png',
+            metadata={'Creator': 'Matplotlib'}
         )
         plt.close()
 
         # 2. Individual feature plots (2x2 grid)
-        fig_features = plt.figure(figsize=(15, 10))
-        gs = plt.GridSpec(2, 2, figure=fig_features)
+        fig_features = plt.figure(figsize=(3.3, 3.3))  # Single column width
+        gs = plt.GridSpec(2, 2, figure=fig_features, hspace=0.4, wspace=0.4)
 
         for i, feature in enumerate(features):
             if feature in aggregated["martingales"]["actual"]["reset"]:
                 ax = fig_features.add_subplot(gs[i // 2, i % 2])
 
-                # Plot actual martingales
+                # Plot actual martingales with thinner lines
                 actual_mart = aggregated["martingales"]["actual"]["reset"][feature][
                     "martingales"
                 ]
@@ -913,9 +947,12 @@ class ExperimentRunner:
                 ax.plot(
                     time_points_actual,
                     actual_mart,
-                    label="Actual",
+                    label="Act.",
                     color="blue",
-                    linewidth=1,
+                    linewidth=0.8,
+                    alpha=0.8,
+                    solid_capstyle='round',
+                    solid_joinstyle='round',
                 )
                 ax.fill_between(
                     time_points_actual,
@@ -925,7 +962,7 @@ class ExperimentRunner:
                     alpha=0.2,
                 )
 
-                # Plot predicted martingales (shifted left)
+                # Plot predicted martingales with thinner lines
                 pred_mart = aggregated["martingales"]["predicted"]["reset"][feature][
                     "martingales"
                 ]
@@ -935,9 +972,12 @@ class ExperimentRunner:
                 ax.plot(
                     time_points_pred,
                     pred_mart,
-                    label="Predicted",
+                    label="Pred.",
                     color="orange",
-                    linewidth=1,
+                    linewidth=0.8,
+                    alpha=0.8,
+                    solid_capstyle='round',
+                    solid_joinstyle='round',
                 )
                 ax.fill_between(
                     time_points_pred,
@@ -947,39 +987,38 @@ class ExperimentRunner:
                     alpha=0.2,
                 )
 
-                # Add change point frequencies as vertical lines
+                # Add change points with thinner lines
                 for pos, freq in aggregated["change_points"]["actual"][
                     "positions"
                 ].items():
-                    ax.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
+                    ax.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--", linewidth=0.5)
 
-                ax.set_title(f"{feature.capitalize()} Martingales", fontsize=10)
-                ax.set_xlabel("Time", fontsize=8)
-                ax.set_ylabel("Martingale Value", fontsize=8)
-                # Add change point to legend
-                ax.plot([], [], "g--", alpha=0.5, label="Change Point")
-                ax.legend(fontsize=8)
-                ax.tick_params(axis="both", which="major", labelsize=8)
+                ax.set_title(feature.capitalize(), fontsize=8, pad=3)
+                
+                # Only show x-axis label for bottom plots
+                if i >= 2:  # Bottom row
+                    ax.set_xlabel("Time", fontsize=6)
+                else:  # Top row
+                    ax.set_xlabel("")
+                    ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
+                
+                ax.set_ylabel("Mart. Value", fontsize=6)
+                ax.legend(fontsize=5, ncol=2, loc='upper right')
+                ax.tick_params(axis='both', which='major', labelsize=5, pad=2)
+                ax.grid(True, linestyle=':', alpha=0.3, linewidth=0.5)
 
-        plt.tight_layout()
         plt.savefig(
             self.aggregated_dir / "aggregated_martingales_features.png",
-            dpi=300,
+            dpi=600,
             bbox_inches="tight",
+            pad_inches=0.02,
+            format='png',
+            metadata={'Creator': 'Matplotlib'}
         )
         plt.close()
 
-        # Print summary statistics
-        logger.info("\nMartingale Distribution Analysis:")
-        logger.info("-" * 50)
-        if "distribution_analysis" in aggregated:
-            dist_analysis = aggregated["distribution_analysis"]
-            logger.info(
-                f"KL Divergence (Histogram): {dist_analysis['kl_div_hist']:.3f}"
-            )
-            logger.info(f"KL Divergence (KDE): {dist_analysis['kl_div_kde']:.3f}")
-            logger.info(f"Jensen-Shannon Divergence: {dist_analysis['js_div']:.3f}")
-            logger.info(f"Correlation: {dist_analysis['correlation']:.3f}")
+        # Reset rcParams to default
+        plt.rcdefaults()
 
     def _generate_data(self) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Generate synthetic network data."""
@@ -1424,13 +1463,17 @@ class ExperimentRunner:
         visualizer = Visualizer()
 
         # 1. Metric evolution
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(3.3, 2.5))  # Single column width
         visualizer.plot_metric_evolution(
             results["graphs"],
             results["forecast_metrics"][0],  # predictions
             self.config.min_history,
             model_type=self.config.model,
             change_points=results["ground_truth"]["change_points"],
+            fontsize=8,
+            tick_fontsize=6,
+            legend_fontsize=6,
+            linewidth=0.8,
         )
         plt.savefig(
             self.output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight"
@@ -1438,7 +1481,7 @@ class ExperimentRunner:
         plt.close()
 
         # 2. Performance extremes
-        plt.figure(figsize=(20, 15))
+        plt.figure(figsize=(7, 5))  # Double column width for this complex plot
         visualizer.plot_performance_extremes(
             results["graphs"][
                 self.config.min_history : self.config.min_history
@@ -1448,6 +1491,10 @@ class ExperimentRunner:
             min_history=self.config.min_history,
             model_type=self.config.model,
             change_points=results["ground_truth"]["change_points"],
+            fontsize=8,
+            tick_fontsize=6,
+            legend_fontsize=6,
+            linewidth=0.8,
         )
         plt.savefig(
             self.output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight"
@@ -1466,4 +1513,9 @@ class ExperimentRunner:
             epsilon=self.config.martingale_epsilon,
             change_points=results["ground_truth"]["change_points"],
             prediction_window=self.config.prediction_window,
+            figsize=(7, 5),  # Double column width for dashboard
+            fontsize=8,
+            tick_fontsize=6,
+            legend_fontsize=6,
+            linewidth=0.8,
         )
