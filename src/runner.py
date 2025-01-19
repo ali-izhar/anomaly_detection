@@ -585,26 +585,15 @@ class ExperimentRunner:
         plt.close()
 
         # Create aggregated martingale plots
-        fig = plt.figure(figsize=(15, 15))  # Adjusted figure size for 3x2 layout
-
-        # Create GridSpec first
-        gs = plt.GridSpec(3, 2, height_ratios=[1.5, 0.75, 0.75], figure=fig)
-
+        
         # Calculate proper time indices for actual and predicted values
         time_points_actual = range(
             self.config.min_history,
-            self.config.min_history
-            + len(
-                aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"]
-            ),
+            self.config.min_history + len(aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"])
         )
         time_points_pred = range(
             self.config.min_history - self.config.prediction_window,
-            self.config.min_history
-            - self.config.prediction_window
-            + len(
-                aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"]
-            ),
+            self.config.min_history - self.config.prediction_window + len(aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"])
         )
 
         # Calculate sum and average of martingales across features
@@ -613,28 +602,19 @@ class ExperimentRunner:
         actual_sum_std = np.zeros(len(time_points_actual))
         pred_sum = np.zeros(len(time_points_pred))
         pred_sum_std = np.zeros(len(time_points_pred))
-
+        
+        # Calculate sums and averages
         for feature in features:
             if feature in aggregated["martingales"]["actual"]["reset"]:
                 # Add to sum for actual
-                actual_mart = np.array(
-                    aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
-                )
-                actual_std = np.array(
-                    aggregated["martingales"]["actual"]["reset"][feature]["std"]
-                )
+                actual_mart = np.array(aggregated["martingales"]["actual"]["reset"][feature]["martingales"])
+                actual_std = np.array(aggregated["martingales"]["actual"]["reset"][feature]["std"])
                 actual_sum += actual_mart
                 actual_sum_std += actual_std**2  # Add variances
 
                 # Add to sum for predicted
-                pred_mart = np.array(
-                    aggregated["martingales"]["predicted"]["reset"][feature][
-                        "martingales"
-                    ]
-                )
-                pred_std = np.array(
-                    aggregated["martingales"]["predicted"]["reset"][feature]["std"]
-                )
+                pred_mart = np.array(aggregated["martingales"]["predicted"]["reset"][feature]["martingales"])
+                pred_std = np.array(aggregated["martingales"]["predicted"]["reset"][feature]["std"])
                 pred_sum += pred_mart
                 pred_sum_std += pred_std**2  # Add variances
 
@@ -644,163 +624,104 @@ class ExperimentRunner:
         pred_avg = pred_sum / len(features)
         pred_avg_std = np.sqrt(pred_sum_std) / len(features)
 
-        # Plot actual sum and average
-        ax_top = fig.add_subplot(
-            gs[0, :]
-        )  # Top plot takes full width and 1.5 parts of height
+        # 1. Main plot (Sum and Average)
+        fig_main = plt.figure(figsize=(15, 8))
+        ax_main = fig_main.add_subplot(111)
 
-        # Plot actual sum and average
-        ax_top.plot(
-            time_points_actual,
-            actual_sum,
-            label="Actual (Sum)",
-            color="blue",
-            linestyle="-",
-            linewidth=2,
-        )
-        ax_top.fill_between(
+        # Plot actual and predicted sums (keep original colors)
+        ax_main.plot(time_points_actual, actual_sum, label="Actual (Sum)", color='blue', linestyle='-', linewidth=2)
+        ax_main.fill_between(
             time_points_actual,
             actual_sum - np.sqrt(actual_sum_std),
             actual_sum + np.sqrt(actual_sum_std),
-            color="blue",
-            alpha=0.1,
+            color='blue',
+            alpha=0.1
         )
-        ax_top.plot(
-            time_points_actual,
-            actual_avg,
-            label="Actual (Average)",
-            color="blue",
-            linestyle="--",
-            linewidth=2,
-        )
-        ax_top.fill_between(
-            time_points_actual,
-            actual_avg - actual_avg_std,
-            actual_avg + actual_avg_std,
-            color="blue",
-            alpha=0.1,
-        )
-
-        # Plot predicted sum and average (shifted left by prediction_window)
-        ax_top.plot(
-            time_points_pred,
-            pred_sum,
-            label="Predicted (Sum)",
-            color="orange",
-            linestyle="-",
-            linewidth=2,
-        )
-        ax_top.fill_between(
+        ax_main.plot(time_points_pred, pred_sum, label="Predicted (Sum)", color='orange', linestyle='-', linewidth=2)
+        ax_main.fill_between(
             time_points_pred,
             pred_sum - np.sqrt(pred_sum_std),
             pred_sum + np.sqrt(pred_sum_std),
-            color="orange",
-            alpha=0.1,
+            color='orange',
+            alpha=0.1
         )
-        ax_top.plot(
-            time_points_pred,
-            pred_avg,
-            label="Predicted (Average)",
-            color="orange",
-            linestyle="--",
-            linewidth=2,
+
+        # Plot averages with different colors
+        ax_main.plot(time_points_actual, actual_avg, label="Actual (Average)", color='#2ecc71', linestyle='--', linewidth=2)
+        ax_main.fill_between(
+            time_points_actual,
+            actual_avg - actual_avg_std,
+            actual_avg + actual_avg_std,
+            color='#2ecc71',
+            alpha=0.1
         )
-        ax_top.fill_between(
+        ax_main.plot(time_points_pred, pred_avg, label="Predicted (Average)", color='#e74c3c', linestyle='--', linewidth=2)
+        ax_main.fill_between(
             time_points_pred,
             pred_avg - pred_avg_std,
             pred_avg + pred_avg_std,
-            color="orange",
-            alpha=0.1,
+            color='#e74c3c',
+            alpha=0.1
         )
 
         # Add threshold line and change points
-        ax_top.axhline(
-            y=self.config.martingale_threshold,
-            color="r",
-            linestyle="--",
-            alpha=0.5,
-            label="Threshold",
-        )
+        ax_main.axhline(y=self.config.martingale_threshold, color='r', linestyle='--', alpha=0.5, label='Threshold')
         for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-            ax_top.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
+            ax_main.axvline(x=int(pos), color='g', alpha=freq * 0.5, linestyle='--')
 
-        ax_top.set_title(
-            "Aggregated Martingales (Sum and Average)", pad=20, fontsize=14
-        )
-        ax_top.set_xlabel("Time", fontsize=12)
-        ax_top.set_ylabel("Martingale Value", fontsize=12)
-        ax_top.legend(loc="upper right", fontsize=10)
-        ax_top.tick_params(axis="both", which="major", labelsize=10)
+        ax_main.set_xlabel("Time", fontsize=12)
+        ax_main.set_ylabel("Martingale Value", fontsize=12)
+        ax_main.legend(loc='upper right', fontsize=10)
+        ax_main.tick_params(axis='both', which='major', labelsize=10)
 
-        # Second and third rows: Individual features (smaller plots)
+        plt.tight_layout()
+        plt.savefig(self.aggregated_dir / "aggregated_martingales_main.png", dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 2. Individual feature plots (2x2 grid)
+        fig_features = plt.figure(figsize=(15, 10))
+        gs = plt.GridSpec(2, 2, figure=fig_features)
+
         for i, feature in enumerate(features):
             if feature in aggregated["martingales"]["actual"]["reset"]:
-                ax = fig.add_subplot(
-                    gs[1 + i // 2, i % 2]
-                )  # Arrange in bottom two rows
+                ax = fig_features.add_subplot(gs[i//2, i%2])  # Fixed: using fig_features instead of fig
 
                 # Plot actual martingales
-                actual_mart = aggregated["martingales"]["actual"]["reset"][feature][
-                    "martingales"
-                ]
-                actual_std = aggregated["martingales"]["actual"]["reset"][feature][
-                    "std"
-                ]
-                ax.plot(
-                    time_points_actual,
-                    actual_mart,
-                    label="Actual",
-                    color="blue",
-                    linewidth=1,
-                )
+                actual_mart = aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
+                actual_std = aggregated["martingales"]["actual"]["reset"][feature]["std"]
+                ax.plot(time_points_actual, actual_mart, label="Actual", color='blue', linewidth=1)
                 ax.fill_between(
                     time_points_actual,
                     [m - s for m, s in zip(actual_mart, actual_std)],
                     [m + s for m, s in zip(actual_mart, actual_std)],
-                    color="blue",
-                    alpha=0.2,
+                    color='blue',
+                    alpha=0.2
                 )
 
                 # Plot predicted martingales (shifted left)
-                pred_mart = aggregated["martingales"]["predicted"]["reset"][feature][
-                    "martingales"
-                ]
-                pred_std = aggregated["martingales"]["predicted"]["reset"][feature][
-                    "std"
-                ]
-                ax.plot(
-                    time_points_pred,
-                    pred_mart,
-                    label="Predicted",
-                    color="orange",
-                    linewidth=1,
-                )
+                pred_mart = aggregated["martingales"]["predicted"]["reset"][feature]["martingales"]
+                pred_std = aggregated["martingales"]["predicted"]["reset"][feature]["std"]
+                ax.plot(time_points_pred, pred_mart, label="Predicted", color='orange', linewidth=1)
                 ax.fill_between(
                     time_points_pred,
                     [m - s for m, s in zip(pred_mart, pred_std)],
                     [m + s for m, s in zip(pred_mart, pred_std)],
-                    color="orange",
-                    alpha=0.2,
+                    color='orange',
+                    alpha=0.2
                 )
 
                 # Add change point frequencies as vertical lines
-                for pos, freq in aggregated["change_points"]["actual"][
-                    "positions"
-                ].items():
-                    ax.axvline(x=int(pos), color="g", alpha=freq * 0.5, linestyle="--")
+                for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
+                    ax.axvline(x=int(pos), color='g', alpha=freq * 0.5, linestyle='--')
 
                 ax.set_title(f"{feature.capitalize()} Martingales", fontsize=10)
                 ax.set_xlabel("Time", fontsize=8)
                 ax.set_ylabel("Martingale Value", fontsize=8)
                 ax.legend(fontsize=8)
-                ax.tick_params(axis="both", which="major", labelsize=8)
+                ax.tick_params(axis='both', which='major', labelsize=8)
 
         plt.tight_layout()
-        plt.savefig(
-            self.aggregated_dir / "aggregated_martingales.png",
-            dpi=300,
-            bbox_inches="tight",
-        )
+        plt.savefig(self.aggregated_dir / "aggregated_martingales_features.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # Print delay analysis
