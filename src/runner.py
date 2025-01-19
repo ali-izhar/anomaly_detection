@@ -131,11 +131,10 @@ class ExperimentRunner:
             "run_number": run_number,
         }
 
-        # Only save and visualize individual results if this is a single run
-        # or if explicitly requested for multiple runs
-        if self.config.n_runs == 1 or self.config.save_individual:
+        # Save and visualize based on flags
+        if run_number is None or self.config.save_individual:
             self._save_results(results)
-        if self.config.n_runs == 1 or self.config.visualize_individual:
+        if run_number is None or self.config.visualize_individual:
             self.visualize_results(results)
 
         return results
@@ -1098,11 +1097,9 @@ class ExperimentRunner:
                 "seed": self.seed,
             }
 
-            # For multiple runs, save individual results in numbered subdirectories
-            if self.config.n_runs > 1 and self.config.save_individual:
-                run_dir = (
-                    self.output_dir / f"run_{results.get('run_number', 'unknown')}"
-                )
+            # For multiple runs with save_individual flag, save in numbered subdirectories
+            if results.get("run_number") is not None and self.config.save_individual:
+                run_dir = self.output_dir / f"run_{results['run_number']}"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 save_path = run_dir / "results.json"
             else:
@@ -1119,10 +1116,8 @@ class ExperimentRunner:
                 "error": str(e),
             }
             error_path = (
-                self.output_dir
-                / f"run_{results.get('run_number', 'unknown')}"
-                / "results_error.json"
-                if self.config.n_runs > 1 and self.config.save_individual
+                self.output_dir / f"run_{results['run_number']}" / "results_error.json"
+                if results.get("run_number") is not None and self.config.save_individual
                 else self.output_dir / "results_error.json"
             )
             with open(error_path, "w") as f:
