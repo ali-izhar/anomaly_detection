@@ -375,6 +375,13 @@ class ExperimentRunner:
             time_points_pred=time_points_pred,
             prediction_window=self.config.prediction_window,
             output_path=self.aggregated_dir / "martingale_distributions.png",
+            kl_div_hist=distribution_analysis["kl_div_hist"],
+            kl_div_kde=distribution_analysis["kl_div_kde"],
+            js_div=distribution_analysis["js_div"],
+            correlation=distribution_analysis["correlation"],
+            change_points=list(
+                aggregated["change_points"]["actual"]["positions"].keys()
+            ),
         )
 
         # Log the analysis results
@@ -647,106 +654,141 @@ class ExperimentRunner:
         }
 
     def _visualize_aggregated_results(self, aggregated: Dict[str, Any]):
-        """Create visualizations for aggregated results."""
-        # Set high-quality plotting defaults
-        plt.rcParams["figure.dpi"] = 600  # High DPI for the figure
-        plt.rcParams["savefig.dpi"] = 600  # High DPI for saving
-        plt.rcParams["pdf.fonttype"] = 42  # Ensure text is exported as text, not paths
-        plt.rcParams["ps.fonttype"] = 42
-        plt.rcParams["svg.fonttype"] = "none"
-        plt.rcParams["axes.linewidth"] = 0.5  # Thinner spines
-        plt.rcParams["lines.linewidth"] = 0.8  # Default line width
-        plt.rcParams["grid.linewidth"] = 0.5  # Thinner grid lines
-        plt.rcParams["xtick.major.width"] = 0.5  # Thinner ticks
-        plt.rcParams["ytick.major.width"] = 0.5
-        plt.rcParams["axes.unicode_minus"] = False  # Ensure proper minus signs
+        """Visualize aggregated results from multiple runs."""
+        # 1. Feature evolution plots (2x2 grid)
+        plt.figure(figsize=(3.3, 3.3))  # Single column width
+        gs = plt.GridSpec(2, 2, hspace=0.4, wspace=0.4)
 
-        # Create aggregated feature evolution plot
-        plt.figure(figsize=(7, 5))  # Adjusted for 2-column width
-        for feature in ["degree", "clustering", "betweenness", "closeness"]:
-            if feature in aggregated["features"]["actual"]:
-                ax = plt.subplot(
-                    2,
-                    2,
-                    list(aggregated["features"]["actual"].keys()).index(feature) + 1,
+        for i, feature in enumerate(aggregated["features"]["actual"].keys()):
+            ax = plt.subplot(gs[i // 2, i % 2])
+
+            # Create proper time indices starting from min_history
+            time_points = range(
+                self.config.min_history,
+                self.config.min_history + len(aggregated["features"]["actual"][feature])
+            )
+
+            # Calculate metrics
+            actual = np.array(aggregated["features"]["actual"][feature])
+            predicted = np.array(aggregated["features"]["predicted"][feature])
+            mae = np.mean(np.abs(actual - predicted))
+            rmse = np.sqrt(np.mean((actual - predicted) ** 2))
+
+            plt.plot(
+                time_points,
+                actual,
+                label="Actual",
+                linewidth=0.8,
+                color="blue",
+                alpha=0.8,
+                solid_capstyle="round",
+                solid_joinstyle="round",
+            )
+            plt.plot(
+                time_points,  # Use same time points for predicted values
+                predicted,
+                label="Predicted",
+                linewidth=0.8,
+                color="orange",
+                alpha=0.8,
+                solid_capstyle="round",
+                solid_joinstyle="round",
+            )
+
+            # Add change point marker explanation with more visible color
+            plt.plot(
+                [],
+                [],
+                "r--",
+                alpha=0.5,
+                label="Change Point",
+                linewidth=0.8,
+                color="red",
+            )
+
+            # Add metrics to legend with smaller font - now as separate entries
+            plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
+            plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
+
+            # Add title with more concise format
+            title = feature.capitalize()
+            if feature != "clustering":  # Already has "Avg." in the feature name
+                title = f"Avg. {title}"
+            plt.title(title, fontsize=8, pad=3)
+
+            # Only show x-axis label and ticks for bottom plots
+            if (
+                list(aggregated["features"]["actual"].keys()).index(feature) >= 2
+            ):  # Bottom row
+                plt.xlabel("Time", fontsize=8)
+            else:  # Top row
+                plt.xlabel("")
+                ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
+
+            # Set x-axis ticks at increments of 50 and extend to 200
+            plt.xticks(np.arange(0, 201, 50))
+            plt.xlim(0, 200)
+
+            # Remove redundant y-axis labels since they're in the title
+            plt.ylabel("")
+
+            # Dynamically determine legend placement based on data density
+            ymin, ymax = plt.ylim()
+            xmin, xmax = plt.xlim()
+            data = np.array([actual, predicted])
+
+            # Calculate data density in different regions
+            regions = {
+                "upper right": np.sum(
+                    (
+                        data[:, int(0.75 * len(time_points)) :]
+                        > (ymin + 0.75 * (ymax - ymin))
+                    ).any(axis=0)
+                ),
+                "upper left": np.sum(
+                    (
+                        data[:, : int(0.25 * len(time_points))]
+                        > (ymin + 0.75 * (ymax - ymin))
+                    ).any(axis=0)
+                ),
+                "lower right": np.sum(
+                    (
+                        data[:, int(0.75 * len(time_points)) :]
+                        < (ymin + 0.25 * (ymax - ymin))
+                    ).any(axis=0)
+                ),
+                "lower left": np.sum(
+                    (
+                        data[:, : int(0.25 * len(time_points))]
+                        < (ymin + 0.25 * (ymax - ymin))
+                    ).any(axis=0)
+                ),
+            }
+
+            # Choose the region with least data density
+            best_loc = min(regions.items(), key=lambda x: x[1])[0]
+
+            plt.legend(
+                fontsize=5,  # Reduced from 6 to 5
+                ncol=1,
+                loc=best_loc,
+                borderaxespad=0.1,
+                handlelength=1.0,  # Reduced from 1.5
+                columnspacing=0.8,  # Reduced from 1.0
+            )
+
+            plt.tick_params(axis="both", which="major", labelsize=6, pad=2)
+            plt.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
+
+            # Add change point frequencies as vertical lines - keeping exact positions
+            for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
+                plt.axvline(
+                    x=pos,  # Use exact position from positions dictionary
+                    color="r",
+                    alpha=freq * 0.5,
+                    linestyle="--",
+                    linewidth=0.5,
                 )
-                # Create proper time indices starting from min_history
-                time_points = range(
-                    self.config.min_history,
-                    self.config.min_history
-                    + len(aggregated["features"]["actual"][feature]),
-                )
-
-                # Calculate error metrics for this feature
-                actual = np.array(aggregated["features"]["actual"][feature])
-                predicted = np.array(aggregated["features"]["predicted"][feature])
-                mae = np.mean(np.abs(actual - predicted))
-                rmse = np.sqrt(np.mean((actual - predicted) ** 2))
-
-                plt.plot(
-                    time_points,
-                    aggregated["features"]["actual"][feature],
-                    label="Actual",
-                    linewidth=0.8,
-                    color="blue",
-                    alpha=0.8,
-                    solid_capstyle="round",
-                    solid_joinstyle="round",
-                )
-                plt.plot(
-                    time_points,
-                    aggregated["features"]["predicted"][feature],
-                    label="Predicted",
-                    linewidth=0.8,
-                    color="orange",
-                    alpha=0.8,
-                    solid_capstyle="round",
-                    solid_joinstyle="round",
-                )
-
-                # Add change point marker explanation
-                plt.plot([], [], "r--", alpha=0.5, label="Change Point", linewidth=0.8)
-
-                # Add metrics to legend with smaller font
-                plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
-                plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
-
-                plt.title(
-                    f"Average {feature.capitalize()} Evolution", fontsize=8, pad=3
-                )
-
-                # Only show x-axis label and ticks for bottom plots
-                if (
-                    list(aggregated["features"]["actual"].keys()).index(feature) >= 2
-                ):  # Bottom row
-                    plt.xlabel("Time", fontsize=8)
-                else:  # Top row
-                    plt.xlabel("")
-                    ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
-
-                plt.ylabel(feature.capitalize(), fontsize=8)
-                plt.legend(
-                    fontsize=6,
-                    ncol=2,
-                    loc="upper right",
-                    borderaxespad=0.1,
-                    handlelength=1.5,
-                    columnspacing=1.0,
-                )
-                plt.tick_params(axis="both", which="major", labelsize=6, pad=2)
-                plt.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-                # Add change point frequencies as vertical lines
-                for pos, freq in aggregated["change_points"]["actual"][
-                    "positions"
-                ].items():
-                    plt.axvline(
-                        x=int(pos),
-                        color="r",
-                        alpha=freq * 0.5,
-                        linestyle="--",
-                        linewidth=0.5,
-                    )
 
         plt.tight_layout()
         plt.savefig(
@@ -889,7 +931,7 @@ class ExperimentRunner:
             time_points_pred,
             pred_avg,
             label="Pred. Avg",
-            color="#e74c3c",
+            color="#9b59b6",
             linestyle="--",
             linewidth=0.8,
             alpha=0.8,
@@ -900,23 +942,18 @@ class ExperimentRunner:
             time_points_pred,
             pred_avg - pred_avg_std,
             pred_avg + pred_avg_std,
-            color="#e74c3c",
+            color="#9b59b6",
             alpha=0.1,
         )
 
-        # Add threshold line and change points
-        ax_main.axhline(
-            y=self.config.martingale_threshold,
-            color="r",
-            linestyle="--",
-            alpha=0.5,
-            linewidth=0.8,
-            label="Threshold",
-            dash_capstyle="round",
-        )
+        # Add change points with thinner lines
         for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
             ax_main.axvline(
-                x=int(pos), color="g", alpha=freq * 0.5, linestyle="--", linewidth=0.5
+                x=int(pos),
+                color="r",  # Change point line in red
+                alpha=freq * 0.5,
+                linestyle="--",
+                linewidth=0.5,
             )
 
         # Reorganized delay annotations - place them to the left of change points
@@ -929,21 +966,18 @@ class ExperimentRunner:
                 base_y = self.config.martingale_threshold * 1.5
                 spacing = self.config.martingale_threshold * 0.3  # Increased spacing
 
-                # Detection delay (top)
+                # Detection delay (top) - now with curved arrow like prediction
                 ax_main.annotate(
                     f'd:{det_delay["mean"]:.1f}',
                     xy=(cp + det_delay["mean"], base_y),
-                    xytext=(
-                        cp - 20,
-                        base_y + spacing,
-                    ),  # Extended arrow, moved text further left
+                    xytext=(cp - 20, base_y + spacing),
                     arrowprops=dict(
                         arrowstyle="->",
                         color="blue",
-                        connectionstyle="arc3,rad=0.2",
+                        connectionstyle="arc3,rad=-0.2",  # Curved like prediction
                         linewidth=0.5,
-                        shrinkA=0,  # Don't shrink from the text
-                        shrinkB=0,  # Don't shrink from the point
+                        shrinkA=0,
+                        shrinkB=0,
                     ),
                     color="blue",
                     fontsize=6,
@@ -951,24 +985,35 @@ class ExperimentRunner:
                     va="bottom",
                 )
 
-                # Prediction delay (bottom)
+                # Prediction delay (bottom) - keep existing curved arrow
                 ax_main.annotate(
                     f'p:{pred_delay["mean"]:.1f}',
                     xy=(cp + pred_delay["mean"], base_y),
-                    xytext=(cp - 20, base_y),  # Extended arrow, moved text further left
+                    xytext=(cp - 20, base_y),
                     arrowprops=dict(
                         arrowstyle="->",
                         color="orange",
                         connectionstyle="arc3,rad=-0.2",
                         linewidth=0.5,
-                        shrinkA=0,  # Don't shrink from the text
-                        shrinkB=0,  # Don't shrink from the point
+                        shrinkA=0,
+                        shrinkB=0,
                     ),
                     color="orange",
                     fontsize=6,
                     ha="right",
                     va="top",
                 )
+
+        # Add threshold line with different color (pink/coral)
+        ax_main.axhline(
+            y=self.config.martingale_threshold,
+            color="#FF7F7F",  # Light coral color for threshold
+            linestyle="--",
+            alpha=0.5,
+            linewidth=0.8,
+            label="Threshold",
+            dash_capstyle="round",
+        )
 
         ax_main.set_xlabel("Time", fontsize=8)
         ax_main.set_ylabel("Martingale Value", fontsize=8)
@@ -1051,7 +1096,7 @@ class ExperimentRunner:
                 ].items():
                     ax.axvline(
                         x=int(pos),
-                        color="g",
+                        color="r",
                         alpha=freq * 0.5,
                         linestyle="--",
                         linewidth=0.5,

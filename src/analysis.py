@@ -5,7 +5,7 @@
 import numpy as np
 from scipy.stats import gaussian_kde
 import logging
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
@@ -181,68 +181,47 @@ def visualize_distribution_analysis(
     time_points_pred: range,
     prediction_window: int,
     output_path: str,
+    kl_div_hist: float,
+    kl_div_kde: float,
+    js_div: float,
+    correlation: float,
+    change_points: List[int],
     n_bins: int = 50,
 ) -> None:
-    """Create a compact visualization of martingale distributions."""
+    """Create a compact visualization of martingale evolution with metrics."""
     # Set high-quality plotting defaults
-    plt.rcParams["figure.dpi"] = 600  # High DPI for the figure
-    plt.rcParams["savefig.dpi"] = 600  # High DPI for saving
-    plt.rcParams["pdf.fonttype"] = 42  # Ensure text is exported as text, not paths
+    plt.rcParams["figure.dpi"] = 600
+    plt.rcParams["savefig.dpi"] = 600
+    plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
     plt.rcParams["svg.fonttype"] = "none"
-    plt.rcParams["axes.linewidth"] = 0.5  # Thinner spines
-    plt.rcParams["lines.linewidth"] = 0.8  # Default line width
-    plt.rcParams["grid.linewidth"] = 0.5  # Thinner grid lines
-    plt.rcParams["xtick.major.width"] = 0.5  # Thinner ticks
+    plt.rcParams["axes.linewidth"] = 0.5
+    plt.rcParams["lines.linewidth"] = 0.8
+    plt.rcParams["grid.linewidth"] = 0.5
+    plt.rcParams["xtick.major.width"] = 0.5
     plt.rcParams["ytick.major.width"] = 0.5
-    plt.rcParams["axes.unicode_minus"] = False  # Ensure proper minus signs
+    plt.rcParams["axes.unicode_minus"] = False
 
-    # Create figure with 2x1 layout (time series on top, distributions on bottom)
-    fig = plt.figure(figsize=(7, 4))  # Double column width, compact height
-    gs = plt.GridSpec(2, 1, height_ratios=[1, 1], hspace=0.4)
+    # Create figure
+    fig = plt.figure(figsize=(7, 2.5))  # Double column width, reduced height
+    ax = fig.add_subplot(111)
 
-    # 1. Time series plot (top)
-    ax_time = fig.add_subplot(gs[0])
-
-    # Plot actual values with higher quality lines
-    ax_time.plot(
+    # Plot actual values
+    ax.plot(
         time_points_actual,
         actual_sum,
-        label="Act. Sum",
+        label="Sum Mart.",
         color="blue",
         linewidth=0.8,
         alpha=0.8,
         solid_capstyle="round",
         solid_joinstyle="round",
     )
-    ax_time.plot(
+    ax.plot(
         time_points_actual,
         actual_avg,
-        label="Act. Avg",
-        color="green",
-        linewidth=0.8,
-        alpha=0.8,
-        solid_capstyle="round",
-        solid_joinstyle="round",
-    )
-
-    # Plot predicted values with higher quality lines
-    ax_time.plot(
-        time_points_pred,
-        pred_sum,
-        label="Pred. Sum",
-        color="orange",
-        linewidth=0.8,
-        linestyle="--",
-        alpha=0.8,
-        dash_capstyle="round",
-        dash_joinstyle="round",
-    )
-    ax_time.plot(
-        time_points_pred,
-        pred_avg,
-        label="Pred. Avg",
-        color="red",
+        label="Avg Mart.",
+        color="#2ecc71",  # Green
         linewidth=0.8,
         linestyle="--",
         alpha=0.8,
@@ -250,112 +229,86 @@ def visualize_distribution_analysis(
         dash_joinstyle="round",
     )
 
-    ax_time.set_title("Martingale Evolution", fontsize=8, pad=3)
-    ax_time.set_xlabel("Time", fontsize=8)
-    ax_time.set_ylabel("Martingale Value", fontsize=8)
-    ax_time.legend(
-        fontsize=6,
-        ncol=2,
-        loc="upper right",
-        borderaxespad=0.1,
-        handlelength=1.5,
-        columnspacing=1.0,
-    )
-    ax_time.tick_params(axis="both", which="major", labelsize=6, pad=2)
-    ax_time.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-    # 2. Combined distribution plot (bottom)
-    ax_dist = fig.add_subplot(gs[1])
-
-    # Plot sum distributions with refined settings
-    ax_dist.hist(
-        actual_sum,
-        bins=n_bins,
-        alpha=0.3,
-        density=True,
-        label="Act. Sum",
-        color="blue",
-        edgecolor="none",
-    )
-    ax_dist.hist(
+    # Plot predicted values
+    ax.plot(
+        time_points_pred,
         pred_sum,
-        bins=n_bins,
-        alpha=0.3,
-        density=True,
         label="Pred. Sum",
         color="orange",
-        edgecolor="none",
+        linewidth=0.8,
+        alpha=0.8,
+        solid_capstyle="round",
+        solid_joinstyle="round",
     )
-
-    # Plot average distributions with different hatching
-    ax_dist.hist(
-        actual_avg,
-        bins=n_bins,
-        alpha=0.3,
-        density=True,
-        label="Act. Avg",
-        color="green",
-        hatch="//",
-        edgecolor="darkgreen",
-        linewidth=0.5,
-    )
-    ax_dist.hist(
+    ax.plot(
+        time_points_pred,
         pred_avg,
-        bins=n_bins,
-        alpha=0.3,
-        density=True,
         label="Pred. Avg",
-        color="red",
-        hatch="\\\\",
-        edgecolor="darkred",
-        linewidth=0.5,
+        color="#9b59b6",  # Purple
+        linewidth=0.8,
+        linestyle="--",
+        alpha=0.8,
+        dash_capstyle="round",
+        dash_joinstyle="round",
     )
 
-    # Add KDE curves with refined settings
-    for data, color in [
-        (actual_sum, "blue"),
-        (pred_sum, "orange"),
-        (actual_avg, "green"),
-        (pred_avg, "red"),
-    ]:
-        kde = gaussian_kde(data)
-        x_range = np.linspace(
-            min(data), max(data), 300
-        )  # More points for smoother curve
-        ax_dist.plot(
-            x_range,
-            kde(x_range),
-            color=color,
-            linewidth=0.8,
-            solid_capstyle="round",
-            solid_joinstyle="round",
+    # Add change points
+    for cp in change_points:
+        ax.axvline(
+            x=cp,
+            color="r",
+            alpha=0.5,
+            linestyle="--",
+            linewidth=0.5,
+            label="Change Point" if cp == change_points[0] else "",
         )
 
-    ax_dist.set_title("Martingale Distributions", fontsize=8, pad=3)
-    ax_dist.set_xlabel("Martingale Value", fontsize=8)
-    ax_dist.set_ylabel("Density", fontsize=8)
-    ax_dist.legend(
+    # Add title and labels
+    ax.set_title("Martingale Evolution", fontsize=8, pad=3)
+    ax.set_xlabel("Time", fontsize=8)
+    ax.set_ylabel("Martingale Value", fontsize=8)
+
+    # Add right-side legend (vertical)
+    ax.legend(
         fontsize=6,
-        ncol=2,
-        loc="upper right",
+        ncol=1,  # Vertical layout
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),  # Place legend to the right of the plot
         borderaxespad=0.1,
         handlelength=1.5,
         columnspacing=1.0,
     )
-    ax_dist.tick_params(axis="both", which="major", labelsize=6, pad=2)
-    ax_dist.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
 
-    # Ensure the figure is tight and save with high quality
-    plt.tight_layout()
+    # Add left-side metrics legend
+    metrics_text = (
+        "Metrics:\n"
+        f"KL (hist) = {kl_div_hist:.3f}\n"
+        f"KL (kde) = {kl_div_kde:.3f}\n"
+        f"JS = {js_div:.3f}\n"
+        f"Corr = {correlation:.3f}"
+    )
+    ax.text(
+        -0.15,  # Position to the left of the plot
+        0.5,  # Vertical center
+        metrics_text,
+        transform=ax.transAxes,
+        fontsize=6,
+        verticalalignment="center",
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3),
+    )
+
+    # Customize grid and ticks
+    ax.tick_params(axis="both", which="major", labelsize=6, pad=2)
+    ax.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
 
     # Save with high quality settings
     plt.savefig(
         output_path,
-        dpi=600,  # High DPI
+        dpi=600,
         bbox_inches="tight",
-        pad_inches=0.02,  # Minimal padding
-        format="png",  # Use PNG format for sharp lines
-        metadata={"Creator": "Matplotlib"},  # Add metadata
+        pad_inches=0.02,
+        format="png",
+        metadata={"Creator": "Matplotlib"},
     )
     plt.close()
 
