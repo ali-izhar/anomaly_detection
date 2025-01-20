@@ -961,9 +961,13 @@ class ExperimentRunner:
                 det_delay = delays["detection"][cp]
                 pred_delay = delays["prediction"][cp]
 
-                # Base vertical positions for annotations
-                base_y = self.config.martingale_threshold * 1.5
-                spacing = self.config.martingale_threshold * 0.3  # Increased spacing
+                # Base vertical positions for annotations - just above threshold
+                base_y = (
+                    self.config.martingale_threshold * 1.1
+                )  # Changed from 1.5 to 1.1
+                spacing = (
+                    self.config.martingale_threshold * 0.15
+                )  # Changed from 0.3 to 0.15
 
                 # Detection delay (top) - now with curved arrow like prediction
                 ax_main.annotate(
@@ -973,7 +977,7 @@ class ExperimentRunner:
                     arrowprops=dict(
                         arrowstyle="->",
                         color="blue",
-                        connectionstyle="arc3,rad=-0.2",  # Curved like prediction
+                        connectionstyle="arc3,rad=-0.2",
                         linewidth=0.5,
                         shrinkA=0,
                         shrinkB=0,

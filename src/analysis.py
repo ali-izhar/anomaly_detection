@@ -229,11 +229,11 @@ def visualize_distribution_analysis(
         dash_joinstyle="round",
     )
 
-    # Plot predicted values
+    # Plot predicted values - use same time points as actual since they're already aligned
     ax.plot(
-        time_points_pred,
+        time_points_actual,  # Changed from time_points_pred
         pred_sum,
-        label=f"Pred. Sum (offset +{prediction_window})",  # Add offset info
+        label="Pred. Sum",  # Removed offset info
         color="orange",
         linewidth=0.8,
         alpha=0.8,
@@ -241,9 +241,9 @@ def visualize_distribution_analysis(
         solid_joinstyle="round",
     )
     ax.plot(
-        time_points_pred,
+        time_points_actual,  # Changed from time_points_pred
         pred_avg,
-        label=f"Pred. Avg (offset +{prediction_window})",  # Add offset info
+        label="Pred. Avg",  # Removed offset info
         color="#9b59b6",  # Purple
         linewidth=0.8,
         linestyle="--",
@@ -274,8 +274,8 @@ def visualize_distribution_analysis(
             "Sum Mart.",
             "Avg Mart.",
             "Change Point",
-            f"Pred. Sum (offset +{prediction_window})",
-            f"Pred. Avg (offset +{prediction_window})",
+            "Pred. Sum",
+            "Pred. Avg",
         ],
         fontsize=6,
         ncol=1,
