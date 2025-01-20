@@ -665,7 +665,8 @@ class ExperimentRunner:
             # Create proper time indices starting from min_history
             time_points = range(
                 self.config.min_history,
-                self.config.min_history + len(aggregated["features"]["actual"][feature])
+                self.config.min_history
+                + len(aggregated["features"]["actual"][feature]),
             )
 
             # Calculate metrics
@@ -710,10 +711,8 @@ class ExperimentRunner:
             plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
             plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
 
-            # Add title with more concise format
-            title = feature.capitalize()
-            if feature != "clustering":  # Already has "Avg." in the feature name
-                title = f"Avg. {title}"
+            # Add title with more concise format - include Avg. for all features
+            title = f"Avg. {feature.capitalize()}"
             plt.title(title, fontsize=8, pad=3)
 
             # Only show x-axis label and ticks for bottom plots

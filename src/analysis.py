@@ -233,7 +233,7 @@ def visualize_distribution_analysis(
     ax.plot(
         time_points_pred,
         pred_sum,
-        label="Pred. Sum",
+        label=f"Pred. Sum (offset +{prediction_window})",  # Add offset info
         color="orange",
         linewidth=0.8,
         alpha=0.8,
@@ -243,7 +243,7 @@ def visualize_distribution_analysis(
     ax.plot(
         time_points_pred,
         pred_avg,
-        label="Pred. Avg",
+        label=f"Pred. Avg (offset +{prediction_window})",  # Add offset info
         color="#9b59b6",  # Purple
         linewidth=0.8,
         linestyle="--",
@@ -268,40 +268,51 @@ def visualize_distribution_analysis(
     ax.set_xlabel("Time", fontsize=8)
     ax.set_ylabel("Martingale Value", fontsize=8)
 
-    # Add right-side legend (vertical)
+    # Single legend with all markers on the right side
     ax.legend(
+        [
+            "Sum Mart.",
+            "Avg Mart.",
+            "Change Point",
+            f"Pred. Sum (offset +{prediction_window})",
+            f"Pred. Avg (offset +{prediction_window})",
+        ],
         fontsize=6,
-        ncol=1,  # Vertical layout
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),  # Place legend to the right of the plot
+        ncol=1,
+        loc="upper right",
         borderaxespad=0.1,
-        handlelength=1.5,
-        columnspacing=1.0,
+        handlelength=1.0,
+        columnspacing=0.8,
     )
 
-    # Add left-side metrics legend
+    # Add grid and set limits
+    ax.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
+    ax.set_xlim(
+        min(time_points_actual[0], time_points_pred[0]),
+        max(time_points_actual[-1], time_points_pred[-1]),
+    )
+
+    # Set x-axis ticks at increments of 50
+    plt.xticks(np.arange(0, 201, 50))
+
+    # Add metrics text box on the left
     metrics_text = (
-        "Metrics:\n"
-        f"KL (hist) = {kl_div_hist:.3f}\n"
-        f"KL (kde) = {kl_div_kde:.3f}\n"
-        f"JS = {js_div:.3f}\n"
-        f"Corr = {correlation:.3f}"
+        f"KL (Hist): {kl_div_hist:.3f}\n"
+        f"KL (KDE): {kl_div_kde:.3f}\n"
+        f"JS: {js_div:.3f}\n"
+        f"Corr: {correlation:.3f}"
     )
     ax.text(
-        -0.15,  # Position to the left of the plot
-        0.5,  # Vertical center
+        0.02,
+        0.98,
         metrics_text,
         transform=ax.transAxes,
         fontsize=6,
-        verticalalignment="center",
-        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3),
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, pad=0.5),
     )
 
-    # Customize grid and ticks
-    ax.tick_params(axis="both", which="major", labelsize=6, pad=2)
-    ax.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-    # Save with high quality settings
+    plt.tight_layout()
     plt.savefig(
         output_path,
         dpi=600,
