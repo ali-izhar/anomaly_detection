@@ -112,7 +112,7 @@ def extract_metrics(result: Dict[str, Any]) -> Dict[str, float]:
                 float(d["mean"]) for d in result["delays"]["prediction"].values()
             ]
 
-            # Store all delays and their corresponding CPs
+            # Store only the essential delay metrics
             metrics.update(
                 {
                     "avg_detection_delay": (
@@ -131,64 +131,25 @@ def extract_metrics(result: Dict[str, Any]) -> Dict[str, float]:
                         if prediction_delays
                         else np.nan
                     ),
-                    "detection_delays_per_cp": {
-                        int(cp): {"mean": float(d["mean"]), "std": float(d["std"])}
-                        for cp, d in result["delays"]["detection"].items()
-                    },
-                    "prediction_delays_per_cp": {
-                        int(cp): {"mean": float(d["mean"]), "std": float(d["std"])}
-                        for cp, d in result["delays"]["prediction"].items()
-                    },
                 }
             )
 
-            # Calculate average detection and prediction times for each CP
-            detection_times = {}
-            prediction_times = {}
-
-            for cp in actual_cps:
-                cp = int(cp)  # Ensure CP is an integer
-                if cp in result["delays"]["detection"]:
-                    det_delay = float(result["delays"]["detection"][cp]["mean"])
-                    detection_times[cp] = float(cp + det_delay)
-                else:
-                    detection_times[cp] = np.nan
-
-                if cp in result["delays"]["prediction"]:
-                    pred_delay = float(result["delays"]["prediction"][cp]["mean"])
-                    prediction_times[cp] = float(cp + pred_delay)
-                else:
-                    prediction_times[cp] = np.nan
-
-            metrics.update(
-                {
-                    "actual_cp_times": actual_cps,
-                    "detection_times": detection_times,
-                    "prediction_times": prediction_times,
+            # Store per-CP delays in a more compact format
+            metrics["delays_per_cp"] = {
+                int(cp): {
+                    "detection": (
+                        float(result["delays"]["detection"][cp]["mean"])
+                        if cp in result["delays"]["detection"]
+                        else np.nan
+                    ),
+                    "prediction": (
+                        float(result["delays"]["prediction"][cp]["mean"])
+                        if cp in result["delays"]["prediction"]
+                        else np.nan
+                    ),
                 }
-            )
-
-        # Get distribution analysis metrics
-        if "distribution_analysis" in result:
-            dist_analysis = result["distribution_analysis"]
-            metrics.update(
-                {
-                    "kl_div_hist": float(dist_analysis["kl_div_hist"]),
-                    "kl_div_kde": float(dist_analysis["kl_div_kde"]),
-                    "js_div": float(dist_analysis["js_div"]),
-                    "correlation": float(dist_analysis["correlation"]),
-                }
-            )
-        else:
-            # If distribution analysis is not available, add default values
-            metrics.update(
-                {
-                    "kl_div_hist": np.nan,
-                    "kl_div_kde": np.nan,
-                    "js_div": np.nan,
-                    "correlation": np.nan,
-                }
-            )
+                for cp in actual_cps
+            }
 
         # Debug log the extracted metrics
         logger.debug(f"Extracted metrics: {metrics}")
@@ -201,15 +162,7 @@ def extract_metrics(result: Dict[str, Any]) -> Dict[str, float]:
             "std_detection_delay": np.nan,
             "avg_prediction_delay": np.nan,
             "std_prediction_delay": np.nan,
-            "detection_delays_per_cp": {},
-            "prediction_delays_per_cp": {},
-            "actual_cp_times": [],
-            "detection_times": {},
-            "prediction_times": {},
-            "kl_div_hist": np.nan,
-            "kl_div_kde": np.nan,
-            "js_div": np.nan,
-            "correlation": np.nan,
+            "delays_per_cp": {},
         }
 
     return metrics
@@ -275,7 +228,6 @@ def run_parameter_study():
                 **pred_params,
                 **det_params,
                 **metrics,
-                "distribution_analysis": result.get("distribution_analysis", {}),
             }
             all_results.append(experiment_result)
 
@@ -291,9 +243,6 @@ def run_parameter_study():
                         "prediction_params": pred_params,
                         "detection_params": det_params,
                         "metrics": metrics,
-                        "distribution_analysis": result.get(
-                            "distribution_analysis", {}
-                        ),
                     },
                     f,
                     indent=4,
@@ -349,10 +298,6 @@ def analyze_results(df: pd.DataFrame):
                     {
                         "avg_detection_delay": ["mean", "std"],
                         "avg_prediction_delay": ["mean", "std"],
-                        "kl_div_hist": "mean",
-                        "kl_div_kde": "mean",
-                        "js_div": "mean",
-                        "correlation": "mean",
                     }
                 )
                 .round(3)
@@ -366,10 +311,11 @@ def analyze_results(df: pd.DataFrame):
                 cp_stats = []
                 for _, row in subset.iterrows():
                     for cp in row["actual_cps"]:
+                        delays = row["delays_per_cp"].get(str(cp), {})
                         cp_stat = {
                             "actual": cp,
-                            "detected": row["detection_times"].get(cp, np.nan),
-                            "predicted": row["prediction_times"].get(cp, np.nan),
+                            "detection": delays.get("detection", np.nan),
+                            "prediction": delays.get("prediction", np.nan),
                         }
                         cp_stats.append(cp_stat)
 
@@ -379,16 +325,18 @@ def analyze_results(df: pd.DataFrame):
                     relevant_stats = [s for s in cp_stats if s["actual"] == cp]
                     avg_cp_stats[cp] = {
                         "actual": cp,
-                        "detected": np.nanmean([s["detected"] for s in relevant_stats]),
-                        "predicted": np.nanmean(
-                            [s["predicted"] for s in relevant_stats]
+                        "detection": np.nanmean(
+                            [s["detection"] for s in relevant_stats]
+                        ),
+                        "prediction": np.nanmean(
+                            [s["prediction"] for s in relevant_stats]
                         ),
                     }
 
                 # Format CP timing information
                 cp_timing_str = "; ".join(
                     [
-                        f"CP{cp}: {stats['actual']}/{stats['detected']:.1f}/{stats['predicted']:.1f}"
+                        f"CP{cp}: {stats['actual']}/{stats['detection']:.1f}/{stats['prediction']:.1f}"
                         for cp, stats in avg_cp_stats.items()
                     ]
                 )
@@ -404,10 +352,6 @@ def analyze_results(df: pd.DataFrame):
                     "CP Timings (Actual/Detected/Predicted)": cp_timing_str,
                     "Detection Delay": f"{grouped.loc[value, ('avg_detection_delay', 'mean')]:.2f} ± {grouped.loc[value, ('avg_detection_delay', 'std')]:.2f}",
                     "Prediction Delay": f"{grouped.loc[value, ('avg_prediction_delay', 'mean')]:.2f} ± {grouped.loc[value, ('avg_prediction_delay', 'std')]:.2f}",
-                    "KL Div (Hist)": f"{grouped.loc[value, ('kl_div_hist', 'mean')]:.3f}",
-                    "KL Div (KDE)": f"{grouped.loc[value, ('kl_div_kde', 'mean')]:.3f}",
-                    "JS Div": f"{grouped.loc[value, ('js_div', 'mean')]:.3f}",
-                    "Correlation": f"{grouped.loc[value, ('correlation', 'mean')]:.3f}",
                 }
                 summary_table.append(row)
 
