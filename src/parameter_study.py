@@ -31,8 +31,8 @@ PREDICTION_PARAMS = {
 }
 
 DETECTION_PARAMS = {
-    "martingale_threshold": [30.0],  # Two threshold levels
-    "martingale_epsilon": [0.7],  # Two epsilon values
+    "martingale_threshold": [30.0, 100.0],  # Two threshold levels
+    "martingale_epsilon": [0.7, 0.9],  # Two epsilon values
 }
 
 
@@ -86,7 +86,7 @@ def create_experiment_config(
         prediction_window=prediction_params["prediction_window"],
         martingale_threshold=detection_params["martingale_threshold"],
         martingale_epsilon=detection_params["martingale_epsilon"],
-        n_runs=1,  # Run each combination 5 times for statistical significance
+        n_runs=3,  # Run each combination 5 times for statistical significance
         save_individual=False,
         visualize_individual=False,
     )
@@ -99,60 +99,76 @@ def extract_metrics(result: Dict[str, Any]) -> Dict[str, float]:
     metrics = {}
 
     try:
-        # Get actual change points - convert to native Python list
-        actual_cps = [int(cp) for cp in result["ground_truth"]["change_points"]]
-        metrics["actual_cps"] = actual_cps
+        # Handle both single and multiple run results
+        if "ground_truth" in result:
+            # Single run case - current code works fine
+            actual_cps = [int(cp) for cp in result["ground_truth"]["change_points"]]
+            metrics["actual_cps"] = actual_cps
 
-        # Get detection and prediction delays
-        if "delays" in result:
-            detection_delays = [
-                float(d["mean"]) for d in result["delays"]["detection"].values()
-            ]
-            prediction_delays = [
-                float(d["mean"]) for d in result["delays"]["prediction"].values()
-            ]
+            if "delays" in result:
+                detection_delays = [float(d["mean"]) for d in result["delays"]["detection"].values()]
+                prediction_delays = [float(d["mean"]) for d in result["delays"]["prediction"].values()]
+                
+                metrics.update({
+                    "avg_detection_delay": float(np.mean(detection_delays)) if detection_delays else np.nan,
+                    "std_detection_delay": float(np.std(detection_delays)) if detection_delays else np.nan,
+                    "avg_prediction_delay": float(np.mean(prediction_delays)) if prediction_delays else np.nan,
+                    "std_prediction_delay": float(np.std(prediction_delays)) if prediction_delays else np.nan,
+                })
 
-            # Store only the essential delay metrics
-            metrics.update(
-                {
-                    "avg_detection_delay": (
-                        float(np.mean(detection_delays)) if detection_delays else np.nan
-                    ),
-                    "std_detection_delay": (
-                        float(np.std(detection_delays)) if detection_delays else np.nan
-                    ),
-                    "avg_prediction_delay": (
-                        float(np.mean(prediction_delays))
-                        if prediction_delays
-                        else np.nan
-                    ),
-                    "std_prediction_delay": (
-                        float(np.std(prediction_delays))
-                        if prediction_delays
-                        else np.nan
-                    ),
+                metrics["delays_per_cp"] = {
+                    int(cp): {
+                        "detection": float(result["delays"]["detection"][cp]["mean"]) if cp in result["delays"]["detection"] else np.nan,
+                        "prediction": float(result["delays"]["prediction"][cp]["mean"]) if cp in result["delays"]["prediction"] else np.nan,
+                    }
+                    for cp in actual_cps
                 }
-            )
-
-            # Store per-CP delays in a more compact format
-            metrics["delays_per_cp"] = {
-                int(cp): {
-                    "detection": (
-                        float(result["delays"]["detection"][cp]["mean"])
-                        if cp in result["delays"]["detection"]
-                        else np.nan
-                    ),
-                    "prediction": (
-                        float(result["delays"]["prediction"][cp]["mean"])
-                        if cp in result["delays"]["prediction"]
-                        else np.nan
-                    ),
+        else:
+            # Multiple runs case
+            if "all_results" in result:  # Add this check for multiple runs
+                # Collect delays from all runs
+                all_detection_delays = []
+                all_prediction_delays = []
+                all_delays_per_cp = {}
+                
+                for run_result in result["all_results"]:
+                    if "delays" in run_result:
+                        # Collect detection delays
+                        detection_delays = [float(d["mean"]) for d in run_result["delays"]["detection"].values()]
+                        all_detection_delays.extend(detection_delays)
+                        
+                        # Collect prediction delays
+                        prediction_delays = [float(d["mean"]) for d in run_result["delays"]["prediction"].values()]
+                        all_prediction_delays.extend(prediction_delays)
+                        
+                        # Collect per-CP delays
+                        for cp, delays in run_result["delays"]["detection"].items():
+                            if cp not in all_delays_per_cp:
+                                all_delays_per_cp[cp] = {"detection": [], "prediction": []}
+                            all_delays_per_cp[cp]["detection"].append(float(delays["mean"]))
+                            if cp in run_result["delays"]["prediction"]:
+                                all_delays_per_cp[cp]["prediction"].append(float(run_result["delays"]["prediction"][cp]["mean"]))
+                
+                # Calculate aggregate metrics
+                metrics.update({
+                    "avg_detection_delay": float(np.mean(all_detection_delays)) if all_detection_delays else np.nan,
+                    "std_detection_delay": float(np.std(all_detection_delays)) if all_detection_delays else np.nan,
+                    "avg_prediction_delay": float(np.mean(all_prediction_delays)) if all_prediction_delays else np.nan,
+                    "std_prediction_delay": float(np.std(all_prediction_delays)) if all_prediction_delays else np.nan,
+                })
+                
+                # Calculate per-CP averages
+                metrics["delays_per_cp"] = {
+                    int(cp): {
+                        "detection": float(np.mean(delays["detection"])) if delays["detection"] else np.nan,
+                        "prediction": float(np.mean(delays["prediction"])) if delays["prediction"] else np.nan
+                    }
+                    for cp, delays in all_delays_per_cp.items()
                 }
-                for cp in actual_cps
-            }
-
-        # Debug log the extracted metrics
-        logger.debug(f"Extracted metrics: {metrics}")
+                
+                # Get actual CPs from first run (they should be the same across runs)
+                if result["all_results"]:
+                    metrics["actual_cps"] = [int(cp) for cp in result["all_results"][0]["ground_truth"]["change_points"]]
 
     except Exception as e:
         logger.error(f"Error extracting metrics: {str(e)}")
