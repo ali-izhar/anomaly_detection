@@ -179,6 +179,16 @@ def extract_metrics(result: Dict[str, Any]) -> Dict[str, float]:
                     "correlation": float(dist_analysis["correlation"]),
                 }
             )
+        else:
+            # If distribution analysis is not available, add default values
+            metrics.update(
+                {
+                    "kl_div_hist": np.nan,
+                    "kl_div_kde": np.nan,
+                    "js_div": np.nan,
+                    "correlation": np.nan,
+                }
+            )
 
         # Debug log the extracted metrics
         logger.debug(f"Extracted metrics: {metrics}")
@@ -260,7 +270,13 @@ def run_parameter_study():
             metrics = extract_metrics(result)
 
             # Store results
-            experiment_result = {**net_params, **pred_params, **det_params, **metrics}
+            experiment_result = {
+                **net_params,
+                **pred_params,
+                **det_params,
+                **metrics,
+                "distribution_analysis": result.get("distribution_analysis", {}),
+            }
             all_results.append(experiment_result)
 
             # Save intermediate results
@@ -275,6 +291,9 @@ def run_parameter_study():
                         "prediction_params": pred_params,
                         "detection_params": det_params,
                         "metrics": metrics,
+                        "distribution_analysis": result.get(
+                            "distribution_analysis", {}
+                        ),
                     },
                     f,
                     indent=4,
@@ -396,24 +415,7 @@ def analyze_results(df: pd.DataFrame):
             logger.error(f"Error analyzing parameter {param}: {str(e)}")
             continue
 
-    summary_df = pd.DataFrame(summary_table)
-
-    if not summary_df.empty:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_dir = Path("results")
-        results_dir.mkdir(exist_ok=True)
-
-        csv_path = results_dir / f"parameter_study_summary_{timestamp}.csv"
-        summary_df.to_csv(csv_path, index=False)
-        logger.info(f"Saved summary CSV to {csv_path}")
-
-        latex_path = results_dir / f"parameter_study_summary_{timestamp}.tex"
-        latex_table = summary_df.to_latex(index=False, escape=False)
-        with open(latex_path, "w") as f:
-            f.write(latex_table)
-        logger.info(f"Saved LaTeX table to {latex_path}")
-
-    return summary_df
+    return pd.DataFrame(summary_table)
 
 
 if __name__ == "__main__":

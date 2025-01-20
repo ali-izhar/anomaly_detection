@@ -185,17 +185,17 @@ def visualize_distribution_analysis(
 ) -> None:
     """Create a compact visualization of martingale distributions."""
     # Set high-quality plotting defaults
-    plt.rcParams['figure.dpi'] = 600  # High DPI for the figure
-    plt.rcParams['savefig.dpi'] = 600  # High DPI for saving
-    plt.rcParams['pdf.fonttype'] = 42  # Ensure text is exported as text, not paths
-    plt.rcParams['ps.fonttype'] = 42
-    plt.rcParams['svg.fonttype'] = 'none'
-    plt.rcParams['axes.linewidth'] = 0.5  # Thinner spines
-    plt.rcParams['lines.linewidth'] = 0.8  # Default line width
-    plt.rcParams['grid.linewidth'] = 0.5  # Thinner grid lines
-    plt.rcParams['xtick.major.width'] = 0.5  # Thinner ticks
-    plt.rcParams['ytick.major.width'] = 0.5
-    plt.rcParams['axes.unicode_minus'] = False  # Ensure proper minus signs
+    plt.rcParams["figure.dpi"] = 600  # High DPI for the figure
+    plt.rcParams["savefig.dpi"] = 600  # High DPI for saving
+    plt.rcParams["pdf.fonttype"] = 42  # Ensure text is exported as text, not paths
+    plt.rcParams["ps.fonttype"] = 42
+    plt.rcParams["svg.fonttype"] = "none"
+    plt.rcParams["axes.linewidth"] = 0.5  # Thinner spines
+    plt.rcParams["lines.linewidth"] = 0.8  # Default line width
+    plt.rcParams["grid.linewidth"] = 0.5  # Thinner grid lines
+    plt.rcParams["xtick.major.width"] = 0.5  # Thinner ticks
+    plt.rcParams["ytick.major.width"] = 0.5
+    plt.rcParams["axes.unicode_minus"] = False  # Ensure proper minus signs
 
     # Create figure with 2x1 layout (time series on top, distributions on bottom)
     fig = plt.figure(figsize=(7, 4))  # Double column width, compact height
@@ -203,7 +203,7 @@ def visualize_distribution_analysis(
 
     # 1. Time series plot (top)
     ax_time = fig.add_subplot(gs[0])
-    
+
     # Plot actual values with higher quality lines
     ax_time.plot(
         time_points_actual,
@@ -212,8 +212,8 @@ def visualize_distribution_analysis(
         color="blue",
         linewidth=0.8,
         alpha=0.8,
-        solid_capstyle='round',
-        solid_joinstyle='round',
+        solid_capstyle="round",
+        solid_joinstyle="round",
     )
     ax_time.plot(
         time_points_actual,
@@ -222,10 +222,10 @@ def visualize_distribution_analysis(
         color="green",
         linewidth=0.8,
         alpha=0.8,
-        solid_capstyle='round',
-        solid_joinstyle='round',
+        solid_capstyle="round",
+        solid_joinstyle="round",
     )
-    
+
     # Plot predicted values with higher quality lines
     ax_time.plot(
         time_points_pred,
@@ -235,8 +235,8 @@ def visualize_distribution_analysis(
         linewidth=0.8,
         linestyle="--",
         alpha=0.8,
-        dash_capstyle='round',
-        dash_joinstyle='round',
+        dash_capstyle="round",
+        dash_joinstyle="round",
     )
     ax_time.plot(
         time_points_pred,
@@ -246,22 +246,27 @@ def visualize_distribution_analysis(
         linewidth=0.8,
         linestyle="--",
         alpha=0.8,
-        dash_capstyle='round',
-        dash_joinstyle='round',
+        dash_capstyle="round",
+        dash_joinstyle="round",
     )
-    
+
     ax_time.set_title("Martingale Evolution", fontsize=8, pad=3)
     ax_time.set_xlabel("Time", fontsize=8)
     ax_time.set_ylabel("Martingale Value", fontsize=8)
-    ax_time.legend(fontsize=6, ncol=2, loc="upper right", 
-                  borderaxespad=0.1, handlelength=1.5, 
-                  columnspacing=1.0)
-    ax_time.tick_params(axis='both', which='major', labelsize=6, pad=2)
-    ax_time.grid(True, linestyle=':', alpha=0.3, linewidth=0.5)
+    ax_time.legend(
+        fontsize=6,
+        ncol=2,
+        loc="upper right",
+        borderaxespad=0.1,
+        handlelength=1.5,
+        columnspacing=1.0,
+    )
+    ax_time.tick_params(axis="both", which="major", labelsize=6, pad=2)
+    ax_time.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
 
     # 2. Combined distribution plot (bottom)
     ax_dist = fig.add_subplot(gs[1])
-    
+
     # Plot sum distributions with refined settings
     ax_dist.hist(
         actual_sum,
@@ -270,7 +275,7 @@ def visualize_distribution_analysis(
         density=True,
         label="Act. Sum",
         color="blue",
-        edgecolor='none',
+        edgecolor="none",
     )
     ax_dist.hist(
         pred_sum,
@@ -279,9 +284,9 @@ def visualize_distribution_analysis(
         density=True,
         label="Pred. Sum",
         color="orange",
-        edgecolor='none',
+        edgecolor="none",
     )
-    
+
     # Plot average distributions with different hatching
     ax_dist.hist(
         actual_avg,
@@ -291,7 +296,7 @@ def visualize_distribution_analysis(
         label="Act. Avg",
         color="green",
         hatch="//",
-        edgecolor='darkgreen',
+        edgecolor="darkgreen",
         linewidth=0.5,
     )
     ax_dist.hist(
@@ -302,38 +307,55 @@ def visualize_distribution_analysis(
         label="Pred. Avg",
         color="red",
         hatch="\\\\",
-        edgecolor='darkred',
+        edgecolor="darkred",
         linewidth=0.5,
     )
-    
+
     # Add KDE curves with refined settings
-    for data, color in [(actual_sum, "blue"), (pred_sum, "orange"), 
-                       (actual_avg, "green"), (pred_avg, "red")]:
+    for data, color in [
+        (actual_sum, "blue"),
+        (pred_sum, "orange"),
+        (actual_avg, "green"),
+        (pred_avg, "red"),
+    ]:
         kde = gaussian_kde(data)
-        x_range = np.linspace(min(data), max(data), 300)  # More points for smoother curve
-        ax_dist.plot(x_range, kde(x_range), color=color, linewidth=0.8,
-                    solid_capstyle='round', solid_joinstyle='round')
-    
+        x_range = np.linspace(
+            min(data), max(data), 300
+        )  # More points for smoother curve
+        ax_dist.plot(
+            x_range,
+            kde(x_range),
+            color=color,
+            linewidth=0.8,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+        )
+
     ax_dist.set_title("Martingale Distributions", fontsize=8, pad=3)
     ax_dist.set_xlabel("Martingale Value", fontsize=8)
     ax_dist.set_ylabel("Density", fontsize=8)
-    ax_dist.legend(fontsize=6, ncol=2, loc="upper right", 
-                  borderaxespad=0.1, handlelength=1.5, 
-                  columnspacing=1.0)
-    ax_dist.tick_params(axis='both', which='major', labelsize=6, pad=2)
-    ax_dist.grid(True, linestyle=':', alpha=0.3, linewidth=0.5)
+    ax_dist.legend(
+        fontsize=6,
+        ncol=2,
+        loc="upper right",
+        borderaxespad=0.1,
+        handlelength=1.5,
+        columnspacing=1.0,
+    )
+    ax_dist.tick_params(axis="both", which="major", labelsize=6, pad=2)
+    ax_dist.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
 
     # Ensure the figure is tight and save with high quality
     plt.tight_layout()
-    
+
     # Save with high quality settings
     plt.savefig(
         output_path,
         dpi=600,  # High DPI
         bbox_inches="tight",
         pad_inches=0.02,  # Minimal padding
-        format='png',  # Use PNG format for sharp lines
-        metadata={'Creator': 'Matplotlib'}  # Add metadata
+        format="png",  # Use PNG format for sharp lines
+        metadata={"Creator": "Matplotlib"},  # Add metadata
     )
     plt.close()
 
