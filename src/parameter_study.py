@@ -21,12 +21,12 @@ NETWORK_PARAMS = {
     "nodes": [50],  # Fixed moderate size
     "sequence_length": [100, 200],  # Fixed length for 1 change
     "min_changes": [1],  # Fixed to 1 change
-    "max_changes": [2],  # Fixed to 1 change
+    "max_changes": [3],  # Fixed to 1 change
     "min_segment": [50],  # Fixed segment length
 }
 
 PREDICTION_PARAMS = {
-    "prediction_window": [5, 10, 15],  # Two window sizes
+    "prediction_window": [5, 10],  # Two window sizes
     "min_history": [10],  # Fixed history length
 }
 
@@ -35,7 +35,7 @@ DETECTION_PARAMS = {
     "martingale_epsilon": [0.5, 0.7, 0.9],  # Two epsilon values
 }
 
-N_RUNS = 2
+N_RUNS = 20
 
 
 def generate_parameter_combinations():
