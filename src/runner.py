@@ -17,7 +17,6 @@ from graph.features import NetworkFeatureExtractor, calculate_error_metrics
 from changepoint.detector import ChangePointDetector
 from changepoint.threshold import CustomThresholdModel
 from predictor.visualizer import Visualizer
-from analysis import analyze_martingale_distributions
 
 logger = logging.getLogger(__name__)
 
@@ -145,18 +144,24 @@ class ExperimentRunner:
 
             # Find first prediction after change point
             for t in range(
-                cp,
+                cp
+                - self.config.prediction_window,  # Start earlier to account for prediction window
                 min(
-                    cp + self.config.params.min_segment,
+                    cp + self.config.params.min_segment - self.config.prediction_window,
                     len(forecast_metrics[2]["reset"]["degree"]["martingales"]),
                 ),
             ):
                 if any(
-                    m["martingales"][t - self.config.min_history]
+                    m["martingales"][
+                        t - self.config.min_history + self.config.prediction_window
+                    ]
                     > self.config.martingale_threshold
                     for m in forecast_metrics[2]["reset"].values()
                 ):
-                    delays["prediction"][cp] = {"mean": float(t - cp), "std": 0.0}
+                    delays["prediction"][cp] = {
+                        "mean": float(t - cp + self.config.prediction_window),
+                        "std": 0.0,
+                    }
                     break
 
         results = {
@@ -197,22 +202,22 @@ class ExperimentRunner:
                 "closeness": [],
             },
         }
-        
+
         aggregated_martingales = {
             "actual": {"reset": {}, "cumulative": {}},
             "predicted": {"reset": {}, "cumulative": {}},
         }
-        
+
         all_change_points = {
-            "actual": [],      # Ground truth CPs
-            "detected": [],    # CPs detected from actual features
-            "predicted": [],   # CPs predicted from predicted features
+            "actual": [],  # Ground truth CPs
+            "detected": [],  # CPs detected from actual features
+            "predicted": [],  # CPs predicted from predicted features
         }
 
         for i in range(self.config.n_runs):
             logger.info(f"\nRunning experiment {i+1}/{self.config.n_runs}")
             run_seed = base_seed + i if base_seed is not None else None
-            
+
             # Run single experiment with the current seed
             results = self._run_single(run_number=i + 1, reuse_dir=True)
             all_results.append(results)
@@ -220,16 +225,22 @@ class ExperimentRunner:
             # Collect actual features
             for feature in aggregated_features["actual"].keys():
                 actual_feature_values = [
-                    state["metrics"][f"avg_{feature}" if feature != "clustering" else feature]
-                    for state in results["graphs"][self.config.min_history:]
+                    state["metrics"][
+                        f"avg_{feature}" if feature != "clustering" else feature
+                    ]
+                    for state in results["graphs"][self.config.min_history :]
                 ]
                 predicted_feature_values = [
-                    state["metrics"][f"avg_{feature}" if feature != "clustering" else feature]
+                    state["metrics"][
+                        f"avg_{feature}" if feature != "clustering" else feature
+                    ]
                     for state in results["forecast_metrics"][0]
                 ]
-                
+
                 aggregated_features["actual"][feature].append(actual_feature_values)
-                aggregated_features["predicted"][feature].append(predicted_feature_values)
+                aggregated_features["predicted"][feature].append(
+                    predicted_feature_values
+                )
 
             # Collect martingales
             for feature in results["actual_metrics"][1]["reset"].keys():
@@ -240,27 +251,43 @@ class ExperimentRunner:
                     aggregated_martingales["predicted"]["cumulative"][feature] = []
 
                 # Get actual martingales
-                actual_reset = results["actual_metrics"][1]["reset"][feature]["martingales"]
-                actual_cumul = results["actual_metrics"][1]["cumulative"][feature]["martingales"]
-                
+                actual_reset = results["actual_metrics"][1]["reset"][feature][
+                    "martingales"
+                ]
+                actual_cumul = results["actual_metrics"][1]["cumulative"][feature][
+                    "martingales"
+                ]
+
                 # Get predicted martingales
-                pred_reset = results["forecast_metrics"][2]["reset"][feature]["martingales"]
-                pred_cumul = results["forecast_metrics"][2]["cumulative"][feature]["martingales"]
+                pred_reset = results["forecast_metrics"][2]["reset"][feature][
+                    "martingales"
+                ]
+                pred_cumul = results["forecast_metrics"][2]["cumulative"][feature][
+                    "martingales"
+                ]
 
                 # Append to aggregation lists
                 aggregated_martingales["actual"]["reset"][feature].append(actual_reset)
-                aggregated_martingales["actual"]["cumulative"][feature].append(actual_cumul)
+                aggregated_martingales["actual"]["cumulative"][feature].append(
+                    actual_cumul
+                )
                 aggregated_martingales["predicted"]["reset"][feature].append(pred_reset)
-                aggregated_martingales["predicted"]["cumulative"][feature].append(pred_cumul)
+                aggregated_martingales["predicted"]["cumulative"][feature].append(
+                    pred_cumul
+                )
 
             # Collect change points
             actual_cps = results["ground_truth"]["change_points"]
             all_change_points["actual"].append(actual_cps)
 
-            detected_cps = self._get_detected_change_points(results["actual_metrics"][1]["reset"])
+            detected_cps = self._get_detected_change_points(
+                results["actual_metrics"][1]["reset"]
+            )
             all_change_points["detected"].append(detected_cps)
 
-            predicted_cps = self._get_detected_change_points(results["forecast_metrics"][2]["reset"])
+            predicted_cps = self._get_detected_change_points(
+                results["forecast_metrics"][2]["reset"]
+            )
             all_change_points["predicted"].append(predicted_cps)
 
         # Create final aggregated results
@@ -287,7 +314,9 @@ class ExperimentRunner:
                         for feature, values in feature_data.items()
                         if values
                     }
-                    for reset_type, feature_data in aggregated_martingales["actual"].items()
+                    for reset_type, feature_data in aggregated_martingales[
+                        "actual"
+                    ].items()
                 },
                 "predicted": {
                     reset_type: {
@@ -298,24 +327,44 @@ class ExperimentRunner:
                         for feature, values in feature_data.items()
                         if values
                     }
-                    for reset_type, feature_data in aggregated_martingales["predicted"].items()
+                    for reset_type, feature_data in aggregated_martingales[
+                        "predicted"
+                    ].items()
                 },
             },
             "change_points": {
                 "actual": {
-                    "mean_count": float(np.mean([len(cps) for cps in all_change_points["actual"]])),
-                    "std_count": float(np.std([len(cps) for cps in all_change_points["actual"]])),
-                    "positions": self._aggregate_cp_positions(all_change_points["actual"]),
+                    "mean_count": float(
+                        np.mean([len(cps) for cps in all_change_points["actual"]])
+                    ),
+                    "std_count": float(
+                        np.std([len(cps) for cps in all_change_points["actual"]])
+                    ),
+                    "positions": self._aggregate_cp_positions(
+                        all_change_points["actual"]
+                    ),
                 },
                 "detected": {
-                    "mean_count": float(np.mean([len(cps) for cps in all_change_points["detected"]])),
-                    "std_count": float(np.std([len(cps) for cps in all_change_points["detected"]])),
-                    "positions": self._aggregate_cp_positions(all_change_points["detected"]),
+                    "mean_count": float(
+                        np.mean([len(cps) for cps in all_change_points["detected"]])
+                    ),
+                    "std_count": float(
+                        np.std([len(cps) for cps in all_change_points["detected"]])
+                    ),
+                    "positions": self._aggregate_cp_positions(
+                        all_change_points["detected"]
+                    ),
                 },
                 "predicted": {
-                    "mean_count": float(np.mean([len(cps) for cps in all_change_points["predicted"]])),
-                    "std_count": float(np.std([len(cps) for cps in all_change_points["predicted"]])),
-                    "positions": self._aggregate_cp_positions(all_change_points["predicted"]),
+                    "mean_count": float(
+                        np.mean([len(cps) for cps in all_change_points["predicted"]])
+                    ),
+                    "std_count": float(
+                        np.std([len(cps) for cps in all_change_points["predicted"]])
+                    ),
+                    "positions": self._aggregate_cp_positions(
+                        all_change_points["predicted"]
+                    ),
                 },
             },
         }
@@ -352,10 +401,7 @@ class ExperimentRunner:
         Returns:
             Dict containing detection and prediction delays for each CP
         """
-        delays = {
-            "detection": {},
-            "prediction": {}
-        }
+        delays = {"detection": {}, "prediction": {}}
 
         actual_times = list(time_points_actual)
         pred_times = list(time_points_pred)
@@ -363,7 +409,7 @@ class ExperimentRunner:
         for cp in change_points:
             detection_times = []
             prediction_times = []
-            
+
             # Look within window after CP
             window = self.config.params.min_segment // 2
 
@@ -392,14 +438,22 @@ class ExperimentRunner:
             # Calculate statistics
             if detection_times:
                 delays["detection"][str(cp)] = {
-                    "mean": float(np.mean(detection_times)),
-                    "std": float(np.std(detection_times)) if len(detection_times) > 1 else 0.0
+                    "mean": round(float(np.mean(detection_times)), 2),
+                    "std": (
+                        round(float(np.std(detection_times)), 2)
+                        if len(detection_times) > 1
+                        else 0.0
+                    ),
                 }
 
             if prediction_times:
                 delays["prediction"][str(cp)] = {
-                    "mean": float(np.mean(prediction_times)),
-                    "std": float(np.std(prediction_times)) if len(prediction_times) > 1 else 0.0
+                    "mean": round(float(np.mean(prediction_times)), 2),
+                    "std": (
+                        round(float(np.std(prediction_times)), 2)
+                        if len(prediction_times) > 1
+                        else 0.0
+                    ),
                 }
 
         return delays
