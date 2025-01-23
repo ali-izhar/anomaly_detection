@@ -9,50 +9,13 @@ import logging
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from predictor.weighted import WeightedPredictor
-from predictor.hybrid import (
-    BAPredictor,
-    SBMPredictor,
-    WSPredictor,
-    ERPredictor,
-)
-from src.runner import ExperimentRunner, ExperimentConfig
+from src.runner import ExperimentRunner
+from src.setup.config import ExperimentConfig
+from src.setup.prediction import GRAPH_MODELS, MODEL_PREDICTOR_RECOMMENDATIONS
 from config.graph_configs import GRAPH_CONFIGS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-#######################
-# Global Configurations
-#######################
-
-PREDICTOR_MAP = {
-    "weighted": WeightedPredictor,
-    "hybrid": {
-        "ba": BAPredictor,
-        "ws": WSPredictor,
-        "er": ERPredictor,
-        "sbm": SBMPredictor,
-    },
-}
-
-GRAPH_MODELS = {
-    "barabasi_albert": "ba",
-    "watts_strogatz": "ws",
-    "erdos_renyi": "er",
-    "stochastic_block_model": "sbm",
-    "ba": "ba",
-    "ws": "ws",
-    "er": "er",
-    "sbm": "sbm",
-}
-
-MODEL_PREDICTOR_RECOMMENDATIONS = {
-    "ba": ["weighted", "hybrid"],
-    "ws": ["weighted", "hybrid"],
-    "er": ["weighted", "hybrid"],
-    "sbm": ["weighted", "hybrid"],
-}
 
 
 def get_args():

@@ -1,96 +1,109 @@
 # src/runner.py
 
-"""Utility functions for network prediction and analysis."""
+"""Experiment runner for network prediction and analysis."""
 
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from pathlib import Path
-from dataclasses import dataclass
 import numpy as np
 import networkx as nx
 import logging
 import json
 from datetime import datetime
-import matplotlib.pyplot as plt
 
 from graph.generator import GraphGenerator
-from graph.features import NetworkFeatureExtractor, calculate_error_metrics
+from graph.features import NetworkFeatureExtractor
 from changepoint.detector import ChangePointDetector
-from changepoint.threshold import CustomThresholdModel
-from predictor.visualizer import Visualizer
+from src.setup.visualization import Visualizer
+from src.setup.metrics import MetricComputer
+from src.setup.config import (
+    ExperimentConfig,
+    OutputConfig,
+    VisualizationConfig,
+    PreprocessingConfig,
+    LoggingConfig,
+)
+from src.setup.prediction import PredictorFactory, NetworkPredictor
+from src.setup.aggregate import ResultAggregator
 
+# Setup logging
+logging.basicConfig(
+    level=getattr(logging, LoggingConfig().level),
+    format=LoggingConfig().format,
+    datefmt=LoggingConfig().date_format,
+)
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ExperimentConfig:
-    """Configuration for network experiments."""
-
-    model: str
-    params: Dict[str, Any]
-    min_history: int
-    prediction_window: int
-    martingale_threshold: float = 60.0
-    martingale_epsilon: float = 0.85
-    shap_threshold: float = 30.0
-    shap_window_size: int = 5
-    n_runs: int = 1
-    save_individual: bool = False
-    visualize_individual: bool = False
-
-
 class ExperimentRunner:
-    """Class to run network prediction and analysis experiments."""
+    """Runs network prediction and analysis experiments."""
 
     def __init__(
         self,
         config: ExperimentConfig,
-        output_dir: Optional[Path] = None,
+        output_config: Optional[OutputConfig] = None,
+        vis_config: Optional[VisualizationConfig] = None,
+        preproc_config: Optional[PreprocessingConfig] = None,
         seed: Optional[int] = None,
     ):
-        """Initialize the experiment runner.
-
-        Args:
-            config: ExperimentConfig object containing experiment parameters
-            output_dir: Optional output directory for results
-            seed: Optional random seed for reproducibility
-        """
+        """Initialize with experiment configuration."""
+        # Core config
         self.config = config
+        self.output_config = output_config or OutputConfig()
+        self.vis_config = vis_config or VisualizationConfig()
+        self.preproc_config = preproc_config or PreprocessingConfig()
         self.seed = seed
-        self.output_dir = output_dir or self._create_output_dir()
+        self.output_dir = self.output_config.output_dir or self._create_output_dir()
 
         # Initialize components
         self.generator = GraphGenerator()
         self.feature_extractor = NetworkFeatureExtractor()
         self.detector = ChangePointDetector()
+        self.metric_computer = MetricComputer(self.feature_extractor, self.detector)
+        self.visualizer = Visualizer(
+            vis_config=self.vis_config,
+            output_config=self.output_config,
+            metric_computer=self.metric_computer,
+        )
+        self.result_aggregator = ResultAggregator(
+            n_runs=self.config.n_runs,
+            min_history=self.config.min_history,
+        )
 
-        # Feature weights for martingale analysis
-        self.feature_weights = {
-            "betweenness": 1.0,  # Most reliable
-            "clustering": 0.85,  # Most consistent
-            "closeness": 0.7,  # Moderate reliability
-            "degree": 0.5,  # Least reliable
-        }
+        # Initialize predictor
+        predictor = PredictorFactory.create_predictor(
+            predictor_type=self.config.predictor_type,
+            model=self.config.model,
+            min_history=self.config.min_history,
+            prediction_window=self.config.prediction_window,
+        )
+        self.network_predictor = NetworkPredictor(
+            predictor=predictor,
+            feature_extractor=self.feature_extractor,
+            min_history=self.config.min_history,
+            prediction_window=self.config.prediction_window,
+        )
+
+        # Set feature weights from preprocessing config
+        self.feature_weights = self.preproc_config.feature_weights
 
     def _create_output_dir(self) -> Path:
-        """Create and return output directory."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        """Create timestamped output directory."""
+        timestamp = datetime.now().strftime(self.output_config.timestamp_format)
         if self.config.n_runs > 1:
-            base_dir = Path(f"results/multi_{self.config.model}_{timestamp}")
+            base_dir = Path(
+                f"{self.output_config.results_dir}/multi_{self.config.model}_{timestamp}"
+            )
         else:
-            base_dir = Path(f"results/{self.config.model}_{timestamp}")
+            base_dir = Path(
+                f"{self.output_config.results_dir}/{self.config.model}_{timestamp}"
+            )
 
         base_dir.mkdir(parents=True, exist_ok=True)
-        self.aggregated_dir = base_dir  # Use the same directory for all results
+        self.aggregated_dir = base_dir
         return base_dir
 
     def run(self) -> Dict[str, Any]:
-        """Run the experiment(s).
-
-        This is the main entry point that handles both single and multiple runs.
-
-        Returns:
-            Dict containing results (single run) or aggregated results (multiple runs)
-        """
+        """Run single or multiple experiments based on config."""
         if self.config.n_runs > 1:
             return self._run_multiple()
         else:
@@ -99,29 +112,20 @@ class ExperimentRunner:
     def _run_single(
         self, run_number: Optional[int] = None, reuse_dir: bool = False
     ) -> Dict[str, Any]:
-        """Run a single experiment.
-
-        Args:
-            run_number: Optional run number for multiple experiments
-            reuse_dir: Whether to reuse the existing output directory
-
-        Returns:
-            Dict containing experiment results
-        """
+        """Run a single experiment."""
         if self.seed is not None:
             np.random.seed(self.seed)
 
-        # Generate data
+        # Step 1: Generate synthetic network data
         graphs, ground_truth = self._generate_data()
 
-        # Initialize predictor
-        predictor = self._initialize_predictor()
-
-        # Compute metrics
+        # Step 2: Compute metrics on actual data
         actual_metrics = self._compute_actual_metrics(graphs)
-        forecast_metrics = self._compute_forecast_metrics(graphs, predictor)
 
-        # Calculate delays for each change point
+        # Step 3: Generate predictions and compute forecast metrics
+        forecast_metrics = self._compute_forecast_metrics(graphs)
+
+        # Step 4: Calculate delays for each change point
         delays = {"detection": {}, "prediction": {}}
         change_points = ground_truth["change_points"]
 
@@ -131,11 +135,11 @@ class ExperimentRunner:
                 cp,
                 min(
                     cp + self.config.params.min_segment,
-                    len(actual_metrics[1]["reset"]["degree"]["martingales"]),
+                    len(actual_metrics[1]["reset"]["degree"]["martingale_values"]),
                 ),
             ):
                 if any(
-                    m["martingales"][t - self.config.min_history]
+                    m["martingale_values"][t - self.config.min_history]
                     > self.config.martingale_threshold
                     for m in actual_metrics[1]["reset"].values()
                 ):
@@ -144,15 +148,14 @@ class ExperimentRunner:
 
             # Find first prediction after change point
             for t in range(
-                cp
-                - self.config.prediction_window,  # Start earlier to account for prediction window
+                cp - self.config.prediction_window,
                 min(
                     cp + self.config.params.min_segment - self.config.prediction_window,
-                    len(forecast_metrics[2]["reset"]["degree"]["martingales"]),
+                    len(forecast_metrics[2]["reset"]["degree"]["martingale_values"]),
                 ),
             ):
                 if any(
-                    m["martingales"][
+                    m["martingale_values"][
                         t - self.config.min_history + self.config.prediction_window
                     ]
                     > self.config.martingale_threshold
@@ -164,6 +167,7 @@ class ExperimentRunner:
                     }
                     break
 
+        # Step 5: Compile results
         results = {
             "graphs": graphs,
             "ground_truth": ground_truth,
@@ -174,933 +178,74 @@ class ExperimentRunner:
             "run_number": run_number,
         }
 
-        # Save and visualize based on flags
+        # Step 6: Save and visualize if needed
         if run_number is None or self.config.save_individual:
             self._save_results(results)
         if run_number is None or self.config.visualize_individual:
-            self.visualize_results(results)
+            self.visualizer.visualize_results(results, self.output_dir, self.config)
 
         return results
 
     def _run_multiple(self) -> Dict[str, Any]:
         """Run multiple experiments and aggregate results."""
+        # Step 1: Run multiple experiments
         all_results = []
         base_seed = self.seed if self.seed is not None else np.random.randint(0, 10000)
-
-        # Store aggregation data
-        aggregated_features = {
-            "actual": {
-                "degree": [],
-                "clustering": [],
-                "betweenness": [],
-                "closeness": [],
-            },
-            "predicted": {
-                "degree": [],
-                "clustering": [],
-                "betweenness": [],
-                "closeness": [],
-            },
-        }
-
-        aggregated_martingales = {
-            "actual": {"reset": {}, "cumulative": {}},
-            "predicted": {"reset": {}, "cumulative": {}},
-        }
-
-        all_change_points = {
-            "actual": [],  # Ground truth CPs
-            "detected": [],  # CPs detected from actual features
-            "predicted": [],  # CPs predicted from predicted features
-        }
 
         for i in range(self.config.n_runs):
             logger.info(f"\nRunning experiment {i+1}/{self.config.n_runs}")
             run_seed = base_seed + i if base_seed is not None else None
 
-            # Run single experiment with the current seed
+            # Run single experiment with current seed
             results = self._run_single(run_number=i + 1, reuse_dir=True)
             all_results.append(results)
 
-            # Collect actual features
-            for feature in aggregated_features["actual"].keys():
-                actual_feature_values = [
-                    state["metrics"][
-                        f"avg_{feature}" if feature != "clustering" else feature
-                    ]
-                    for state in results["graphs"][self.config.min_history :]
-                ]
-                predicted_feature_values = [
-                    state["metrics"][
-                        f"avg_{feature}" if feature != "clustering" else feature
-                    ]
-                    for state in results["forecast_metrics"][0]
-                ]
+        # Step 2: Aggregate results
+        aggregated = self.result_aggregator.aggregate_results(all_results)
 
-                aggregated_features["actual"][feature].append(actual_feature_values)
-                aggregated_features["predicted"][feature].append(
-                    predicted_feature_values
-                )
-
-            # Collect martingales
-            for feature in results["actual_metrics"][1]["reset"].keys():
-                if feature not in aggregated_martingales["actual"]["reset"]:
-                    aggregated_martingales["actual"]["reset"][feature] = []
-                    aggregated_martingales["actual"]["cumulative"][feature] = []
-                    aggregated_martingales["predicted"]["reset"][feature] = []
-                    aggregated_martingales["predicted"]["cumulative"][feature] = []
-
-                # Get actual martingales
-                actual_reset = results["actual_metrics"][1]["reset"][feature][
-                    "martingales"
-                ]
-                actual_cumul = results["actual_metrics"][1]["cumulative"][feature][
-                    "martingales"
-                ]
-
-                # Get predicted martingales
-                pred_reset = results["forecast_metrics"][2]["reset"][feature][
-                    "martingales"
-                ]
-                pred_cumul = results["forecast_metrics"][2]["cumulative"][feature][
-                    "martingales"
-                ]
-
-                # Append to aggregation lists
-                aggregated_martingales["actual"]["reset"][feature].append(actual_reset)
-                aggregated_martingales["actual"]["cumulative"][feature].append(
-                    actual_cumul
-                )
-                aggregated_martingales["predicted"]["reset"][feature].append(pred_reset)
-                aggregated_martingales["predicted"]["cumulative"][feature].append(
-                    pred_cumul
-                )
-
-            # Collect change points
-            actual_cps = results["ground_truth"]["change_points"]
-            all_change_points["actual"].append(actual_cps)
-
-            detected_cps = self._get_detected_change_points(
-                results["actual_metrics"][1]["reset"]
-            )
-            all_change_points["detected"].append(detected_cps)
-
-            predicted_cps = self._get_detected_change_points(
-                results["forecast_metrics"][2]["reset"]
-            )
-            all_change_points["predicted"].append(predicted_cps)
-
-        # Create final aggregated results
-        aggregated = {
-            "n_runs": self.config.n_runs,
-            "all_results": all_results,
-            "features": {
-                "actual": {
-                    feature: np.mean(values, axis=0).tolist()
-                    for feature, values in aggregated_features["actual"].items()
-                },
-                "predicted": {
-                    feature: np.mean(values, axis=0).tolist()
-                    for feature, values in aggregated_features["predicted"].items()
-                },
-            },
-            "martingales": {
-                "actual": {
-                    reset_type: {
-                        feature: {
-                            "martingales": self._safe_aggregate_values(values, "mean"),
-                            "std": self._safe_aggregate_values(values, "std"),
-                        }
-                        for feature, values in feature_data.items()
-                        if values
-                    }
-                    for reset_type, feature_data in aggregated_martingales[
-                        "actual"
-                    ].items()
-                },
-                "predicted": {
-                    reset_type: {
-                        feature: {
-                            "martingales": self._safe_aggregate_values(values, "mean"),
-                            "std": self._safe_aggregate_values(values, "std"),
-                        }
-                        for feature, values in feature_data.items()
-                        if values
-                    }
-                    for reset_type, feature_data in aggregated_martingales[
-                        "predicted"
-                    ].items()
-                },
-            },
-            "change_points": {
-                "actual": {
-                    "mean_count": float(
-                        np.mean([len(cps) for cps in all_change_points["actual"]])
-                    ),
-                    "std_count": float(
-                        np.std([len(cps) for cps in all_change_points["actual"]])
-                    ),
-                    "positions": self._aggregate_cp_positions(
-                        all_change_points["actual"]
-                    ),
-                },
-                "detected": {
-                    "mean_count": float(
-                        np.mean([len(cps) for cps in all_change_points["detected"]])
-                    ),
-                    "std_count": float(
-                        np.std([len(cps) for cps in all_change_points["detected"]])
-                    ),
-                    "positions": self._aggregate_cp_positions(
-                        all_change_points["detected"]
-                    ),
-                },
-                "predicted": {
-                    "mean_count": float(
-                        np.mean([len(cps) for cps in all_change_points["predicted"]])
-                    ),
-                    "std_count": float(
-                        np.std([len(cps) for cps in all_change_points["predicted"]])
-                    ),
-                    "positions": self._aggregate_cp_positions(
-                        all_change_points["predicted"]
-                    ),
-                },
-            },
-        }
+        # Step 3: Save and visualize aggregated results
+        self.result_aggregator.save_aggregated_results(aggregated, self.output_dir)
+        self.visualizer.visualize_aggregated_results(
+            aggregated, self.output_dir, self.config
+        )
 
         return aggregated
 
     def _get_detected_change_points(self, martingales: Dict[str, Dict]) -> List[int]:
-        """Get unique change points detected across all features."""
+        """Extract unique change points detected across features."""
         all_cps = []
         for feature_data in martingales.values():
             if "change_detected_instant" in feature_data:
                 all_cps.extend(feature_data["change_detected_instant"])
         return sorted(list(set(all_cps)))
 
-    def _calculate_cp_delays(
-        self,
-        actual_sum: np.ndarray,
-        pred_sum: np.ndarray,
-        time_points_actual: range,
-        time_points_pred: range,
-        change_points: Dict[int, float],
-        threshold: float,
-    ) -> Dict[str, Dict[int, Dict[str, float]]]:
-        """Calculate delays based on threshold crossings for each change point.
-
-        Args:
-            actual_sum: Array of actual sum martingale values
-            pred_sum: Array of predicted sum martingale values
-            time_points_actual: Range of timesteps for actual values
-            time_points_pred: Range of timesteps for predicted values
-            change_points: Dict mapping change points to their frequencies
-            threshold: Martingale threshold value
-
-        Returns:
-            Dict containing detection and prediction delays for each CP
-        """
-        delays = {"detection": {}, "prediction": {}}
-
-        actual_times = list(time_points_actual)
-        pred_times = list(time_points_pred)
-
-        for cp in change_points:
-            detection_times = []
-            prediction_times = []
-
-            # Look within window after CP
-            window = self.config.params.min_segment // 2
-
-            # For actual detections
-            try:
-                cp_idx = actual_times.index(cp)
-                window_end = min(cp_idx + window, len(actual_sum))
-                for i in range(cp_idx, window_end):
-                    if actual_sum[i] > threshold:
-                        detection_times.append(actual_times[i] - cp)
-                        break
-            except ValueError:
-                pass
-
-            # For predictions
-            try:
-                cp_idx = pred_times.index(cp)
-                window_end = min(cp_idx + window, len(pred_sum))
-                for i in range(cp_idx, window_end):
-                    if pred_sum[i] > threshold:
-                        prediction_times.append(pred_times[i] - cp)
-                        break
-            except ValueError:
-                pass
-
-            # Calculate statistics
-            if detection_times:
-                delays["detection"][str(cp)] = {
-                    "mean": round(float(np.mean(detection_times)), 2),
-                    "std": (
-                        round(float(np.std(detection_times)), 2)
-                        if len(detection_times) > 1
-                        else 0.0
-                    ),
-                }
-
-            if prediction_times:
-                delays["prediction"][str(cp)] = {
-                    "mean": round(float(np.mean(prediction_times)), 2),
-                    "std": (
-                        round(float(np.std(prediction_times)), 2)
-                        if len(prediction_times) > 1
-                        else 0.0
-                    ),
-                }
-
-        return delays
-
-    def _create_aggregated_results(
-        self,
-        all_results: List[Dict],
-        aggregated_features: Dict,
-        aggregated_martingales: Dict,
-        all_change_points: Dict,
-        earliest_delays: Dict,
-        delays_per_cp: Dict[str, Dict[int, List[float]]],
-    ) -> Dict[str, Any]:
-        """Create final aggregated results with averages and statistics."""
-        # Average features
-        avg_features = {
-            "actual": {
-                feature: np.mean(values, axis=0).tolist()
-                for feature, values in aggregated_features["actual"].items()
-            },
-            "predicted": {
-                feature: np.mean(values, axis=0).tolist()
-                for feature, values in aggregated_features["predicted"].items()
-            },
-        }
-
-        # Average martingales
-        avg_martingales = {
-            "actual": {
-                reset_type: {
-                    feature: {
-                        "martingales": self._safe_aggregate_values(values, "mean"),
-                        "std": self._safe_aggregate_values(values, "std"),
-                    }
-                    for feature, values in feature_data.items()
-                    if values  # Only process features with data
-                }
-                for reset_type, feature_data in aggregated_martingales["actual"].items()
-            },
-            "predicted": {
-                reset_type: {
-                    feature: {
-                        "martingales": self._safe_aggregate_values(values, "mean"),
-                        "std": self._safe_aggregate_values(values, "std"),
-                    }
-                    for feature, values in feature_data.items()
-                    if values  # Only process features with data
-                }
-                for reset_type, feature_data in aggregated_martingales[
-                    "predicted"
-                ].items()
-            },
-        }
-
-        # Change point statistics
-        cp_stats = {
-            "actual": {
-                "mean_count": float(
-                    np.mean([len(cps) for cps in all_change_points["actual"]])
-                ),
-                "std_count": float(
-                    np.std([len(cps) for cps in all_change_points["actual"]])
-                ),
-                "positions": self._aggregate_cp_positions(all_change_points["actual"]),
-            },
-            "detected": {
-                "mean_count": float(
-                    np.mean([len(cps) for cps in all_change_points["detected"]])
-                ),
-                "std_count": float(
-                    np.std([len(cps) for cps in all_change_points["detected"]])
-                ),
-                "positions": self._aggregate_cp_positions(
-                    all_change_points["detected"]
-                ),
-            },
-            "predicted": {
-                "mean_count": float(
-                    np.mean([len(cps) for cps in all_change_points["predicted"]])
-                ),
-                "std_count": float(
-                    np.std([len(cps) for cps in all_change_points["predicted"]])
-                ),
-                "positions": self._aggregate_cp_positions(
-                    all_change_points["predicted"]
-                ),
-            },
-        }
-
-        return {
-            "n_runs": self.config.n_runs,
-            "features": avg_features,
-            "martingales": avg_martingales,
-            "change_points": cp_stats,
-            "config": self.config,
-        }
-
-    def _safe_aggregate_values(
-        self, values: List[Any], operation: str
-    ) -> Union[float, List[float]]:
-        """Safely aggregate values handling both single values and arrays."""
-        if not values:
-            return None
-
-        # Debug log input values
-        logger.debug(f"\nAggregating values for operation {operation}")
-        logger.debug(f"Input values type: {type(values)}")
-        logger.debug(f"First value type: {type(values[0]) if values else 'None'}")
-
-        # Convert values to numpy array
-        try:
-            # Convert each value to float first if they're arrays
-            if isinstance(values[0], (list, np.ndarray)):
-                # Make sure all arrays have the same length
-                first_len = len(values[0])
-                if not all(len(x) == first_len for x in values):
-                    logger.error("Arrays have different lengths")
-                    return None
-                # Convert to 2D array
-                arr = np.array(values, dtype=float)
-            else:
-                arr = np.array(values, dtype=float)
-
-            logger.debug(f"Converted array shape: {arr.shape}")
-            logger.debug(f"Array data type: {arr.dtype}")
-        except Exception as e:
-            logger.error(f"Could not convert values to array: {e}")
-            logger.debug(f"Problematic values: {values}")
-            return None
-
-        # Handle single values vs arrays
-        try:
-            if arr.ndim == 1:
-                logger.debug("Processing as 1D array (single values)")
-                if operation == "mean":
-                    result = float(np.mean(arr))
-                else:  # std
-                    result = float(np.std(arr))
-                logger.debug(f"Result: {result}")
-                return result
-            else:
-                logger.debug(f"Processing as {arr.ndim}D array")
-                if operation == "mean":
-                    result = np.mean(arr, axis=0)
-                else:  # std
-                    # Compute std along axis 0 (across runs)
-                    result = np.std(
-                        arr, axis=0, ddof=1
-                    )  # Use ddof=1 for sample standard deviation
-                logger.debug(f"Result shape: {result.shape}")
-                return result.tolist()
-        except Exception as e:
-            logger.error(f"Error in computation: {e}")
-            return None
-
-    def _aggregate_cp_positions(self, cp_lists: List[List[int]]) -> Dict[int, float]:
-        """Aggregate change point positions across runs into a frequency map."""
-        all_positions = []
-        for cps in cp_lists:
-            all_positions.extend(cps)
-
-        unique_positions = sorted(set(all_positions))
-        return {
-            pos: all_positions.count(pos) / len(cp_lists) for pos in unique_positions
-        }
-
-    def _visualize_aggregated_results(self, aggregated: Dict[str, Any]):
-        """Visualize aggregated results from multiple runs."""
-        # 1. Feature evolution plots (2x2 grid)
-        plt.figure(figsize=(3.3, 3.3))  # Single column width
-        gs = plt.GridSpec(2, 2, hspace=0.4, wspace=0.4)
-
-        for i, feature in enumerate(aggregated["features"]["actual"].keys()):
-            ax = plt.subplot(gs[i // 2, i % 2])
-
-            # Create proper time indices starting from min_history
-            time_points = range(
-                self.config.min_history,
-                self.config.min_history
-                + len(aggregated["features"]["actual"][feature]),
-            )
-
-            # Calculate metrics
-            actual = np.array(aggregated["features"]["actual"][feature])
-            predicted = np.array(aggregated["features"]["predicted"][feature])
-            mae = np.mean(np.abs(actual - predicted))
-            rmse = np.sqrt(np.mean((actual - predicted) ** 2))
-
-            plt.plot(
-                time_points,
-                actual,
-                label="Actual",
-                linewidth=0.8,
-                color="blue",
-                alpha=0.8,
-                solid_capstyle="round",
-                solid_joinstyle="round",
-            )
-            plt.plot(
-                time_points,  # Use same time points for predicted values
-                predicted,
-                label="Predicted",
-                linewidth=0.8,
-                color="orange",
-                alpha=0.8,
-                solid_capstyle="round",
-                solid_joinstyle="round",
-            )
-
-            # Add change point marker explanation with more visible color
-            plt.plot(
-                [],
-                [],
-                "r--",
-                alpha=0.5,
-                label="Change Point",
-                linewidth=0.8,
-                color="red",
-            )
-
-            # Add metrics to legend with smaller font - now as separate entries
-            plt.plot([], [], " ", label=f"MAE = {mae:.3f}")
-            plt.plot([], [], " ", label=f"RMSE = {rmse:.3f}")
-
-            # Add title with more concise format - include Avg. for all features
-            title = f"Avg. {feature.capitalize()}"
-            plt.title(title, fontsize=8, pad=3)
-
-            # Only show x-axis label and ticks for bottom plots
-            if (
-                list(aggregated["features"]["actual"].keys()).index(feature) >= 2
-            ):  # Bottom row
-                plt.xlabel("Time", fontsize=8)
-            else:  # Top row
-                plt.xlabel("")
-                ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
-
-            # Set x-axis ticks at increments of 50 and extend to 200
-            plt.xticks(np.arange(0, 201, 50))
-            plt.xlim(0, 200)
-
-            # Remove redundant y-axis labels since they're in the title
-            plt.ylabel("")
-
-            # Dynamically determine legend placement based on data density
-            ymin, ymax = plt.ylim()
-            xmin, xmax = plt.xlim()
-            data = np.array([actual, predicted])
-
-            # Calculate data density in different regions
-            regions = {
-                "upper right": np.sum(
-                    (
-                        data[:, int(0.75 * len(time_points)) :]
-                        > (ymin + 0.75 * (ymax - ymin))
-                    ).any(axis=0)
-                ),
-                "upper left": np.sum(
-                    (
-                        data[:, : int(0.25 * len(time_points))]
-                        > (ymin + 0.75 * (ymax - ymin))
-                    ).any(axis=0)
-                ),
-                "lower right": np.sum(
-                    (
-                        data[:, int(0.75 * len(time_points)) :]
-                        < (ymin + 0.25 * (ymax - ymin))
-                    ).any(axis=0)
-                ),
-                "lower left": np.sum(
-                    (
-                        data[:, : int(0.25 * len(time_points))]
-                        < (ymin + 0.25 * (ymax - ymin))
-                    ).any(axis=0)
-                ),
-            }
-
-            # Choose the region with least data density
-            best_loc = min(regions.items(), key=lambda x: x[1])[0]
-
-            plt.legend(
-                fontsize=5,  # Reduced from 6 to 5
-                ncol=1,
-                loc=best_loc,
-                borderaxespad=0.1,
-                handlelength=1.0,  # Reduced from 1.5
-                columnspacing=0.8,  # Reduced from 1.0
-            )
-
-            plt.tick_params(axis="both", which="major", labelsize=6, pad=2)
-            plt.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-            # Add change point frequencies as vertical lines - keeping exact positions
-            for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-                plt.axvline(
-                    x=pos,  # Use exact position from positions dictionary
-                    color="r",
-                    alpha=freq * 0.5,
-                    linestyle="--",
-                    linewidth=0.5,
-                )
-
-        plt.tight_layout()
-        plt.savefig(
-            self.aggregated_dir / "aggregated_features.png",
-            dpi=600,
-            bbox_inches="tight",
-            pad_inches=0.02,
-            format="png",
-            metadata={"Creator": "Matplotlib"},
+    def _compute_actual_metrics(self, graphs: List[Dict[str, Any]]) -> tuple:
+        """Compute metrics on actual network data."""
+        metrics = self.metric_computer.compute_metrics(
+            graphs=graphs[self.config.min_history :],
+            min_history=self.config.min_history,
+            martingale_threshold=self.config.martingale_threshold,
+            martingale_epsilon=self.config.martingale_epsilon,
+            shap_threshold=self.config.shap_threshold,
+            shap_window_size=self.config.shap_window_size,
         )
-        plt.close()
+        return metrics.features, metrics.martingales, metrics.shap_values
 
-        # Calculate proper time indices for actual and predicted values
-        time_points_actual = range(
-            self.config.min_history,
-            self.config.min_history
-            + len(
-                aggregated["martingales"]["actual"]["reset"]["degree"]["martingales"]
-            ),
+    def _compute_forecast_metrics(self, graphs: List[Dict[str, Any]]) -> tuple:
+        """Generate predictions and compute forecast metrics."""
+        predictions = self.network_predictor.generate_predictions(graphs)
+        metrics = self.metric_computer.compute_metrics(
+            graphs=predictions,
+            min_history=self.config.min_history,
+            martingale_threshold=self.config.martingale_threshold,
+            martingale_epsilon=self.config.martingale_epsilon,
+            shap_threshold=self.config.shap_threshold,
+            shap_window_size=self.config.shap_window_size,
         )
-        time_points_pred = range(
-            self.config.min_history - self.config.prediction_window,
-            self.config.min_history
-            - self.config.prediction_window
-            + len(
-                aggregated["martingales"]["predicted"]["reset"]["degree"]["martingales"]
-            ),
-        )
-
-        # Calculate sum and average of martingales across features
-        features = ["degree", "clustering", "betweenness", "closeness"]
-        actual_sum = np.zeros(len(time_points_actual))
-        actual_sum_std = np.zeros(len(time_points_actual))
-        pred_sum = np.zeros(len(time_points_pred))
-        pred_sum_std = np.zeros(len(time_points_pred))
-
-        # Calculate sums and averages
-        for feature in features:
-            if feature in aggregated["martingales"]["actual"]["reset"]:
-                # Add to sum for actual
-                actual_mart = np.array(
-                    aggregated["martingales"]["actual"]["reset"][feature]["martingales"]
-                )
-                actual_std = np.array(
-                    aggregated["martingales"]["actual"]["reset"][feature]["std"]
-                )
-                actual_sum += actual_mart
-                actual_sum_std += actual_std**2  # Add variances
-
-                # Add to sum for predicted
-                pred_mart = np.array(
-                    aggregated["martingales"]["predicted"]["reset"][feature][
-                        "martingales"
-                    ]
-                )
-                pred_std = np.array(
-                    aggregated["martingales"]["predicted"]["reset"][feature]["std"]
-                )
-                pred_sum += pred_mart
-                pred_sum_std += pred_std**2  # Add variances
-
-        # Calculate averages
-        actual_avg = actual_sum / len(features)
-        actual_avg_std = np.sqrt(actual_sum_std) / len(features)
-        pred_avg = pred_sum / len(features)
-        pred_avg_std = np.sqrt(pred_sum_std) / len(features)
-
-        # Calculate delays
-        delays = self._calculate_cp_delays(
-            actual_sum=actual_sum,
-            pred_sum=pred_sum,
-            time_points_actual=time_points_actual,
-            time_points_pred=time_points_pred,
-            change_points=aggregated["change_points"]["actual"]["positions"],
-            threshold=self.config.martingale_threshold,
-        )
-
-        # 1. Main plot (Sum and Average)
-        fig_main = plt.figure(figsize=(3.3, 2.5))  # Single column width
-        ax_main = fig_main.add_subplot(111)
-
-        # Plot actual and predicted sums with thinner lines
-        ax_main.plot(
-            time_points_actual,
-            actual_sum,
-            label="Sum Mart.",
-            color="blue",
-            linestyle="-",
-            linewidth=0.8,
-            alpha=0.8,
-            solid_capstyle="round",
-            solid_joinstyle="round",
-        )
-        ax_main.fill_between(
-            time_points_actual,
-            actual_sum - np.sqrt(actual_sum_std),
-            actual_sum + np.sqrt(actual_sum_std),
-            color="blue",
-            alpha=0.1,
-        )
-        ax_main.plot(
-            time_points_pred,
-            pred_sum,
-            label="Pred. Sum",
-            color="orange",
-            linestyle="-",
-            linewidth=0.8,
-            alpha=0.8,
-            solid_capstyle="round",
-            solid_joinstyle="round",
-        )
-        ax_main.fill_between(
-            time_points_pred,
-            pred_sum - np.sqrt(pred_sum_std),
-            pred_sum + np.sqrt(pred_sum_std),
-            color="orange",
-            alpha=0.1,
-        )
-
-        # Plot averages with different colors and thinner lines
-        ax_main.plot(
-            time_points_actual,
-            actual_avg,
-            label="Avg Mart.",
-            color="#2ecc71",
-            linestyle="--",
-            linewidth=0.8,
-            alpha=0.8,
-            dash_capstyle="round",
-            dash_joinstyle="round",
-        )
-        ax_main.fill_between(
-            time_points_actual,
-            actual_avg - actual_avg_std,
-            actual_avg + actual_avg_std,
-            color="#2ecc71",
-            alpha=0.1,
-        )
-        ax_main.plot(
-            time_points_pred,
-            pred_avg,
-            label="Pred. Avg",
-            color="#9b59b6",
-            linestyle="--",
-            linewidth=0.8,
-            alpha=0.8,
-            dash_capstyle="round",
-            dash_joinstyle="round",
-        )
-        ax_main.fill_between(
-            time_points_pred,
-            pred_avg - pred_avg_std,
-            pred_avg + pred_avg_std,
-            color="#9b59b6",
-            alpha=0.1,
-        )
-
-        # Add change points with thinner lines
-        for pos, freq in aggregated["change_points"]["actual"]["positions"].items():
-            ax_main.axvline(
-                x=int(pos),
-                color="r",  # Change point line in red
-                alpha=freq * 0.5,
-                linestyle="--",
-                linewidth=0.5,
-            )
-
-        # Reorganized delay annotations - place them to the left of change points
-        for cp in delays["detection"].keys():
-            if cp in delays["prediction"]:
-                det_delay = delays["detection"][cp]
-                pred_delay = delays["prediction"][cp]
-
-                # Base vertical positions for annotations - just above threshold
-                base_y = (
-                    self.config.martingale_threshold * 1.1
-                )  # Changed from 1.5 to 1.1
-                spacing = (
-                    self.config.martingale_threshold * 0.15
-                )  # Changed from 0.3 to 0.15
-
-                # Detection delay (top) - now with curved arrow like prediction
-                ax_main.annotate(
-                    f'd:{det_delay["mean"]:.1f}',
-                    xy=(cp + det_delay["mean"], base_y),
-                    xytext=(cp - 20, base_y + spacing),
-                    arrowprops=dict(
-                        arrowstyle="->",
-                        color="blue",
-                        connectionstyle="arc3,rad=-0.2",
-                        linewidth=0.5,
-                        shrinkA=0,
-                        shrinkB=0,
-                    ),
-                    color="blue",
-                    fontsize=6,
-                    ha="right",
-                    va="bottom",
-                )
-
-                # Prediction delay (bottom) - keep existing curved arrow
-                ax_main.annotate(
-                    f'p:{pred_delay["mean"]:.1f}',
-                    xy=(cp + pred_delay["mean"], base_y),
-                    xytext=(cp - 20, base_y),
-                    arrowprops=dict(
-                        arrowstyle="->",
-                        color="orange",
-                        connectionstyle="arc3,rad=-0.2",
-                        linewidth=0.5,
-                        shrinkA=0,
-                        shrinkB=0,
-                    ),
-                    color="orange",
-                    fontsize=6,
-                    ha="right",
-                    va="top",
-                )
-
-        # Add threshold line with different color (pink/coral)
-        ax_main.axhline(
-            y=self.config.martingale_threshold,
-            color="#FF7F7F",  # Light coral color for threshold
-            linestyle="--",
-            alpha=0.5,
-            linewidth=0.8,
-            label="Threshold",
-            dash_capstyle="round",
-        )
-
-        ax_main.set_xlabel("Time", fontsize=8)
-        ax_main.set_ylabel("Martingale Value", fontsize=8)
-        ax_main.legend(fontsize=6, ncol=2, loc="upper right", bbox_to_anchor=(1.0, 1.0))
-        ax_main.tick_params(axis="both", which="major", labelsize=6, pad=2)
-        ax_main.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-        plt.tight_layout()
-        plt.savefig(
-            self.aggregated_dir / "aggregated_martingales_main.png",
-            dpi=600,
-            bbox_inches="tight",
-            pad_inches=0.02,
-            format="png",
-            metadata={"Creator": "Matplotlib"},
-        )
-        plt.close()
-
-        # 2. Individual feature plots (2x2 grid)
-        fig_features = plt.figure(figsize=(3.3, 3.3))  # Single column width
-        gs = plt.GridSpec(2, 2, figure=fig_features, hspace=0.4, wspace=0.4)
-
-        for i, feature in enumerate(features):
-            if feature in aggregated["martingales"]["actual"]["reset"]:
-                ax = fig_features.add_subplot(gs[i // 2, i % 2])
-
-                # Plot actual martingales with thinner lines
-                actual_mart = aggregated["martingales"]["actual"]["reset"][feature][
-                    "martingales"
-                ]
-                actual_std = aggregated["martingales"]["actual"]["reset"][feature][
-                    "std"
-                ]
-                ax.plot(
-                    time_points_actual,
-                    actual_mart,
-                    label="Act.",
-                    color="blue",
-                    linewidth=0.8,
-                    alpha=0.8,
-                    solid_capstyle="round",
-                    solid_joinstyle="round",
-                )
-                ax.fill_between(
-                    time_points_actual,
-                    [m - s for m, s in zip(actual_mart, actual_std)],
-                    [m + s for m, s in zip(actual_mart, actual_std)],
-                    color="blue",
-                    alpha=0.2,
-                )
-
-                # Plot predicted martingales with thinner lines
-                pred_mart = aggregated["martingales"]["predicted"]["reset"][feature][
-                    "martingales"
-                ]
-                pred_std = aggregated["martingales"]["predicted"]["reset"][feature][
-                    "std"
-                ]
-                ax.plot(
-                    time_points_pred,
-                    pred_mart,
-                    label="Pred.",
-                    color="orange",
-                    linewidth=0.8,
-                    alpha=0.8,
-                    solid_capstyle="round",
-                    solid_joinstyle="round",
-                )
-                ax.fill_between(
-                    time_points_pred,
-                    [m - s for m, s in zip(pred_mart, pred_std)],
-                    [m + s for m, s in zip(pred_mart, pred_std)],
-                    color="orange",
-                    alpha=0.2,
-                )
-
-                # Add change points with thinner lines
-                for pos, freq in aggregated["change_points"]["actual"][
-                    "positions"
-                ].items():
-                    ax.axvline(
-                        x=int(pos),
-                        color="r",
-                        alpha=freq * 0.5,
-                        linestyle="--",
-                        linewidth=0.5,
-                    )
-
-                ax.set_title(feature.capitalize(), fontsize=8, pad=3)
-
-                # Only show x-axis label for bottom plots
-                if i >= 2:  # Bottom row
-                    ax.set_xlabel("Time", fontsize=6)
-                else:  # Top row
-                    ax.set_xlabel("")
-                    ax.set_xticklabels([])  # Hide x-axis tick labels for top plots
-
-                ax.set_ylabel("Mart. Value", fontsize=6)
-                ax.legend(fontsize=5, ncol=2, loc="upper right")
-                ax.tick_params(axis="both", which="major", labelsize=5, pad=2)
-                ax.grid(True, linestyle=":", alpha=0.3, linewidth=0.5)
-
-        plt.savefig(
-            self.aggregated_dir / "aggregated_martingales_features.png",
-            dpi=600,
-            bbox_inches="tight",
-            pad_inches=0.02,
-            format="png",
-            metadata={"Creator": "Matplotlib"},
-        )
-        plt.close()
-
-        # Reset rcParams to default
-        plt.rcdefaults()
+        return predictions, metrics.features, metrics.martingales, metrics.shap_values
 
     def _generate_data(self) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """Generate synthetic network data."""
+        """Generate synthetic network data sequence."""
         logger.info(f"Generating {self.config.model} network time series...")
         result = self.generator.generate_sequence(
             model=self.config.model, params=self.config.params, seed=self.seed
@@ -1143,75 +288,64 @@ class ExperimentRunner:
 
         return network_states, ground_truth
 
-    def _initialize_predictor(self):
-        """Initialize the appropriate predictor based on configuration.
+    def compute_network_features(
+        self, graphs: List[Dict[str, Any]]
+    ) -> Dict[str, np.ndarray]:
+        """Compute network features for analysis."""
+        return self.metric_computer.compute_network_features(graphs)
 
-        Returns:
-            Initialized predictor object
-        """
-        from predictor.weighted import WeightedPredictor
-        from predictor.hybrid import (
-            BAPredictor,
-            SBMPredictor,
-            WSPredictor,
-            ERPredictor,
+    def analyze_results(
+        self,
+        results: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Analyze prediction accuracy across different phases."""
+        return self.metric_computer.analyze_results(
+            results=results,
+            min_history=self.config.min_history,
         )
 
-        PREDICTOR_MAP = {
-            "weighted": WeightedPredictor,
-            "hybrid": {
-                "ba": BAPredictor,
-                "ws": WSPredictor,
-                "er": ERPredictor,
-                "sbm": SBMPredictor,
-            },
-        }
+    def compute_martingales(
+        self,
+        features: Dict[str, np.ndarray],
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Compute martingales for network features."""
+        return self.metric_computer.compute_martingales(
+            features=features,
+            threshold=self.config.martingale_threshold,
+            epsilon=self.config.martingale_epsilon,
+        )
 
-        if not hasattr(self.config, "predictor_type"):
-            # Default to weighted predictor if not specified
-            logger.info("No predictor type specified, using weighted predictor")
-            return WeightedPredictor()
+    def compute_shap_values(
+        self,
+        martingales: Dict[str, Dict[str, Dict[str, Any]]],
+        features: Dict[str, np.ndarray],
+    ) -> np.ndarray:
+        """Compute SHAP values for martingale analysis."""
+        return self.metric_computer.compute_shap_values(
+            martingales=martingales,
+            features=features,
+            threshold=self.config.shap_threshold,
+            window_size=self.config.shap_window_size,
+        )
 
-        if self.config.predictor_type == "weighted":
-            return WeightedPredictor()
-        elif self.config.predictor_type == "hybrid":
-            # Get the appropriate hybrid predictor for the model type
-            predictor_class = PREDICTOR_MAP["hybrid"].get(self.config.model)
-            if predictor_class is None:
-                raise ValueError(
-                    f"No hybrid predictor available for model type {self.config.model}"
-                )
-            return predictor_class(config=self.config)
-        else:
-            raise ValueError(f"Unknown predictor type: {self.config.predictor_type}")
-
-    def _compute_actual_metrics(self, graphs: List[Dict[str, Any]]) -> tuple:
-        """Compute actual network metrics."""
-        features = self.compute_network_features(graphs[self.config.min_history :])
-        martingales = self.compute_martingales(features)
-        shap_values = self.compute_shap_values(martingales, features)
-        return features, martingales, shap_values
-
-    def _compute_forecast_metrics(
-        self, graphs: List[Dict[str, Any]], predictor
-    ) -> tuple:
-        """Compute forecasting metrics."""
-        predictions = self.generate_predictions(graphs, predictor)
-        features = self.compute_network_features(predictions)
-        martingales = self.compute_martingales(features)
-        shap_values = self.compute_shap_values(martingales, features)
-        return predictions, features, martingales, shap_values
+    def visualize_results(self, results: Dict[str, Any]):
+        """Generate visualizations for results."""
+        self.visualizer.visualize_results(results, self.output_dir, self.config)
 
     def _save_results(self, results: Dict[str, Any]):
-        """Save individual experiment results."""
+        """Save experiment results."""
         if not self.output_dir:
             return
 
         try:
             serializable_data = {
                 "model": self.config.model,
-                "parameters": self._convert_to_serializable(self.config),
-                "ground_truth": self._convert_to_serializable(results["ground_truth"]),
+                "parameters": self.result_aggregator._convert_to_serializable(
+                    self.config
+                ),
+                "ground_truth": self.result_aggregator._convert_to_serializable(
+                    results["ground_truth"]
+                ),
                 "seed": self.seed,
             }
 
@@ -1240,348 +374,3 @@ class ExperimentRunner:
             )
             with open(error_path, "w") as f:
                 json.dump(simple_data, f, indent=4)
-
-    def _save_aggregated_results(self, aggregated: Dict[str, Any]):
-        """Save aggregated results from multiple runs."""
-        try:
-            with open(self.aggregated_dir / "aggregated_results.json", "w") as f:
-                json.dump(self._convert_to_serializable(aggregated), f, indent=4)
-        except Exception as e:
-            logger.error(f"Error saving aggregated results: {e}")
-            # Save basic information if there's an error
-            with open(self.aggregated_dir / "aggregated_results_error.json", "w") as f:
-                json.dump(
-                    {"error": str(e), "n_runs": aggregated.get("n_runs", None)},
-                    f,
-                    indent=4,
-                )
-
-    @staticmethod
-    def _convert_to_serializable(obj: Any) -> Any:
-        """Convert numpy types and custom objects to Python native types for JSON serialization."""
-        if obj is None:
-            return None
-        elif isinstance(
-            obj,
-            (
-                np.int_,
-                np.intc,
-                np.intp,
-                np.int8,
-                np.int16,
-                np.int32,
-                np.int64,
-                np.uint8,
-                np.uint16,
-                np.uint32,
-                np.uint64,
-            ),
-        ):
-            return int(obj)
-        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-            return float(obj)
-        elif isinstance(obj, (np.ndarray,)):
-            return obj.tolist()
-        elif isinstance(obj, (np.bool_)):
-            return bool(obj)
-        elif isinstance(obj, (datetime, Path)):
-            return str(obj)
-        elif hasattr(obj, "__dict__"):  # Handle custom classes and dataclasses
-            return {
-                key: ExperimentRunner._convert_to_serializable(value)
-                for key, value in obj.__dict__.items()
-                if not key.startswith("_")  # Skip private attributes
-            }
-        elif isinstance(obj, dict):
-            return {
-                str(key): ExperimentRunner._convert_to_serializable(value)
-                for key, value in obj.items()
-            }
-        elif isinstance(obj, (list, tuple)):
-            return [ExperimentRunner._convert_to_serializable(item) for item in obj]
-        elif isinstance(obj, set):
-            return [ExperimentRunner._convert_to_serializable(item) for item in obj]
-        elif hasattr(obj, "tolist"):  # Handle other array-like objects
-            return obj.tolist()
-        elif hasattr(obj, "__str__"):  # Fallback for other objects
-            return str(obj)
-        return obj
-
-    def generate_predictions(
-        self,
-        network_series: List[Dict[str, Any]],
-        predictor: Any,
-    ) -> List[Dict[str, Any]]:
-        """Generate predictions using the given predictor.
-
-        Args:
-            network_series: List of network states
-            predictor: Network predictor object
-
-        Returns:
-            List of prediction results
-        """
-        predictions = []
-        seq_len = len(network_series)  # Get sequence length from input data
-
-        for t in range(self.config.min_history, seq_len):
-            history = network_series[:t]
-            predicted_adjs = predictor.predict(
-                history, horizon=self.config.prediction_window
-            )
-
-            pred_graph = nx.from_numpy_array(predicted_adjs[0])
-            predictions.append(
-                {
-                    "time": t,
-                    "adjacency": predicted_adjs[0],
-                    "graph": pred_graph,
-                    "metrics": self.feature_extractor.get_all_metrics(
-                        pred_graph
-                    ).__dict__,
-                    "history_size": len(history),
-                }
-            )
-
-        return predictions
-
-    def compute_network_features(
-        self, graphs: List[Dict[str, Any]]
-    ) -> Dict[str, np.ndarray]:
-        """Compute network features for analysis.
-
-        Args:
-            graphs: List of network states
-
-        Returns:
-            Dict of computed features
-        """
-        features = {
-            "degree": [],
-            "clustering": [],
-            "betweenness": [],
-            "closeness": [],
-        }
-
-        for state in graphs:
-            G = state["graph"]
-            metrics = self.feature_extractor.get_all_metrics(G)
-            features["degree"].append(metrics.avg_degree)
-            features["clustering"].append(metrics.clustering)
-            features["betweenness"].append(metrics.avg_betweenness)
-            features["closeness"].append(metrics.avg_closeness)
-
-        return {k: np.array(v) for k, v in features.items()}
-
-    def analyze_results(
-        self,
-        results: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Analyze prediction accuracy across different phases.
-
-        Args:
-            results: Dict containing experiment results
-
-        Returns:
-            Dict containing analysis results
-        """
-        if not results["forecast_metrics"]:
-            logger.warning("No forecast metrics to analyze")
-            return {"phases": {}, "error": "No data to analyze"}
-
-        # Define phases
-        total_predictions = len(results["forecast_metrics"])
-        if total_predictions < 3:
-            phases = [(0, total_predictions, "All predictions")]
-        else:
-            third = total_predictions // 3
-            phases = [
-                (0, third, "First third"),
-                (third, 2 * third, "Middle third"),
-                (2 * third, None, "Last third"),
-            ]
-
-        results = {"phases": {}}
-
-        # Analyze each phase
-        for start, end, phase_name in phases:
-            logger.info(f"\nAnalyzing {phase_name}:")
-            phase_predictions = results["forecast_metrics"][start:end]
-            phase_actuals = results["graphs"][
-                self.config.min_history
-                + start : self.config.min_history
-                + (end if end else len(results["forecast_metrics"]))
-            ]
-
-            # Calculate errors
-            all_errors = []
-            for pred, actual in zip(phase_predictions, phase_actuals):
-                pred_metrics = self.feature_extractor.get_all_metrics(
-                    pred["graph"]
-                ).__dict__
-                actual_metrics = self.feature_extractor.get_all_metrics(
-                    actual["graph"]
-                ).__dict__
-                all_errors.append(calculate_error_metrics(actual_metrics, pred_metrics))
-
-            if not all_errors:
-                logger.warning(f"No errors calculated for {phase_name}")
-                continue
-
-            # Average errors
-            avg_errors = {
-                metric: np.mean([e[metric] for e in all_errors])
-                for metric in all_errors[0].keys()
-            }
-
-            results["phases"][phase_name] = {
-                "start": start,
-                "end": end,
-                "errors": avg_errors,
-            }
-
-            for metric, error in avg_errors.items():
-                logger.info(f"Average MAE for {metric}: {error:.3f}")
-
-        return results
-
-    def compute_martingales(
-        self,
-        features: Dict[str, np.ndarray],
-    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """Compute martingales for network features.
-
-        Args:
-            features: Dict of network features
-
-        Returns:
-            Dict containing martingale analysis results
-        """
-        martingales = {"reset": {}, "cumulative": {}}
-
-        for feature_name, feature_data in features.items():
-            weight = self.feature_weights.get(feature_name, 1.0)
-            adjusted_threshold = self.config.martingale_threshold / weight
-
-            # Reset martingales
-            reset_results = self.detector.detect_changes(
-                data=feature_data.reshape(-1, 1),
-                threshold=adjusted_threshold,
-                epsilon=self.config.martingale_epsilon,
-                reset=True,
-            )
-
-            weighted_martingales = reset_results["martingale_values"] * weight
-            martingales["reset"][feature_name] = {
-                "martingales": weighted_martingales,
-                "change_detected_instant": reset_results["change_points"],
-                "weight": weight,
-                "adjusted_threshold": adjusted_threshold,
-            }
-
-            # Cumulative martingales
-            cumul_results = self.detector.detect_changes(
-                data=feature_data.reshape(-1, 1),
-                threshold=adjusted_threshold,
-                epsilon=self.config.martingale_epsilon,
-                reset=False,
-            )
-
-            weighted_cumul_martingales = cumul_results["martingale_values"] * weight
-            martingales["cumulative"][feature_name] = {
-                "martingales": weighted_cumul_martingales,
-                "change_detected_instant": cumul_results["change_points"],
-                "weight": weight,
-                "adjusted_threshold": adjusted_threshold,
-            }
-
-        return martingales
-
-    def compute_shap_values(
-        self,
-        martingales: Dict[str, Dict[str, Dict[str, Any]]],
-        features: Dict[str, np.ndarray],
-    ) -> np.ndarray:
-        """Compute SHAP values for martingale analysis.
-
-        Args:
-            martingales: Dict of martingale results
-            features: Dict of network features
-
-        Returns:
-            numpy array of SHAP values
-        """
-        model = CustomThresholdModel(threshold=self.config.shap_threshold)
-
-        feature_matrix = np.column_stack(
-            [
-                martingales["reset"][feature]["martingales"]
-                for feature in features.keys()
-            ]
-        )
-
-        change_points = sorted(
-            list(
-                set(
-                    cp
-                    for m in martingales["reset"].values()
-                    for cp in m["change_detected_instant"]
-                )
-            )
-        )
-
-        return model.compute_shap_values(
-            X=feature_matrix,
-            change_points=change_points,
-            sequence_length=len(feature_matrix),
-            window_size=self.config.shap_window_size,
-        )
-
-    def visualize_results(self, results: Dict[str, Any]):
-        """Generate visualizations for the results."""
-        visualizer = Visualizer()
-
-        # 1. Metric evolution
-        plt.figure(figsize=(3.3, 2.5))  # Single column width
-        visualizer.plot_metric_evolution(
-            results["graphs"],
-            results["forecast_metrics"][0],  # predictions
-            self.config.min_history,
-            model_type=self.config.model,
-            change_points=results["ground_truth"]["change_points"],
-        )
-        plt.savefig(
-            self.output_dir / "metric_evolution.png", dpi=300, bbox_inches="tight"
-        )
-        plt.close()
-
-        # 2. Performance extremes
-        plt.figure(figsize=(7, 5))  # Double column width for this complex plot
-        visualizer.plot_performance_extremes(
-            results["graphs"][
-                self.config.min_history : self.config.min_history
-                + len(results["forecast_metrics"][0])
-            ],
-            results["forecast_metrics"][0],
-            min_history=self.config.min_history,
-            model_type=self.config.model,
-            change_points=results["ground_truth"]["change_points"],
-        )
-        plt.savefig(
-            self.output_dir / "performance_extremes.png", dpi=300, bbox_inches="tight"
-        )
-        plt.close()
-
-        # 3. Martingale comparison dashboard
-        visualizer.create_martingale_comparison_dashboard(
-            network_series=results["graphs"],
-            actual_martingales=results["actual_metrics"][1],
-            pred_martingales=results["forecast_metrics"][2],
-            actual_shap=results["actual_metrics"][2],
-            pred_shap=results["forecast_metrics"][3],
-            output_path=self.output_dir / "martingale_comparison_dashboard.png",
-            threshold=self.config.martingale_threshold,
-            epsilon=self.config.martingale_epsilon,
-            change_points=results["ground_truth"]["change_points"],
-            prediction_window=self.config.prediction_window,
-        )
