@@ -135,11 +135,14 @@ class ExperimentRunner:
                 cp,
                 min(
                     cp + self.config.params.min_segment,
-                    len(actual_metrics[1]["reset"]["degree"]["martingale_values"]),
+                    len(actual_metrics[1]["reset"]["degree"]["martingale_values"])
+                    + 20,  # Add 20 for initial padding
                 ),
             ):
                 if any(
-                    m["martingale_values"][t - self.config.min_history]
+                    m["martingale_values"][
+                        t - 20
+                    ]  # Subtract 20 to account for initial padding
                     > self.config.martingale_threshold
                     for m in actual_metrics[1]["reset"].values()
                 ):
@@ -151,13 +154,14 @@ class ExperimentRunner:
                 cp - self.config.prediction_window,
                 min(
                     cp + self.config.params.min_segment - self.config.prediction_window,
-                    len(forecast_metrics[2]["reset"]["degree"]["martingale_values"]),
+                    len(forecast_metrics[2]["reset"]["degree"]["martingale_values"])
+                    + 10,  # Add 10 for final padding
                 ),
             ):
                 if any(
                     m["martingale_values"][
-                        t - self.config.min_history + self.config.prediction_window
-                    ]
+                        t - self.config.min_history * 2
+                    ]  # Double min_history offset
                     > self.config.martingale_threshold
                     for m in forecast_metrics[2]["reset"].values()
                 ):

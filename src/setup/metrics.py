@@ -100,15 +100,16 @@ class MetricComputer:
         features: Dict[str, np.ndarray],
         threshold: float,
         window_size: int,
-    ) -> np.ndarray:
+    ) -> Dict[str, Dict[str, Any]]:
         """Compute SHAP values for feature importance."""
         model = CustomThresholdModel(threshold=threshold)
 
         # Step 1: Create feature matrix
+        feature_names = list(features.keys())
         feature_matrix = np.column_stack(
             [
                 martingales["reset"][feature]["martingale_values"]
-                for feature in features.keys()
+                for feature in feature_names
             ]
         )
 
@@ -124,12 +125,23 @@ class MetricComputer:
         )
 
         # Step 3: Compute SHAP values
-        return model.compute_shap_values(
+        shap_values = model.compute_shap_values(
             X=feature_matrix,
             change_points=change_points,
             sequence_length=len(feature_matrix),
             window_size=window_size,
         )
+
+        # Step 4: Structure SHAP values by feature
+        result = {}
+        for i, feature in enumerate(feature_names):
+            result[feature] = {
+                "values": shap_values[:, i].tolist(),
+                "mean": float(np.mean(shap_values[:, i])),
+                "std": float(np.std(shap_values[:, i])),
+            }
+
+        return result
 
     def compute_metrics(
         self,

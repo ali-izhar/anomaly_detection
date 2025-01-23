@@ -25,13 +25,13 @@ class ExperimentConfig:
     prediction_window: int  # Number of steps to predict ahead
 
     # Change point detection parameters
-    martingale_threshold: float = 100.0  # Threshold for martingale-based detection
+    martingale_threshold: float = 60.0  # Threshold for martingale-based detection
     martingale_epsilon: float = 0.7  # Epsilon parameter for martingale calculation
-    shap_threshold: float = 100.0  # Threshold for SHAP value significance
+    shap_threshold: float = 60.0  # Threshold for SHAP value significance
     shap_window_size: int = 5  # Window size for SHAP value calculation
 
     # Experiment run parameters
-    n_runs: int = 5  # Number of experiment runs
+    n_runs: int = 2  # Number of experiment runs
     save_individual: bool = False  # Whether to save individual run results
     visualize_individual: bool = False  # Whether to visualize individual run results
 

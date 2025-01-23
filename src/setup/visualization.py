@@ -31,6 +31,7 @@ class Visualizer:
         self.vis_config = vis_config or VisualizationConfig()
         self.output_config = output_config or OutputConfig()
         self.metric_computer = metric_computer
+        plt.style.use("seaborn-v0_8-paper")
 
     def visualize_results(
         self,
@@ -89,6 +90,13 @@ class Visualizer:
             prediction_window=config.prediction_window,
         )
         plt.rcdefaults()
+
+        # Step 4: Plot SHAP values
+        self._plot_shap_values(
+            results["actual_metrics"][2],
+            results["forecast_metrics"][3],
+            output_dir,
+        )
 
     def visualize_aggregated_results(
         self,
@@ -160,6 +168,16 @@ class Visualizer:
             output_dir,
         )
 
+        # Step 6: Plot SHAP values time series
+        if "shap_values" in aggregated:
+            self._plot_shap_time_series(
+                aggregated["shap_values"]["actual"],
+                aggregated["shap_values"]["predicted"],
+                output_dir,
+            )
+        else:
+            logger.warning("No SHAP values available in aggregated results")
+
     def _set_plot_style(self):
         """Set matplotlib plot style parameters."""
         plt.rcParams.update(
@@ -207,9 +225,18 @@ class Visualizer:
             ]
         )
 
-        # Both actual and predicted martingales start from min_history
-        time_points_actual = range(config.min_history, config.min_history + actual_len)
-        time_points_pred = range(config.min_history, config.min_history + pred_len)
+        # Actual martingales: start from 0 (first 20 points are 1s)
+        time_points_actual = range(
+            0,  # Start from 0 to show initial ones
+            actual_len + 20,  # Add 20 to account for initial padding
+        )
+
+        # Predicted martingales: shift right by min_history to show predictions between change points and detections
+        time_points_pred = range(
+            config.min_history
+            * 2,  # Start from 2*min_history to shift predictions right
+            config.min_history * 2 + pred_len + 10,
+        )
 
         return time_points_actual, time_points_pred
 
@@ -221,10 +248,24 @@ class Visualizer:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Calculate sums of martingales across features."""
         features = ["degree", "clustering", "betweenness", "closeness"]
-        actual_sum = np.zeros(len(time_points_actual))
+
+        # Initialize arrays with ones for padding
+        actual_sum = np.ones(len(time_points_actual))
         actual_sum_std = np.zeros(len(time_points_actual))
-        pred_sum = np.zeros(len(time_points_pred))
+        pred_sum = np.ones(len(time_points_pred))
         pred_sum_std = np.zeros(len(time_points_pred))
+
+        # Calculate start and end indices for actual values
+        actual_start_idx = 20  # First 20 points are ones
+        actual_end_idx = len(time_points_actual)
+
+        # Calculate start and end indices for predicted values
+        pred_start_idx = 0
+        pred_end_idx = len(time_points_pred) - 10  # Last 10 points are ones
+
+        # Reset the summed regions to zero before adding feature values
+        actual_sum[actual_start_idx:actual_end_idx] = 0
+        pred_sum[pred_start_idx:pred_end_idx] = 0
 
         for feature in features:
             if feature in aggregated["martingale_values"]["actual"]["reset"]:
@@ -236,8 +277,8 @@ class Visualizer:
                 actual_std = np.array(
                     aggregated["martingale_values"]["actual"]["reset"][feature]["std"]
                 )
-                actual_sum += actual_mart
-                actual_sum_std += actual_std**2
+                actual_sum[actual_start_idx:actual_end_idx] += actual_mart
+                actual_sum_std[actual_start_idx:actual_end_idx] += actual_std**2
 
                 pred_mart = np.array(
                     aggregated["martingale_values"]["predicted"]["reset"][feature][
@@ -249,8 +290,8 @@ class Visualizer:
                         "std"
                     ]
                 )
-                pred_sum += pred_mart
-                pred_sum_std += pred_std**2
+                pred_sum[pred_start_idx:pred_end_idx] += pred_mart
+                pred_sum_std[pred_start_idx:pred_end_idx] += pred_std**2
 
         return actual_sum, actual_sum_std, pred_sum, pred_sum_std
 
@@ -608,26 +649,31 @@ class Visualizer:
         output_dir: Path,
     ):
         """Plot individual feature martingales."""
-        fig = plt.figure(
+        plt.figure(
             figsize=(self.vis_config.single_column_width, self.vis_config.grid_height)
         )
         gs = plt.GridSpec(
             2,
             2,
-            figure=fig,
             hspace=self.vis_config.grid_spacing,
             wspace=self.vis_config.grid_spacing,
         )
 
         for i, feature in enumerate(features):
             if feature in martingales["actual"]["reset"]:
-                ax = fig.add_subplot(gs[i // 2, i % 2])
+                ax = plt.subplot(gs[i // 2, i % 2])
 
-                # Plot actual martingales
-                actual_mart = martingales["actual"]["reset"][feature][
+                # Create padded arrays for actual martingales
+                actual_mart = np.ones(len(time_points_actual))
+                actual_std = np.zeros(len(time_points_actual))
+                mart_values = martingales["actual"]["reset"][feature][
                     "martingale_values"
                 ]
-                actual_std = martingales["actual"]["reset"][feature]["std"]
+                std_values = martingales["actual"]["reset"][feature]["std"]
+                actual_mart[20 : 20 + len(mart_values)] = mart_values
+                actual_std[20 : 20 + len(std_values)] = std_values
+
+                # Plot actual martingales
                 ax.plot(
                     time_points_actual,
                     actual_mart,
@@ -638,17 +684,23 @@ class Visualizer:
                 )
                 ax.fill_between(
                     time_points_actual,
-                    [m - s for m, s in zip(actual_mart, actual_std)],
-                    [m + s for m, s in zip(actual_mart, actual_std)],
+                    actual_mart - actual_std,
+                    actual_mart + actual_std,
                     color=self.vis_config.colors["actual"],
                     alpha=0.2,
                 )
 
-                # Plot predicted martingales
-                pred_mart = martingales["predicted"]["reset"][feature][
+                # Create padded arrays for predicted martingales
+                pred_mart = np.ones(len(time_points_pred))
+                pred_std = np.zeros(len(time_points_pred))
+                mart_values = martingales["predicted"]["reset"][feature][
                     "martingale_values"
                 ]
-                pred_std = martingales["predicted"]["reset"][feature]["std"]
+                std_values = martingales["predicted"]["reset"][feature]["std"]
+                pred_mart[: len(mart_values)] = mart_values
+                pred_std[: len(std_values)] = std_values
+
+                # Plot predicted martingales
                 ax.plot(
                     time_points_pred,
                     pred_mart,
@@ -659,8 +711,8 @@ class Visualizer:
                 )
                 ax.fill_between(
                     time_points_pred,
-                    [m - s for m, s in zip(pred_mart, pred_std)],
-                    [m + s for m, s in zip(pred_mart, pred_std)],
+                    pred_mart - pred_std,
+                    pred_mart + pred_std,
                     color=self.vis_config.colors["predicted"],
                     alpha=0.2,
                 )
@@ -686,12 +738,161 @@ class Visualizer:
 
                 ax.set_ylabel("Mart. Value", fontsize=self.vis_config.label_size)
                 ax.legend(
-                    fontsize=self.vis_config.legend_size, ncol=2, loc="upper right"
+                    fontsize=self.vis_config.legend_size,
+                    ncol=2,
+                    loc="upper right",
+                    borderaxespad=0.1,
+                    handlelength=1.0,
+                    columnspacing=0.8,
                 )
                 ax.tick_params(
-                    axis="both", which="major", labelsize=self.vis_config.tick_size
+                    axis="both",
+                    which="major",
+                    labelsize=self.vis_config.tick_size,
+                    pad=2,
                 )
-                ax.grid(True, linestyle=":", alpha=self.vis_config.grid_alpha)
+                ax.grid(
+                    True,
+                    linestyle=":",
+                    alpha=self.vis_config.grid_alpha,
+                    linewidth=self.vis_config.grid_width,
+                )
+                ax.set_xlim(0, 200)
+                ax.set_xticks(np.arange(0, 201, 50))
 
         plt.gcf().set_constrained_layout(True)
         self._save_figure(output_dir / "aggregated_martingales_features.png")
+
+    def _plot_shap_time_series(
+        self,
+        actual_shap: Dict[str, Dict[str, Any]],
+        predicted_shap: Dict[str, Dict[str, Any]],
+        output_dir: Path,
+    ):
+        """Plot SHAP values over time."""
+        # Create output directory if it doesn't exist
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create figure with compact research paper dimensions
+        fig = plt.figure(
+            figsize=(self.vis_config.single_column_width, self.vis_config.grid_height)
+        )
+        gs = plt.GridSpec(
+            2,
+            1,
+            hspace=self.vis_config.grid_spacing,
+        )
+
+        # Calculate time points similar to martingales
+        actual_len = len(next(iter(actual_shap.values()))["values"])
+        pred_len = len(next(iter(predicted_shap.values()))["values"])
+
+        # Actual SHAP: start from 0 (first 20 points are 1s)
+        time_points_actual = range(0, actual_len + 20)
+
+        # Predicted SHAP: shift right by min_history
+        time_points_pred = range(10, 10 + pred_len)
+
+        # Plot actual SHAP values
+        ax_actual_shap = fig.add_subplot(gs[0])
+        self._plot_feature_shap_values(
+            ax_actual_shap,
+            actual_shap,
+            time_points_actual,
+            "Actual",
+            change_points=[50, 150],
+            show_legend=True,
+        )
+
+        # Plot predicted SHAP values
+        ax_pred_shap = fig.add_subplot(gs[1])
+        self._plot_feature_shap_values(
+            ax_pred_shap,
+            predicted_shap,
+            time_points_pred,
+            "Predicted",
+            change_points=[50, 150],
+            show_legend=False,
+        )
+
+        plt.gcf().set_constrained_layout(True)
+        self._save_figure(output_dir / "shap_time_series.png")
+
+    def _plot_feature_shap_values(
+        self, ax, shap_values, time_points, title, change_points=None, show_legend=False
+    ):
+        """Plot SHAP values for each feature over time."""
+        features = ["degree", "clustering", "betweenness", "closeness"]
+        colors = plt.cm.tab10(np.linspace(0, 1, len(features)))
+
+        # Plot SHAP values for each feature
+        for idx, feature in enumerate(features):
+            if feature in shap_values:
+                values = np.ones(len(time_points))  # Initialize with ones
+                feature_values = shap_values[feature]["values"]
+
+                if len(time_points) > len(feature_values):
+                    # For actual values: place after initial padding
+                    values[20 : 20 + len(feature_values)] = feature_values
+                else:
+                    # For predicted values: place at start
+                    values[: len(feature_values)] = feature_values
+
+                ax.plot(
+                    time_points,
+                    values,
+                    label=feature.capitalize(),
+                    color=colors[idx],
+                    linewidth=self.vis_config.line_width,
+                    alpha=self.vis_config.line_alpha,
+                )
+
+        # Add change point indicators if provided
+        if change_points:
+            for cp in change_points:
+                ax.axvline(
+                    x=cp,
+                    color=self.vis_config.colors["change_point"],
+                    linestyle="--",
+                    alpha=0.3,
+                    linewidth=self.vis_config.grid_width,
+                )
+
+        # Add title in top left corner
+        ax.text(
+            0.02,
+            0.95,
+            title,
+            transform=ax.transAxes,
+            fontsize=self.vis_config.legend_size,
+            ha="left",
+            va="top",
+        )
+
+        # Only show x-axis label on bottom plot (Predicted)
+        if title == "Predicted":
+            ax.set_xlabel("Time", fontsize=self.vis_config.label_size)
+        else:
+            ax.set_xlabel("")
+
+        if show_legend:
+            ax.legend(
+                fontsize=self.vis_config.legend_size,
+                ncol=2,
+                loc="upper right",
+                borderaxespad=0.1,
+                handlelength=1.0,
+                columnspacing=0.8,
+            )
+
+        ax.grid(
+            True,
+            alpha=self.vis_config.grid_alpha,
+            linestyle=":",
+            linewidth=self.vis_config.grid_width,
+        )
+        ax.tick_params(
+            axis="both", which="major", labelsize=self.vis_config.tick_size, pad=2
+        )
+        ax.set_xlim(0, 200)
+        ax.set_xticks(np.arange(0, 201, 50))

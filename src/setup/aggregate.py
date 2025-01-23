@@ -272,12 +272,58 @@ class ResultAggregator:
             },
         }
 
+        # Step 5: Aggregate SHAP values
+        shap_values = {"actual": {}, "predicted": {}}
+        features = ["degree", "clustering", "betweenness", "closeness"]
+
+        for feature in features:
+            # Collect actual SHAP values
+            actual_shaps = []
+            actual_means = []
+            actual_stds = []
+            for result in all_results:
+                if (
+                    result["actual_metrics"][2]
+                    and feature in result["actual_metrics"][2]
+                ):
+                    actual_shaps.extend(result["actual_metrics"][2][feature]["values"])
+                    actual_means.append(result["actual_metrics"][2][feature]["mean"])
+                    actual_stds.append(result["actual_metrics"][2][feature]["std"])
+
+            if actual_shaps:
+                shap_values["actual"][feature] = {
+                    "values": actual_shaps,
+                    "mean": float(np.mean(actual_means)),
+                    "std": float(np.mean(actual_stds)),  # Average of per-run stds
+                }
+
+            # Collect predicted SHAP values
+            pred_shaps = []
+            pred_means = []
+            pred_stds = []
+            for result in all_results:
+                if (
+                    result["forecast_metrics"][3]
+                    and feature in result["forecast_metrics"][3]
+                ):
+                    pred_shaps.extend(result["forecast_metrics"][3][feature]["values"])
+                    pred_means.append(result["forecast_metrics"][3][feature]["mean"])
+                    pred_stds.append(result["forecast_metrics"][3][feature]["std"])
+
+            if pred_shaps:
+                shap_values["predicted"][feature] = {
+                    "values": pred_shaps,
+                    "mean": float(np.mean(pred_means)),
+                    "std": float(np.mean(pred_stds)),  # Average of per-run stds
+                }
+
         return {
             "n_runs": self.n_runs,
             "features": avg_features,
             "martingale_values": avg_martingales,
             "change_points": cp_stats,
             "delays": delay_stats,
+            "shap_values": shap_values,
         }
 
     def _safe_aggregate_values(
@@ -329,16 +375,27 @@ class ResultAggregator:
     def save_aggregated_results(self, aggregated: Dict[str, Any], output_dir: Path):
         """Save aggregated results to file."""
         try:
+            # Ensure output directory exists
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save main results
             with open(output_dir / "aggregated_results.json", "w") as f:
                 json.dump(self._convert_to_serializable(aggregated), f, indent=4)
         except Exception as e:
             logger.error(f"Error saving aggregated results: {e}")
-            with open(output_dir / "aggregated_results_error.json", "w") as f:
-                json.dump(
-                    {"error": str(e), "n_runs": aggregated.get("n_runs", None)},
-                    f,
-                    indent=4,
-                )
+            try:
+                # Ensure output directory exists for error file
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save error information
+                with open(output_dir / "aggregated_results_error.json", "w") as f:
+                    json.dump(
+                        {"error": str(e), "n_runs": aggregated.get("n_runs", None)},
+                        f,
+                        indent=4,
+                    )
+            except Exception as e2:
+                logger.error(f"Failed to save error information: {e2}")
 
     @staticmethod
     def _convert_to_serializable(obj: Any) -> Any:
