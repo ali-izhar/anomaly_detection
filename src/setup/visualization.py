@@ -207,11 +207,9 @@ class Visualizer:
             ]
         )
 
+        # Both actual and predicted martingales start from min_history
         time_points_actual = range(config.min_history, config.min_history + actual_len)
-        time_points_pred = range(
-            config.min_history - config.prediction_window,
-            config.min_history - config.prediction_window + pred_len,
-        )
+        time_points_pred = range(config.min_history, config.min_history + pred_len)
 
         return time_points_actual, time_points_pred
 
