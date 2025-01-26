@@ -124,16 +124,16 @@ class MartingaleVisualizer:
 
         # Plot individual martingales
         for (name, results), color in zip(martingales.items(), self.colors):
-            martingales = np.array(
+            martingale_values = np.array(
                 [
                     x.item() if isinstance(x, np.ndarray) else x
                     for x in results["martingales"]
                 ]
             )
             ax.plot(
-                martingales,
+                martingale_values,
                 color=color,
-                label=name.capitalize(),
+                label=name.replace("_", " ").title(),
                 linewidth=1.5,
                 alpha=0.6,
             )
@@ -192,7 +192,7 @@ class MartingaleVisualizer:
         for i, name in enumerate(self.martingales.keys()):
             ax.plot(
                 self.shap_values[:, i],
-                label=name.capitalize(),
+                label=name.replace("_", " ").title(),
                 color=self.colors[i],
                 linewidth=1.5,
                 alpha=0.7,
@@ -205,7 +205,13 @@ class MartingaleVisualizer:
         ax.set_title("SHAP Values Over Time", fontsize=12, pad=10)
         ax.set_xlabel("Time Steps", fontsize=10)
         ax.set_ylabel("Feature Importance", fontsize=10)
-        ax.legend(fontsize=8, ncol=2, title="Features")
+        ax.legend(
+            fontsize=8,
+            ncol=2,
+            title="Features",
+            bbox_to_anchor=(1.05, 1),
+            loc="upper left",
+        )
         ax.grid(True, alpha=0.3)
 
     def _plot_feature_importance(self, ax: plt.Axes) -> None:
@@ -226,7 +232,7 @@ class MartingaleVisualizer:
             vmin=vmin,
             vmax=vmax,
             xticklabels=50,
-            yticklabels=[name.capitalize() for name in feature_names],
+            yticklabels=[name.replace("_", " ").title() for name in feature_names],
             cbar_kws={
                 "label": "SHAP Value",
                 "orientation": "horizontal",

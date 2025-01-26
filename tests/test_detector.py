@@ -191,6 +191,7 @@ def visualize_results(
     features_raw: list,
     true_change_points: list,
     detected_change_points: list,
+    feature_results: dict,
     output_dir: str = "test_results",
 ):
     """Create visualizations of network states and features at key points.
@@ -201,6 +202,7 @@ def visualize_results(
         features_raw: List of raw feature dictionaries
         true_change_points: List of true change point indices
         detected_change_points: List of detected change point indices
+        feature_results: Dictionary of detection results for each feature
         output_dir: Directory to save visualizations
     """
     os.makedirs(output_dir, exist_ok=True)
@@ -344,21 +346,36 @@ def visualize_results(
                 linewidth=viz.LINE_WIDTH * 0.8,
             )
 
-        # Add detected change points as orange dots
-        for cp in detected_change_points:
-            if isinstance(features_raw[0][feature_name], list):
-                y_val = mean_values[cp]
-            else:
-                y_val = features_raw[cp][feature_name]
-            ax.plot(
-                cp,
-                y_val,
-                "o",
-                color="orange",
-                markersize=4,
-                alpha=0.8,
-                markeredgewidth=1,
-            )
+        # Add feature-specific detected change points as orange dots
+        # Map feature names to their detection result keys
+        feature_mapping = {
+            "degrees": "degree",
+            "density": "density",
+            "clustering": "clustering",
+            "betweenness": "betweenness",
+            "eigenvector": "eigenvector",
+            "closeness": "closeness",
+            "singular_values": "singular_value",
+            "laplacian_eigenvalues": "laplacian",
+        }
+
+        feature_key = feature_mapping.get(feature_name)
+        if feature_key and feature_key in feature_results:
+            feature_cps = feature_results[feature_key]["change_points"]
+            for cp in feature_cps:
+                if isinstance(features_raw[0][feature_name], list):
+                    y_val = mean_values[cp]
+                else:
+                    y_val = features_raw[cp][feature_name]
+                ax.plot(
+                    cp,
+                    y_val,
+                    "o",
+                    color="orange",
+                    markersize=6,  # Increased size for better visibility
+                    alpha=0.8,
+                    markeredgewidth=1,
+                )
 
         # Set title and labels
         ax.set_title(
@@ -371,7 +388,7 @@ def visualize_results(
 
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
-        + "True Change Points (Red), Detected Change Points (Orange)",
+        + "True Change Points (Red), Feature-Specific Detected Change Points (Orange)",
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
@@ -432,15 +449,38 @@ def run_change_detection(
         "Running change detection with threshold=%f, epsilon=%f", threshold, epsilon
     )
 
-    # 5. Run the detector
-    results = cpd.detect_changes(
-        data=data,
-        threshold=threshold,
-        epsilon=epsilon,
-        reset=True,  # Reset history + martingale after detection
-        max_window=None,  # Use all historical data
-        random_state=42,  # Fix seed for reproducibility
-    )
+    # 5. Run the detector on each feature separately
+    feature_names = [
+        "degree",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_value",
+        "laplacian",
+    ]
+
+    # Store individual feature results
+    feature_results = {}
+    all_detected_points = set()
+
+    # Run detector on each feature
+    for i, feature_name in enumerate(feature_names):
+        feature_data = data[:, i : i + 1]  # Keep 2D shape
+        feature_result = cpd.detect_changes(
+            data=feature_data,
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=True,
+            max_window=None,
+            random_state=42,
+        )
+        feature_results[feature_name] = feature_result
+        all_detected_points.update(feature_result["change_points"])
+
+    # Combine detected points and sort
+    combined_change_points = sorted(list(all_detected_points))
 
     # 6. Print results and compare with true change points
     print(
@@ -458,15 +498,20 @@ def run_change_detection(
     print("- Smallest non-zero Laplacian eigenvalue")
 
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points: {results['change_points']}")
+    print(f"Detected change points (combined): {combined_change_points}")
+
+    # Print individual feature detections
+    print("\nDetections by feature:")
+    for feature_name, result in feature_results.items():
+        print(f"- {feature_name}: {result['change_points']}")
 
     # Calculate detection accuracy
-    if true_change_points and results["change_points"]:
+    if true_change_points and combined_change_points:
         # Simple metric: for each true change point, find the closest detected point
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
-                results["change_points"], key=lambda x: abs(x - true_cp)
+                combined_change_points, key=lambda x: abs(x - true_cp)
             )
             error = abs(closest_detected - true_cp)
             errors.append(error)
@@ -486,28 +531,19 @@ def run_change_detection(
         graphs=graphs,
         features_raw=features_raw,
         true_change_points=true_change_points,
-        detected_change_points=results["change_points"],
+        detected_change_points=combined_change_points,
+        feature_results=feature_results,
         output_dir=output_dir,
     )
 
     # Prepare feature martingales for visualization
-    feature_names = [
-        "degree",
-        "density",
-        "clustering",
-        "betweenness",
-        "eigenvector",
-        "closeness",
-        "singular_value",
-        "laplacian",
-    ]
     feature_martingales = {
         name: {
             "martingales": results["martingales"],
             "p_values": results["p_values"],
             "strangeness": results["strangeness"],
         }
-        for name in feature_names
+        for name, results in feature_results.items()
     }
 
     # Visualize martingale analysis
