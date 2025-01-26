@@ -26,6 +26,7 @@ class EvolutionManager:
         Returns:
             New parameter set
         """
+        print(f"Evolving parameters for {model} with use_gaussian={use_gaussian}")
         if use_gaussian:
             return self._evolve_gaussian(params)
 

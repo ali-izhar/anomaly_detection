@@ -8,11 +8,16 @@ barabasi_albert:
   min_segment: 40
   min_changes: 1
   max_changes: 3
-  m: 3
-  min_m: 2
-  max_m: 4
+  # Initial attachment parameter
+  m: 1  # Start with minimum connections
+  min_m: 1  # Tree-like sparse phase
+  max_m: 6  # Hub-dominated dense phase
+  # Phase control
+  phase_mode: "sparse"  # Initial phase (sparse/dense)
+  segment_pos: 0  # Position within current segment
+  # Disable gaussian noise
   n_std: null
-  m_std: 0.2
+  m_std: null
 
 watts_strogatz:
   n: 50
@@ -36,11 +41,19 @@ erdos_renyi:
   min_segment: 40
   min_changes: 1
   max_changes: 3
-  prob: 0.15
-  min_prob: 0.1
-  max_prob: 0.2
+  # Initial probability
+  prob: 0.05  # Start with sparse connections
+  min_prob: 0.05  # Very sparse phase
+  max_prob: 0.4  # Very dense phase
+  # Phase control
+  phase_mode: "sparse"  # Initial phase (sparse/dense)
+  target_clustering: 0.3
+  min_clustering: 0.1
+  max_clustering: 0.5
+  # Disable gaussian noise
   n_std: null
-  prob_std: 0.01
+  prob_std: null
+  clustering_std: 0.02
 
 stochastic_block_model:
   n: 50
