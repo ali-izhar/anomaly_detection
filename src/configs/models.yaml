@@ -3,7 +3,7 @@
 # Default configurations for graph models
 
 barabasi_albert:
-  n: 100
+  n: 50
   seq_len: 200
   min_segment: 40
   min_changes: 1
@@ -15,7 +15,7 @@ barabasi_albert:
   m_std: 0.2
 
 watts_strogatz:
-  n: 100
+  n: 50
   seq_len: 200
   min_segment: 40
   min_changes: 1
@@ -31,7 +31,7 @@ watts_strogatz:
   prob_std: 0.01
 
 erdos_renyi:
-  n: 100
+  n: 50
   seq_len: 200
   min_segment: 40
   min_changes: 1
@@ -43,7 +43,7 @@ erdos_renyi:
   prob_std: 0.01
 
 stochastic_block_model:
-  n: 100
+  n: 50
   seq_len: 200
   min_segment: 40
   min_changes: 1

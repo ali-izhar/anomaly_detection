@@ -33,14 +33,7 @@ def get_full_model_name(alias: str) -> str:
 
 
 def calculate_block_sizes(n: int, num_blocks: int) -> list:
-    """Calculate block sizes for SBM.
-
-    Args:
-        n: Total number of nodes
-        num_blocks: Number of blocks
-    Returns:
-        List of block sizes
-    """
+    """Calculate block sizes for SBM."""
     base_size = n // num_blocks
     remainder = n % num_blocks
     sizes = [base_size] * num_blocks
@@ -51,12 +44,7 @@ def calculate_block_sizes(n: int, num_blocks: int) -> list:
 
 
 def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
-    """Generate and visualize network evolution with features.
-
-    Args:
-        model_alias: Short name of the model to visualize (ba, ws, er, sbm)
-        output_dir: Directory to save visualizations
-    """
+    """Generate and visualize network evolution with features."""
     # Get full model name for config loading
     model_name = get_full_model_name(model_alias)
 
@@ -90,9 +78,15 @@ def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
     key_points = [0] + change_points + [len(graphs) - 1]
     n_points = len(key_points)
 
-    fig, axes = plt.subplots(n_points, 2, figsize=(20, 8 * n_points))
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
     fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Network States", fontsize=16, y=0.92
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
     )
 
     for i, time_idx in enumerate(key_points):
@@ -119,7 +113,7 @@ def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
             graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
         )
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
         os.path.join(output_dir, f"{model_name}_states.png"),
         bbox_inches="tight",
@@ -129,13 +123,14 @@ def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
 
     # Plot feature evolution
     print("Creating feature evolution plots...")
-    fig, _ = viz.plot_all_features(
-        features, change_points=change_points, n_cols=2, figsize=(20, 20)
-    )
+    fig, _ = viz.plot_all_features(features, change_points=change_points, n_cols=2)
 
     plt.suptitle(
-        f"{model_name.replace('_', ' ').title()} Feature Evolution", fontsize=16, y=0.92
+        f"{model_name.replace('_', ' ').title()} Feature Evolution",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
     )
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
         os.path.join(output_dir, f"{model_name}_features.png"),
         bbox_inches="tight",

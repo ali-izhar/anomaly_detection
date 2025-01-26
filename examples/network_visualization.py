@@ -71,7 +71,7 @@ def visualize_network(model_alias: str, output_dir: str = "examples"):
 
     # Initialize visualizer and generator
     viz = NetworkVisualizer()
-    generator = GraphGenerator(model_alias)  # Use alias for generator
+    generator = GraphGenerator(model_alias)
 
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -81,8 +81,14 @@ def visualize_network(model_alias: str, output_dir: str = "examples"):
     adj_matrix = result["graphs"][0]  # This is a numpy array
 
     # Create visualization
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
-    fig.suptitle(f"{model_name.replace('_', ' ').title()} Network", fontsize=16)
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT / 2)
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network",
+        fontsize=viz.TITLE_SIZE,
+        y=0.95,
+    )
 
     # Prepare node colors for SBM
     node_color = None
@@ -100,7 +106,7 @@ def visualize_network(model_alias: str, output_dir: str = "examples"):
     # Plot adjacency matrix
     viz.plot_adjacency(adj_matrix, ax=ax2, title="Adjacency Matrix")
 
-    plt.tight_layout()
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     output_file = os.path.join(output_dir, f"{model_name}_network.png")
     plt.savefig(output_file, bbox_inches="tight", dpi=300)
     plt.close()
