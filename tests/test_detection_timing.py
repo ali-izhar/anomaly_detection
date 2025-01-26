@@ -21,7 +21,7 @@ from src.runner import (
     compute_network_features,
     compute_martingales,
 )
-from src.config.graph_configs import GRAPH_CONFIGS
+from src.graph.graph_config import GRAPH_CONFIGS
 from src.changepoint.detector import ChangePointDetector
 
 # Configure logging

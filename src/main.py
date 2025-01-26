@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.runner import ExperimentRunner
 from src.setup.config import ExperimentConfig
 from src.setup.prediction import GRAPH_MODELS, MODEL_PREDICTOR_RECOMMENDATIONS
-from config.graph_configs import GRAPH_CONFIGS
+from src.graph.graph_config import GRAPH_CONFIGS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

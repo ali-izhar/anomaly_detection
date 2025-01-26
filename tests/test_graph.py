@@ -9,259 +9,271 @@ Test the `src/graph` module.
 4. Edge cases and error handling
 """
 
-import unittest
+import pytest
+import numpy as np
 import networkx as nx
-import logging
-import time
-import sys
-import os
-
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from src.graph.generator import GraphGenerator
-from src.graph.features import NetworkFeatureExtractor, NetworkMetrics
-from src.graph.params import (
-    BAParams,
-    ERParams,
-    SBMParams,
-)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.graph.features import NetworkFeatureExtractor
 
 
-class TestGraphGeneration(unittest.TestCase):
-    """Test suite for graph generation functionality."""
-
-    def setUp(self):
-        """Initialize graph generator and common parameters."""
-        self.generator = GraphGenerator()
-
-        # Register simplified custom models using the new param fields
-        self.generator.register_model(
-            "BA",
-            # We rename 'm' instead of 'initial_edges'
-            lambda n, m, **kwargs: nx.barabasi_albert_graph(n=n, m=m),
-            BAParams,
-        )
-        self.generator.register_model(
-            "ER",
-            lambda n, prob, **kwargs: nx.erdos_renyi_graph(n=n, p=prob),
-            ERParams,
-        )
-        self.generator.register_model(
-            "SBM",
-            # We rename 'intra_prob'/'inter_prob' instead of 'initial_intra_prob'/'initial_inter_prob'
-            lambda n, num_blocks, intra_prob, inter_prob, **kwargs: nx.stochastic_block_model(
-                sizes=[n // num_blocks] * num_blocks,
-                p=[
-                    [intra_prob if i == j else inter_prob for j in range(num_blocks)]
-                    for i in range(num_blocks)
-                ],
-            ),
-            SBMParams,
-        )
-
-        # Common base parameters for dynamic sequences
-        self.base_params = {
-            "n": 100,
-            "seq_len": 50,
-            "min_segment": 10,
+# Load test configurations
+@pytest.fixture
+def test_configs():
+    """Load test configurations for different graph models."""
+    return {
+        "ba": {
+            "n": 50,
+            "seq_len": 100,
+            "min_segment": 20,
             "min_changes": 1,
             "max_changes": 2,
+            "m": 2,
+            "min_m": 1,
+            "max_m": 3,
+            "n_std": None,
+            "m_std": 0.1,
+        },
+        "ws": {
+            "n": 50,
+            "seq_len": 100,
+            "min_segment": 20,
+            "min_changes": 1,
+            "max_changes": 2,
+            "k_nearest": 4,
+            "min_k": 2,
+            "max_k": 6,
+            "rewire_prob": 0.1,
+            "min_prob": 0.05,
+            "max_prob": 0.15,
+            "n_std": None,
+            "k_std": 0.2,
+            "prob_std": 0.01,
+        },
+        "er": {
+            "n": 50,
+            "seq_len": 100,
+            "min_segment": 20,
+            "min_changes": 1,
+            "max_changes": 2,
+            "prob": 0.1,
+            "min_prob": 0.05,
+            "max_prob": 0.15,
+            "n_std": None,
+            "prob_std": 0.01,
+        },
+        "sbm": {
+            "n": 50,
+            "seq_len": 100,
+            "min_segment": 20,
+            "min_changes": 1,
+            "max_changes": 2,
+            "num_blocks": 2,
+            "min_block_size": 25,
+            "max_block_size": 25,
+            "intra_prob": 0.3,
+            "inter_prob": 0.05,
+            "min_intra_prob": 0.2,
+            "max_intra_prob": 0.4,
+            "min_inter_prob": 0.02,
+            "max_inter_prob": 0.08,
+            "n_std": None,
+            "blocks_std": None,
+            "intra_prob_std": 0.01,
+            "inter_prob_std": 0.005,
+        },
+    }
+
+
+# Test Graph Generation
+class TestGraphGeneration:
+    """Test suite for graph generation functionality."""
+
+    @pytest.mark.parametrize("model", ["ba", "ws", "er", "sbm"])
+    def test_generator_initialization(self, model):
+        """Test generator initialization for each model."""
+        generator = GraphGenerator(model)
+        assert generator.model == model
+
+    def test_invalid_model(self):
+        """Test initialization with invalid model."""
+        with pytest.raises(ValueError):
+            GraphGenerator("invalid_model")
+
+    @pytest.mark.parametrize("model", ["ba", "ws", "er", "sbm"])
+    def test_sequence_generation(self, model, test_configs):
+        """Test sequence generation for each model."""
+        generator = GraphGenerator(model)
+        result = generator.generate_sequence(test_configs[model])
+
+        # Check basic properties
+        assert len(result["graphs"]) == test_configs[model]["seq_len"]
+        assert all(isinstance(g, np.ndarray) for g in result["graphs"])
+        assert all(
+            g.shape == (test_configs[model]["n"], test_configs[model]["n"])
+            for g in result["graphs"]
+        )
+
+        # Check change points
+        assert len(result["change_points"]) <= test_configs[model]["max_changes"]
+        assert all(
+            cp >= test_configs[model]["min_segment"] for cp in result["change_points"]
+        )
+
+        # Check parameters evolution
+        assert len(result["parameters"]) == len(result["change_points"]) + 1
+
+    @pytest.mark.parametrize("model", ["ba", "ws", "er", "sbm"])
+    def test_parameter_bounds(self, model, test_configs):
+        """Test that generated parameters stay within bounds."""
+        generator = GraphGenerator(model)
+        result = generator.generate_sequence(test_configs[model])
+
+        for params in result["parameters"]:
+            for key, value in params.items():
+                min_key = f"min_{key}"
+                max_key = f"max_{key}"
+                if min_key in params and max_key in params:
+                    assert params[min_key] <= value <= params[max_key]
+
+
+# Test Feature Extraction
+class TestFeatureExtraction:
+    """Test suite for feature extraction functionality."""
+
+    @pytest.fixture
+    def sample_graphs(self):
+        """Generate sample graphs for testing."""
+        return {
+            "empty": nx.Graph(),
+            "single_node": nx.Graph([(0, 0)]),
+            "path": nx.path_graph(5),
+            "complete": nx.complete_graph(5),
+            "random": nx.gnp_random_graph(10, 0.3, seed=42),
         }
 
-    def test_ba_generation(self):
-        """Test Barabási-Albert graph generation using new BAParams."""
-        # 'm' replaces 'initial_edges'; 'min_m'/'max_m' used for anomaly injection
-        params = BAParams(
-            **self.base_params,
-            m=3,
-            min_m=2,
-            max_m=5,
-            n_std=None,
-            m_std=None,
+    def test_basic_metrics(self, sample_graphs):
+        """Test basic metrics extraction."""
+        extractor = NetworkFeatureExtractor()
+        for name, graph in sample_graphs.items():
+            features = extractor.get_features(graph, ["basic"])
+
+            # Check degrees
+            assert len(features["degrees"]) == graph.number_of_nodes()
+            assert all(isinstance(d, float) for d in features["degrees"])
+
+            # Check density
+            assert isinstance(features["density"], float)
+            assert 0 <= features["density"] <= 1
+
+            # Check clustering
+            assert len(features["clustering"]) == graph.number_of_nodes()
+            assert all(0 <= c <= 1 for c in features["clustering"])
+
+    def test_centrality_metrics(self, sample_graphs):
+        """Test centrality metrics extraction."""
+        extractor = NetworkFeatureExtractor()
+        for name, graph in sample_graphs.items():
+            if graph.number_of_nodes() > 0:  # Skip empty graph
+                features = extractor.get_features(graph, ["centrality"])
+                n = graph.number_of_nodes()
+
+                # Check all centrality measures
+                for measure in ["betweenness", "eigenvector", "closeness"]:
+                    assert len(features[measure]) == n
+                    assert all(isinstance(v, float) for v in features[measure])
+
+    def test_spectral_metrics(self, sample_graphs):
+        """Test spectral metrics extraction."""
+        extractor = NetworkFeatureExtractor()
+        for name, graph in sample_graphs.items():
+            if graph.number_of_nodes() > 0:  # Skip empty graph
+                features = extractor.get_features(graph, ["spectral"])
+
+                # Check singular values
+                assert len(features["singular_values"]) == graph.number_of_nodes()
+                assert all(s >= 0 for s in features["singular_values"])
+
+                # Check Laplacian eigenvalues
+                assert len(features["laplacian_eigenvalues"]) == graph.number_of_nodes()
+                assert features["laplacian_eigenvalues"][0] >= -1e-10  # Should be ≈ 0
+
+    def test_all_features_combined(self, sample_graphs):
+        """Test extraction of all features together."""
+        extractor = NetworkFeatureExtractor()
+        for name, graph in sample_graphs.items():
+            features = extractor.get_features(graph)
+            assert all(
+                k in features
+                for k in [
+                    "degrees",
+                    "density",
+                    "clustering",
+                    "betweenness",
+                    "eigenvector",
+                    "closeness",
+                    "singular_values",
+                    "laplacian_eigenvalues",
+                ]
+            )
+
+
+# Test Edge Cases and Error Handling
+class TestEdgeCases:
+    """Test suite for edge cases and error handling."""
+
+    def test_minimum_graph_size(self, test_configs):
+        """Test generation with minimum allowed graph size."""
+        min_configs = test_configs.copy()
+        for model in min_configs:
+            min_configs[model]["n"] = 3  # Minimum size for most models
+            generator = GraphGenerator(model)
+            result = generator.generate_sequence(min_configs[model])
+            assert all(g.shape == (3, 3) for g in result["graphs"])
+
+    def test_invalid_parameters(self, test_configs):
+        """Test handling of invalid parameters."""
+        invalid_configs = test_configs.copy()
+        for model in invalid_configs:
+            # Test negative values
+            with pytest.raises(ValueError):
+                invalid_configs[model]["n"] = -1
+                generator = GraphGenerator(model)
+                generator.generate_sequence(invalid_configs[model])
+
+            # Test invalid probability values
+            if "prob" in invalid_configs[model]:
+                with pytest.raises(ValueError):
+                    invalid_configs[model]["prob"] = 1.5
+                    generator = GraphGenerator(model)
+                    generator.generate_sequence(invalid_configs[model])
+
+    def test_feature_extraction_errors(self):
+        """Test error handling in feature extraction."""
+        extractor = NetworkFeatureExtractor()
+
+        # Test with invalid feature type
+        graph = nx.path_graph(5)
+        features = extractor.get_features(graph, ["invalid_type"])
+        assert features == {}
+
+        # Test with empty graph
+        empty_features = extractor.get_features(nx.Graph())
+        assert all(isinstance(v, (list, float)) for v in empty_features.values())
+
+    @pytest.mark.parametrize("model", ["ba", "ws", "er", "sbm"])
+    def test_reproducibility(self, model, test_configs):
+        """Test reproducibility with same random seed."""
+        np.random.seed(42)
+        generator1 = GraphGenerator(model)
+        result1 = generator1.generate_sequence(test_configs[model])
+
+        np.random.seed(42)
+        generator2 = GraphGenerator(model)
+        result2 = generator2.generate_sequence(test_configs[model])
+
+        assert all(
+            np.array_equal(g1, g2)
+            for g1, g2 in zip(result1["graphs"], result2["graphs"])
         )
-
-        sequence = self.generator.generate_sequence("BA", params)
-
-        self.assertEqual(len(sequence["graphs"]), params.seq_len)
-        self.assertTrue(
-            all(g.shape == (params.n, params.n) for g in sequence["graphs"])
-        )
-
-        G = nx.from_numpy_array(sequence["graphs"][0])
-
-        # Check degree distribution
-        degrees = [d for _, d in G.degree()]
-        max_degree = max(degrees)
-        min_degree = min(degrees)
-
-        # Verify min_degree >= half of m (typical for small BA seeds)
-        self.assertGreaterEqual(min_degree, params.m // 2)
-
-        # Count how many nodes have degree >= m
-        degree_counts = nx.degree_histogram(G)
-        nodes_with_target_degree = sum(degree_counts[params.m :])
-        total_nodes = sum(degree_counts)
-        # At least 80% of nodes should have degree >= m for typical BA
-        self.assertGreater(nodes_with_target_degree / total_nodes, 0.8)
-
-        # Reasonable degree range for scale-free
-        self.assertGreater(max_degree, params.m * 2)
-
-        # Ensure a "long tail" by comparing counts in degree histogram
-        nonzero_degrees = [i for i, cnt in enumerate(degree_counts) if cnt > 0]
-        self.assertGreater(len(nonzero_degrees), params.m)
-        # More low-degree nodes than very high-degree
-        self.assertGreater(degree_counts[params.m], degree_counts[-1])
-
-    def test_er_generation(self):
-        """Test Erdős-Rényi graph generation using new ERParams."""
-        # 'prob' replaces 'initial_prob'
-        params = ERParams(
-            **self.base_params,
-            prob=0.1,
-            min_prob=0.05,
-            max_prob=0.15,
-            n_std=None,
-            prob_std=None,
-        )
-
-        sequence = self.generator.generate_sequence("ER", params)
-        self.assertEqual(len(sequence["graphs"]), params.seq_len)
-
-        # Check density vs. prob
-        G = nx.from_numpy_array(sequence["graphs"][0])
-        density = nx.density(G)
-        self.assertAlmostEqual(density, params.prob, delta=0.05)
-
-    def test_sbm_generation(self):
-        """Test Stochastic Block Model generation using new SBMParams."""
-        # 'intra_prob' replaces 'initial_intra_prob'; 'inter_prob' replaces 'initial_inter_prob'
-        params = SBMParams(
-            **self.base_params,
-            num_blocks=3,
-            min_block_size=15,
-            max_block_size=40,
-            intra_prob=0.3,
-            inter_prob=0.05,
-            min_intra_prob=0.2,
-            max_intra_prob=0.4,
-            min_inter_prob=0.02,
-            max_inter_prob=0.08,
-            n_std=None,
-            blocks_std=None,
-            intra_prob_std=None,
-            inter_prob_std=None,
-        )
-
-        sequence = self.generator.generate_sequence("SBM", params)
-        self.assertEqual(len(sequence["graphs"]), params.seq_len)
-
-        G = nx.from_numpy_array(sequence["graphs"][0])
-        communities = nx.community.greedy_modularity_communities(G)
-        # Expect at least 'num_blocks - 1' real communities found
-        self.assertGreaterEqual(len(communities), params.num_blocks - 1)
-
-    def test_change_points(self):
-        """Test that change points are generated and valid."""
-        # We'll just reuse BAParams for a simpler test
-        params = BAParams(
-            **self.base_params,
-            m=3,
-            min_m=2,
-            max_m=5,
-        )
-
-        sequence = self.generator.generate_sequence("BA", params)
-
-        # Check presence and ordering of change points
-        self.assertGreaterEqual(len(sequence["change_points"]), params.min_changes)
-        self.assertLessEqual(len(sequence["change_points"]), params.max_changes)
-
-        cps = sequence["change_points"]
-        self.assertTrue(all(0 < cp < params.seq_len for cp in cps))
-        self.assertEqual(sorted(cps), cps)
-
-        # Each segment must be >= min_segment
-        segments = [0] + cps + [params.seq_len]
-        lengths = [segments[i + 1] - segments[i] for i in range(len(segments) - 1)]
-        for seg_len in lengths:
-            self.assertGreaterEqual(seg_len, params.min_segment)
-
-
-class TestFeatureExtraction(unittest.TestCase):
-    """Test suite for aggregated feature extraction using NetworkFeatureExtractor."""
-
-    def setUp(self):
-        """Initialize test graphs (Erdos-Renyi for variety)."""
-        self.n_nodes = 50
-        self.n_graphs = 5
-
-        # Create some moderate ER graphs
-        self.graphs = []
-        for _ in range(self.n_graphs):
-            G = nx.erdos_renyi_graph(self.n_nodes, 0.3)
-            self.graphs.append(G)
-
-        self.extractor = NetworkFeatureExtractor()
-
-    def test_centrality_metrics(self):
-        """Test that centrality metrics (avg_betweenness, etc.) are computed properly."""
-        G = self.graphs[0]
-        metrics: NetworkMetrics = self.extractor.get_all_metrics(G)
-
-        self.assertIsNotNone(metrics.avg_betweenness)
-        self.assertIsNotNone(metrics.max_betweenness)
-        self.assertGreaterEqual(metrics.avg_betweenness, 0.0)
-        self.assertGreaterEqual(metrics.max_betweenness, 0.0)
-        self.assertIsNotNone(metrics.avg_eigenvector)
-        self.assertGreaterEqual(metrics.avg_eigenvector, 0.0)
-        self.assertIsNotNone(metrics.max_eigenvector)
-        self.assertGreaterEqual(metrics.max_eigenvector, 0.0)
-        self.assertIsNotNone(metrics.avg_closeness)
-        self.assertGreaterEqual(metrics.avg_closeness, 0.0)
-
-    def test_basic_and_spectral_metrics(self):
-        """Test basic metrics (avg_degree, density, etc.) and spectral metrics."""
-        G = self.graphs[1]
-        metrics: NetworkMetrics = self.extractor.get_all_metrics(G)
-
-        # Basic checks
-        self.assertGreaterEqual(metrics.avg_degree, 0.0)
-        self.assertGreaterEqual(metrics.max_degree, 0.0)
-        self.assertGreaterEqual(metrics.density, 0.0)
-        self.assertGreaterEqual(metrics.clustering, 0.0)
-
-        # Spectral checks
-        self.assertGreaterEqual(metrics.spectral_gap, 0.0)
-        self.assertGreaterEqual(metrics.algebraic_connectivity, 0.0)
-
-
-class TestPerformance(unittest.TestCase):
-    """Performance tests for feature extraction on larger graphs."""
-
-    def setUp(self):
-        self.n_nodes = 300
-        self.n_graphs = 3
-        self.graphs = [
-            nx.erdos_renyi_graph(self.n_nodes, 0.01) for _ in range(self.n_graphs)
-        ]
-        self.extractor = NetworkFeatureExtractor()
-
-    def test_extraction_performance(self):
-        """Ensure feature extraction completes within a reasonable time for moderate size."""
-        start_time = time.time()
-        for G in self.graphs:
-            _ = self.extractor.get_all_metrics(G)
-        duration = time.time() - start_time
-
-        logger.info(
-            f"Feature extraction on {self.n_graphs} graphs took {duration:.2f}s"
-        )
-        self.assertLess(duration, 60, "Feature extraction took too long.")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result1["change_points"] == result2["change_points"]

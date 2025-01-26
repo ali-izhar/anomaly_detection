@@ -1,588 +1,346 @@
 # src/graph/generator.py
 
+from typing import Dict, List, Tuple
+
 import logging
-from typing import Dict, List, Optional, Callable, Type, Tuple
 import numpy as np
 import networkx as nx
-from dataclasses import asdict
 
-from .params import (
-    BaseParams,
-    BAParams,
-    WSParams,
-    ERParams,
-    SBMParams,
-)
+from .utils import graph_to_adjacency
 
 logger = logging.getLogger(__name__)
-
-
-def graph_to_adjacency(G: nx.Graph) -> np.ndarray:
-    """Convert a NetworkX graph to a NumPy adjacency matrix with nodes labeled from 0 to n-1.
-
-    Parameters
-    ----------
-    G : nx.Graph
-        The input graph.
-
-    Returns
-    -------
-    np.ndarray
-        An (n x n) adjacency matrix (dense) in NumPy format.
-
-    Notes
-    -----
-    - Relabels nodes to ensure ordering from 0..n-1.
-    - Return dtype is float (0.0 or 1.0 entries).
-    """
-    G = nx.convert_node_labels_to_integers(G)
-    return nx.to_numpy_array(G)
 
 
 class GraphGenerator:
     """Generator for dynamic graph sequences."""
 
-    def __init__(self):
-        """Initialize the generator with all supported models registered."""
-        self._generators: Dict[str, Dict] = {}
+    # Generator functions
+    _GENERATORS = {
+        "ba": lambda n, m, **kwargs: nx.barabasi_albert_graph(
+            n=n, m=m, seed=kwargs.get("seed")
+        ),
+        "ws": lambda n, k_nearest, rewire_prob, **kwargs: nx.watts_strogatz_graph(
+            n=n, k=k_nearest, p=rewire_prob, seed=kwargs.get("seed")
+        ),
+        "er": lambda n, prob, **kwargs: nx.erdos_renyi_graph(
+            n=n, p=prob, seed=kwargs.get("seed")
+        ),
+        "sbm": lambda n, num_blocks, intra_prob, inter_prob, **kwargs: nx.stochastic_block_model(
+            sizes=[n // num_blocks] * (num_blocks - 1)
+            + [n - (n // num_blocks) * (num_blocks - 1)],
+            p=np.full((num_blocks, num_blocks), inter_prob)
+            + np.diag([intra_prob - inter_prob] * num_blocks),
+            seed=kwargs.get("seed"),
+        ),
+    }
 
-        # Register Barabási-Albert model
-        self.register_model(
-            name="barabasi_albert",
-            generator_func=self.generate_ba_network,
-            param_class=BAParams,
-            param_mutation_func=self.ba_param_mutation,
-            metadata_func=self.ba_metadata,
-        )
-        # Short alias
-        self._generators["ba"] = self._generators["barabasi_albert"]
+    # Model name aliases
+    MODEL_ALIASES = {
+        "barabasi_albert": "ba",
+        "watts_strogatz": "ws",
+        "erdos_renyi": "er",
+        "stochastic_block_model": "sbm",
+    }
 
-        # Register Watts-Strogatz model
-        self.register_model(
-            name="watts_strogatz",
-            generator_func=self.generate_ws_network,
-            param_class=WSParams,
-        )
-        self._generators["ws"] = self._generators["watts_strogatz"]
+    # Parameters to exclude from model generation
+    _EXCLUDED_PARAMS = {"seq_len", "min_segment", "min_changes", "max_changes", "seed"}
 
-        # Register Erdős-Rényi model
-        self.register_model(
-            name="erdos_renyi",
-            generator_func=self.generate_er_network,
-            param_class=ERParams,
-        )
-        self._generators["er"] = self._generators["erdos_renyi"]
+    def __init__(self, model: str):
+        """Initialize generator for a specific model.
 
-        # Register Stochastic Block Model
-        self.register_model(
-            name="stochastic_block_model",
-            generator_func=self.generate_sbm_network,
-            param_class=SBMParams,
-        )
-        self._generators["sbm"] = self._generators["stochastic_block_model"]
-
-    def register_model(
-        self,
-        name: str,
-        generator_func: Callable,
-        param_class: Type[BaseParams],
-        param_mutation_func: Optional[Callable[[Dict], Dict]] = None,
-        metadata_func: Optional[Callable[[Dict], Dict]] = None,
-    ) -> None:
-        """Register a new graph model with associated utilities.
-
-        Parameters
-        ----------
-        name : str
-            Identifier for the model (e.g., "barabasi_albert").
-        generator_func : Callable
-            A function that, given model-specific parameters, returns a
-            NetworkX graph (e.g., `nx.barabasi_albert_graph`).
-        param_class : Type[BaseParams]
-            A dataclass describing model-specific parameters.
-        param_mutation_func : Callable[[Dict], Dict], optional
-            Function that modifies parameters during anomaly injection. If not
-            provided, `_default_param_mutation` is used.
-        metadata_func : Callable[[Dict], Dict], optional
-            Function that returns metadata for the model. Defaults to `_default_metadata`.
+        Args:
+            model: Model name to use ('ba', 'ws', 'er', 'sbm' or full names)
         """
-        if name in self._generators:
-            logger.warning(f"Overwriting existing model: {name}")
+        # Resolve alias if full name used
+        model = self.MODEL_ALIASES.get(model, model)
 
-        self._generators[name] = {
-            "generator": generator_func,
-            "param_class": param_class,
-            "mutate": param_mutation_func or self._default_param_mutation,
-            "metadata": metadata_func or self._default_metadata,
-        }
-        logger.info(f"Registered model: {name}")
+        if model not in self._GENERATORS:
+            raise ValueError(f"Unknown model: {model}")
 
-    def generate_sequence(
-        self,
-        model: str,
-        params: BaseParams,
-        seed: Optional[int] = None,
-    ) -> Dict:
-        """Generate a sequence of graph snapshots with optional random change points.
+        self.model = model
+        self.generator = None  # Will be set when seed is known
+        self.rng = None  # Will be set in generate_sequence
+        logger.info(f"Initialized generator for {model} model")
 
-        Parameters
-        ----------
-        model : str
-            Name (or alias) of the registered graph model (e.g., "ba", "er", "ws").
-        params : BaseParams
-            A dataclass instance describing the generation parameters (seq_len,
-            min_segment, min_changes, etc., plus model-specific fields).
-        seed : int, optional
-            Random seed for reproducibility across runs.
+    @property
+    def is_initialized(self) -> bool:
+        """Check if generator is properly initialized with random state."""
+        return self.rng is not None and self.generator is not None
 
-        Returns
-        -------
-        Dict
-            A dictionary containing:
-            - **graphs**: List of adjacency matrices (np.ndarray).
-            - **change_points**: List of indices where parameters changed.
-            - **parameters**: List of parameter dictionaries for each segment.
-            - **metadata**: List of metadata objects from each segment.
-            - **model**: The model name used.
-            - **num_changes**: How many change points were inserted.
-            - **n**: Number of nodes in each graph (as per `params.n`).
-            - **sequence_length**: The total `seq_len`.
+    def _setup_generator(self, seed: int = None) -> None:
+        """Set up the generator with proper random state.
 
-        Raises
-        ------
-        ValueError
-            If the requested model is not registered or if `params` is the wrong type.
-
-        Notes
-        -----
-        1. We generate up to `max_changes` abrupt shifts in parameters, each
-           ensuring at least `min_segment` steps per segment.
-        2. Between steps, parameters can evolve gradually if there are fields
-           ending in `_std` (e.g., `m_std` for Barabási-Albert).
+        Args:
+            seed: Random seed to use
         """
-        if model not in self._generators:
-            raise ValueError(f"Model {model} not registered.")
-
-        if not isinstance(params, self._generators[model]["param_class"]):
-            raise TypeError(
-                f"Parameters must be instance of "
-                f"{self._generators[model]['param_class'].__name__}"
-            )
-
         if seed is not None:
-            np.random.seed(seed)
+            self.rng = np.random.RandomState(seed)
+        else:
+            seed = np.random.randint(2**31 - 1)
+            self.rng = np.random.RandomState(seed)
 
-        try:
-            # 1. Generate random change points
-            change_points, num_changes = self._generate_change_points(params)
-            logger.info(f"Generated {num_changes} change points at: {change_points}")
+        # Set up generator with fixed random state
+        self.generator = self._GENERATORS[self.model]
 
-            # 2. Generate parameter sets for each segment
-            param_sets = self._generate_parameter_sets(
-                model, params, num_changes, self._generators[model]["mutate"]
+    def _validate_parameters(self, params: Dict) -> Dict:
+        """Validate and adjust model parameters.
+
+        Args:
+            params: Model parameters
+        Returns:
+            Validated and adjusted parameters
+        """
+        current = params.copy()
+        n = current.get("n", 0)
+        if n < 1:
+            raise ValueError(f"Number of nodes must be positive, got {n}")
+
+        # Model-specific validations and adjustments
+        if self.model == "ba":
+            m = current.get("m", 0)
+            if m >= n:
+                current["m"] = max(1, n - 1)
+            elif m < 1:
+                raise ValueError(f"BA model requires m >= 1, got m={m}")
+        elif self.model == "ws":
+            k = current.get("k_nearest", 0)
+            if k >= n:
+                current["k_nearest"] = n - 1 if n > 1 else 1
+        elif self.model == "sbm":
+            num_blocks = current.get("num_blocks", 1)
+            if num_blocks > n:
+                current["num_blocks"] = n
+
+        return current
+
+    def generate_sequence(self, params: Dict) -> Dict:
+        """Generate graph sequence with optional change points.
+
+        Args:
+            params: Model parameters from YAML config
+        Returns:
+            Dict with graphs, change points, parameters
+        """
+        params = params.copy()
+
+        # Set up random state
+        seed = params.get("seed")
+        if seed is not None:
+            self.rng = np.random.RandomState(seed)
+            np.random.seed(seed)  # Also set global numpy seed
+        else:
+            # If no seed provided, create a new random state with a random seed
+            seed = np.random.randint(2**31 - 1)  # Max 32-bit signed int
+            self.rng = np.random.RandomState(seed)
+            np.random.seed(seed)  # Also set global numpy seed
+            params["seed"] = seed
+
+        # Set up generator with fixed random state
+        if self.model == "ba":
+            self.generator = lambda n, m, **kwargs: nx.barabasi_albert_graph(
+                n=n, m=m, seed=self.rng
             )
-            logger.debug(f"Generated parameters for {num_changes + 1} segments")
-
-            # 3. Generate graphs for each segment
-            all_graphs = []
-            metadata = []
-            for i in range(len(change_points) + 1):
-                start = change_points[i - 1] if i > 0 else 0
-                end = change_points[i] if i < len(change_points) else params.seq_len
-                length = end - start
-
-                segment_params = param_sets[i]
-                logger.debug(f"Generating segment {i} with params: {segment_params}")
-
-                try:
-                    segment = self._generate_graph_segment(
-                        model, segment_params, length
-                    )
-                    meta = self._generators[model]["metadata"](segment_params)
-
-                    all_graphs.extend(segment)
-                    metadata.append(meta)
-                    logger.debug(f"Segment {i} => {len(segment)} graphs")
-                except Exception as e:
-                    msg = f"Failed to generate segment {i}"
-                    logger.error(msg, exc_info=True)
-                    raise RuntimeError(msg) from e
-
-            result = {
-                "graphs": all_graphs,
-                "change_points": change_points,
-                "parameters": param_sets,
-                "metadata": metadata,
-                "model": model,
-                "num_changes": num_changes,
-                "n": params.n,
-                "sequence_length": params.seq_len,
-            }
-
-            logger.info(f"Generated sequence with {len(all_graphs)} total graphs")
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to generate sequence: {str(e)}", exc_info=True)
-            raise
-
-    def _generate_graph_segment(
-        self,
-        model: str,
-        params: Dict,
-        length: int,
-    ) -> List[np.ndarray]:
-        """Produce a list of adjacency matrices by calling the model's generator
-        repeatedly, evolving parameters after each graph if `_std` fields
-        are present.
-
-        Parameters
-        ----------
-        model : str
-            Model name or alias.
-        params : Dict
-            Model-specific parameter dictionary (keys/values).
-        length : int
-            Number of graphs to generate in this segment.
-
-        Returns
-        -------
-        List[np.ndarray]
-            A list of adjacency matrices for the segment.
-        """
-        graphs = []
-        generator = self._generators[model]["generator"]
-        current_params = params.copy()
-
-        for _ in range(length):
-            # Generate graph
-            G = generator(**current_params)
-            adj_matrix = graph_to_adjacency(G)
-            graphs.append(adj_matrix)
-
-            # Evolve parameters for the next step
-            current_params = self._evolve_parameters(current_params)
-
-        return graphs
-
-    def _generate_change_points(
-        self,
-        params: BaseParams,
-    ) -> Tuple[List[int], int]:
-        """Randomly generate valid change points for the sequence.
-
-        Parameters
-        ----------
-        params : BaseParams
-            A dataclass specifying `seq_len`, `min_segment`, `min_changes`, `max_changes`.
-
-        Returns
-        -------
-        (List[int], int)
-            A tuple of (the sorted list of change point indices, number_of_changes).
-
-        Raises
-        ------
-        RuntimeError
-            If valid change points cannot be found in 100 attempts.
-
-        Notes
-        -----
-        - Each segment must be at least `min_segment` in length.
-        - We sample `num_changes` from [min_changes, max_changes].
-        - Then we pick that many points from the valid positions that keep
-          every segment >= min_segment in size.
-        """
-        seq_len = params.seq_len
-        min_segment = params.min_segment
-        min_changes = params.min_changes
-        max_changes = params.max_changes
-
-        # Max possible changes if each segment is min_segment length
-        max_possible_changes = (seq_len - min_segment) // min_segment
-        if max_changes > max_possible_changes:
-            max_changes = max_possible_changes
-        if min_changes > max_changes:
-            min_changes = max_changes
-
-        max_attempts = 100
-        for _ in range(max_attempts):
-            num_changes = np.random.randint(min_changes, max_changes + 1)
-
-            # All valid positions spaced by min_segment
-            valid_positions = []
-            current_pos = min_segment
-            while current_pos <= seq_len - min_segment:
-                valid_positions.append(current_pos)
-                current_pos += min_segment
-
-            # If not enough valid positions, reduce changes
-            if len(valid_positions) < num_changes:
-                continue
-
-            # Randomly select a sorted subset
-            points = sorted(
-                np.random.choice(valid_positions, size=num_changes, replace=False)
+        elif self.model == "ws":
+            self.generator = (
+                lambda n, k_nearest, rewire_prob, **kwargs: nx.watts_strogatz_graph(
+                    n=n, k=k_nearest, p=rewire_prob, seed=self.rng
+                )
             )
+        elif self.model == "er":
+            self.generator = lambda n, prob, **kwargs: nx.erdos_renyi_graph(
+                n=n, p=prob, seed=self.rng
+            )
+        elif self.model == "sbm":
 
-            # Verify each segment >= min_segment
-            valid = True
-            prev_point = 0
-            for point in points + [seq_len]:
-                if point - prev_point < min_segment:
-                    valid = False
-                    break
-                prev_point = point
+            def sbm_generator(n, num_blocks, intra_prob, inter_prob, **kwargs):
+                sizes = [n // num_blocks] * (num_blocks - 1)
+                sizes.append(n - sum(sizes))
+                p = np.full((num_blocks, num_blocks), inter_prob)
+                np.fill_diagonal(p, intra_prob)
+                return nx.stochastic_block_model(sizes=sizes, p=p, seed=self.rng)
 
-            if valid:
-                return points, num_changes
+            self.generator = sbm_generator
 
-        msg = f"Failed to generate valid change points after {max_attempts} tries"
-        logger.error(msg)
-        raise RuntimeError(msg)
+        # Generate change points and parameter sets
+        change_points, num_changes = self._generate_change_points(params)
+        param_sets = self._generate_parameter_sets(params, num_changes)
+        logger.info(f"Generated {num_changes} change points at: {change_points}")
 
-    def _generate_parameter_sets(
-        self,
-        model: str,
-        params: BaseParams,
-        num_changes: int,
-        mutation_func: Callable[[Dict], Dict],
-    ) -> List[Dict]:
-        """Build a list of parameter dictionaries, one per segment,
-        by applying anomaly (mutation) between segments.
+        # Generate graphs for each segment
+        all_graphs = []
+        for i in range(len(change_points) + 1):
+            start = change_points[i - 1] if i > 0 else 0
+            end = change_points[i] if i < len(change_points) else params["seq_len"]
+            segment = self._generate_graph_segment(param_sets[i], end - start)
+            all_graphs.extend(segment)
 
-        Parameters
-        ----------
-        model : str
-            The model name (unused here, but reserved for future special handling).
-        params : BaseParams
-            The original dataclass with the base parameter values.
-        num_changes : int
-            How many segments transitions (and hence how many anomaly injections).
-        mutation_func : Callable[[Dict], Dict]
-            A function that randomizes or shifts the parameters for an anomaly.
+        return {
+            "graphs": all_graphs,
+            "change_points": change_points,
+            "parameters": param_sets,
+            "model": self.model,
+            "num_changes": num_changes,
+            "n": params["n"],
+            "sequence_length": params["seq_len"],
+            "seed": seed,  # Return the actual seed used
+        }
 
-        Returns
-        -------
-        List[Dict]
-            A list of parameter dictionaries, of length num_changes+1.
+    def _generate_change_points(self, params: Dict) -> Tuple[List[int], int]:
+        """Generate random change points for sequence.
+
+        Args:
+            params: Generation parameters from YAML
+        Returns:
+            (change points, number of changes)
         """
-        param_dict = asdict(params)
-        param_sets = [param_dict]
+        seq_len = params["seq_len"]
+        min_segment = params["min_segment"]
+        min_changes = params["min_changes"]
+        max_changes = params["max_changes"]
+
+        max_possible = (seq_len - min_segment) // min_segment
+        max_changes = min(max_changes, max_possible)
+        min_changes = min(min_changes, max_changes)
+
+        num_changes = self.rng.randint(min_changes, max_changes + 1)
+        valid_positions = list(
+            range(min_segment, seq_len - min_segment + 1, min_segment)
+        )
+
+        if len(valid_positions) < num_changes:
+            return [], 0
+
+        points = sorted(
+            self.rng.choice(valid_positions, size=num_changes, replace=False)
+        )
+        return points, num_changes
+
+    def _generate_parameter_sets(self, params: Dict, num_changes: int) -> List[Dict]:
+        """Generate parameter sets for each segment.
+
+        Args:
+            params: Base parameters from YAML
+            num_changes: Number of changes to generate
+        Returns:
+            List of parameter dictionaries
+        """
+        param_sets = [params]
+        current = params.copy()
 
         for _ in range(num_changes):
-            new_params = mutation_func(param_dict.copy())
+            new_params = current.copy()
+
+            # Mutate parameters with min/max bounds
+            for key in current:
+                min_key = f"min_{key}"
+                max_key = f"max_{key}"
+                if min_key in current and max_key in current:
+                    if isinstance(current[key], int):
+                        new_params[key] = self.rng.randint(
+                            current[min_key], current[max_key] + 1
+                        )
+                    else:
+                        new_params[key] = self.rng.uniform(
+                            current[min_key], current[max_key]
+                        )
+
             param_sets.append(new_params)
-            param_dict = new_params
+            current = new_params
 
         return param_sets
 
-    @staticmethod
-    def _default_param_mutation(params: Dict) -> Dict:
-        """Default anomaly injection: for each param with `min_foo` and `max_foo`,
-        pick a random new value in [min_foo, max_foo].
+    def _generate_graph_segment(self, params: Dict, length: int) -> List[np.ndarray]:
+        """Generate sequence of graphs with evolving parameters.
 
-        Parameters
-        ----------
-        params : Dict
-            Current parameter dictionary.
-
-        Returns
-        -------
-        Dict
-            A new parameter dictionary with potential random jumps in relevant fields.
+        Args:
+            params: Model parameters from YAML
+            length: Sequence length
+        Returns:
+            List of adjacency matrices
         """
-        new_params = params.copy()
+        if self.rng is None:
+            raise RuntimeError(
+                "Random state not initialized. Call generate_sequence first."
+            )
 
-        # Identify all param pairs: min_foo, max_foo
-        param_bounds = {}
-        for key in params:
-            if key.startswith("min_"):
-                base_key = key[4:]
-                max_key = f"max_{base_key}"
-                if max_key in params:
-                    param_bounds[base_key] = (params[key], params[max_key])
+        graphs = []
+        current = params.copy()
 
-        # Jump each base_key into [min, max]
-        for base_key, (mn, mx) in param_bounds.items():
-            if isinstance(mn, int):
-                new_params[base_key] = np.random.randint(mn, mx + 1)
-            else:
-                new_params[base_key] = np.random.uniform(mn, mx)
+        # Filter out non-model parameters
+        excluded_params = {
+            "seq_len",
+            "min_segment",
+            "min_changes",
+            "max_changes",
+            "seed",
+        }
+        excluded_params.update(
+            k
+            for k in current
+            if k.startswith("min_") or k.startswith("max_") or k.endswith("_std")
+        )
 
-        return new_params
+        # Validate parameters
+        n = current.get("n", 0)
+        if n < 1:
+            raise ValueError(f"Number of nodes must be positive, got {n}")
 
-    @staticmethod
-    def _default_metadata(params: Dict) -> Dict:
-        """Default metadata is simply a copy of the parameter dictionary.
+        # Model-specific validations and adjustments
+        if self.model == "ba":
+            m = current.get("m", 0)
+            if m >= n:
+                # For small graphs, adjust m to be valid
+                current["m"] = max(1, n - 1)
+            elif m < 1:
+                raise ValueError(f"BA model requires m >= 1, got m={m}")
+        elif self.model == "ws":
+            k = current.get("k_nearest", 0)
+            if k >= n:
+                k = n - 1 if n > 1 else 1
+                current["k_nearest"] = k
+        elif self.model == "sbm":
+            num_blocks = current.get("num_blocks", 1)
+            if num_blocks > n:
+                current["num_blocks"] = n
 
-        Parameters
-        ----------
-        params : Dict
-            Current parameter dictionary.
+        for _ in range(length):
+            # Only pass relevant parameters to generator
+            model_params = {
+                k: v for k, v in current.items() if k not in excluded_params
+            }
+            G = self.generator(**model_params)
+            adj = graph_to_adjacency(G)
+            graphs.append(adj)
+            current = self._evolve_parameters(current)
 
-        Returns
-        -------
-        Dict
-            A dictionary with key "params" storing the original params.
-        """
-        return {"params": params.copy()}
-
-    def generate_ba_network(self, n: int, m: int, **kwargs) -> nx.Graph:
-        """Generate a Barabási-Albert (BA) scale-free network.
-
-        Parameters
-        ----------
-        n : int
-            Number of nodes (>= m+1 recommended).
-        m : int
-            Number of edges each new node brings.
-        """
-        return nx.barabasi_albert_graph(n=n, m=m)
-
-    def generate_ws_network(
-        self, n: int, k_nearest: int, rewire_prob: float, **kwargs
-    ) -> nx.Graph:
-        """Generate a Watts-Strogatz small-world network.
-
-        Parameters
-        ----------
-        n : int
-            Number of nodes.
-        k_nearest : int
-            Each node is connected to k_nearest neighbors on each side.
-        rewire_prob : float
-            Probability to rewire each edge to a random node (in [0,1]).
-        """
-        return nx.watts_strogatz_graph(n=n, k=k_nearest, p=rewire_prob)
-
-    def generate_er_network(self, n: int, prob: float, **kwargs) -> nx.Graph:
-        """Generate an Erdős-Rényi random network G(n, p).
-
-        Parameters
-        ----------
-        n : int
-            Number of nodes.
-        prob : float
-            Edge probability in [0,1].
-        """
-        return nx.erdos_renyi_graph(n=n, p=prob)
-
-    def generate_sbm_network(
-        self, n: int, num_blocks: int, intra_prob: float, inter_prob: float, **kwargs
-    ) -> nx.Graph:
-        """Generate a Stochastic Block Model (SBM) network.
-
-        Parameters
-        ----------
-        n : int
-            Total number of nodes.
-        num_blocks : int
-            Number of communities.
-        intra_prob : float
-            Probability of edges within the same block.
-        inter_prob : float
-            Probability of edges across blocks.
-        """
-        # Derive block sizes
-        block_size = n // num_blocks
-        sizes = [block_size] * (num_blocks - 1)
-        sizes.append(n - sum(sizes))  # last block gets remainder
-
-        # Probability matrix
-        probs = np.full((num_blocks, num_blocks), inter_prob)
-        np.fill_diagonal(probs, intra_prob)
-
-        return nx.stochastic_block_model(sizes, probs)
-
-    def ba_param_mutation(self, params: Dict) -> Dict:
-        """Specialized parameter mutation for Barabási-Albert networks.
-        In addition to the default jumps in [min_m, max_m], we preserve
-        the standard deviation fields for gradual evolution.
-
-        Parameters
-        ----------
-        params : Dict
-            Current parameter dictionary (e.g., containing m, min_m, max_m, m_std).
-
-        Returns
-        -------
-        Dict
-            A new parameter dictionary after random jumps in `[min_m, max_m]`.
-        """
-        # Default injection
-        new_params = self._default_param_mutation(params)
-
-        # Keep _std fields same as old
-        for key in params:
-            if key.endswith("_std"):
-                new_params[key] = params[key]
-
-        return new_params
-
-    def ba_metadata(self, params: Dict) -> Dict:
-        """Create metadata for Barabási-Albert segments, listing evolving parameters.
-
-        Parameters
-        ----------
-        params : Dict
-            Current BA parameter dictionary.
-
-        Returns
-        -------
-        Dict
-            A metadata dictionary with keys:
-            - "params": a copy of all params
-            - "evolving_parameters": list of param names that have _std set
-        """
-        meta = {"params": params.copy()}
-        evolving_params = [
-            k[:-4] for k in params if k.endswith("_std") and params[k] is not None
-        ]
-        if evolving_params:
-            meta["evolving_parameters"] = evolving_params
-        return meta
+        return graphs
 
     def _evolve_parameters(self, params: Dict) -> Dict:
-        """Evolve parameters by applying a Gaussian step for each param that has
-        a corresponding `_std` field.
+        """Evolve parameters by Gaussian steps for fields with _std suffix.
 
-        - If key = X and key_std = X_std in params:
-          new_value ~ Normal( old_value, X_std )
-        - For integer fields, the result is rounded and clipped to >= 1.
-        - For float fields that contain "prob", we clip to [0,1].
-        - Otherwise, we clip to >= 0 if that makes sense (e.g., for degrees).
-
-        Parameters
-        ----------
-        params : Dict
-            Parameter dictionary containing both values and optional `_std` fields.
-
-        Returns
-        -------
-        Dict
-            Updated parameter dictionary after small random evolutions.
+        Args:
+            params: Current parameters
+        Returns:
+            Updated parameters
         """
-        evolved_params = params.copy()
+        evolved = params.copy()
 
         for key, value in params.items():
             std_key = f"{key}_std"
             if std_key in params and params[std_key] is not None:
-                std_value = params[std_key]
-                new_value = np.random.normal(value, std_value)
+                std = params[std_key]
+                new_val = self.rng.normal(value, std)
 
                 if isinstance(value, int):
-                    # Round and ensure positive
-                    new_value = int(round(new_value))
+                    new_val = int(round(new_val))
                     if key not in ["min_changes", "max_changes"]:
-                        new_value = max(1, new_value)
+                        new_val = max(1, new_val)
                 elif isinstance(value, float):
-                    # If param name has "prob", clip to [0,1]
                     if "prob" in key:
-                        new_value = float(np.clip(new_value, 0.0, 1.0))
+                        new_val = float(np.clip(new_val, 0.0, 1.0))
                     else:
-                        new_value = max(0.0, new_value)
+                        new_val = max(0.0, new_val)
 
-                evolved_params[key] = new_value
+                evolved[key] = new_val
 
-        return evolved_params
+        return evolved

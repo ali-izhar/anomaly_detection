@@ -1,10 +1,13 @@
 # src/graph/__init__.py
 
-from .features import NetworkFeatureExtractor, calculate_error_metrics
+"""
+graph package initialization.
+"""
+
+from .features import NetworkFeatureExtractor
 from .generator import GraphGenerator
 
 __all__ = [
     "NetworkFeatureExtractor",
-    "calculate_error_metrics",
     "GraphGenerator",
 ]
