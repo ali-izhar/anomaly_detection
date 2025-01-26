@@ -1,5 +1,7 @@
 # experiments/threshold.py
 
+"""Threshold-based classifier for change point detection in graph sequences."""
+
 import numpy as np
 import logging
 from sklearn.base import BaseEstimator, ClassifierMixin

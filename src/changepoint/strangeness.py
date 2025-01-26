@@ -1,5 +1,7 @@
 # src/changepoint/strangeness.py
 
+"""Strangeness computation for change point detection."""
+
 import logging
 import numpy as np
 import random

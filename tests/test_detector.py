@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# tests/test_detector.py
+
 """
 Test script for martingale-based change detection on a sequence of
 NetworkX graphs using actual network data generation.
@@ -184,15 +185,56 @@ def visualize_results(
     plt.close()
 
     # 2. Plot feature evolution
-    fig, _ = viz.plot_all_features(
-        features_raw,
-        change_points=true_change_points + detected_change_points,
-        n_cols=2,
-    )
+    fig, axes = plt.subplots(4, 2, figsize=(viz.SINGLE_COLUMN_WIDTH, viz.GRID_HEIGHT))
+    axes = axes.flatten()
+
+    # Get list of features to plot
+    feature_names = ['degrees', 'density', 'clustering', 'betweenness', 
+                    'eigenvector', 'closeness', 'singular_values', 'laplacian_eigenvalues']
+    
+    for i, feature_name in enumerate(feature_names):
+        ax = axes[i]
+        time = range(len(features_raw))
+        
+        # Extract feature values
+        if isinstance(features_raw[0][feature_name], list):
+            # For list features (like degrees), compute mean and std
+            mean_values = [np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0 for f in features_raw]
+            std_values = [np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0 for f in features_raw]
+            
+            # Plot mean line with std band
+            ax.plot(time, mean_values, color=viz.COLORS['actual'], alpha=viz.LINE_ALPHA, linewidth=viz.LINE_WIDTH)
+            ax.fill_between(time, 
+                          np.array(mean_values) - np.array(std_values),
+                          np.array(mean_values) + np.array(std_values),
+                          color=viz.COLORS['actual'], alpha=0.1)
+        else:
+            # For scalar features (like density)
+            values = [f[feature_name] for f in features_raw]
+            ax.plot(time, values, color=viz.COLORS['actual'], alpha=viz.LINE_ALPHA, linewidth=viz.LINE_WIDTH)
+
+        # Add true change points as red vertical lines
+        for cp in true_change_points:
+            ax.axvline(cp, color='red', linestyle='--', alpha=0.5, linewidth=viz.LINE_WIDTH * 0.8)
+
+        # Add detected change points as orange dots
+        for cp in detected_change_points:
+            if isinstance(features_raw[0][feature_name], list):
+                y_val = mean_values[cp]
+            else:
+                y_val = features_raw[cp][feature_name]
+            ax.plot(cp, y_val, 'o', color='orange', markersize=4, alpha=0.8, markeredgewidth=1)
+
+        # Set title and labels
+        ax.set_title(feature_name.replace('_', ' ').title(), fontsize=viz.TITLE_SIZE, pad=4)
+        ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
+        ax.grid(True, alpha=viz.GRID_ALPHA, linewidth=viz.GRID_WIDTH)
 
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
-        + "True Change Points (Red), Detected Change Points (Blue)",
+        + "True Change Points (Red), Detected Change Points (Orange)",
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
@@ -304,9 +346,9 @@ def run_change_detection(
         features_raw=features_raw,
         true_change_points=true_change_points,
         detected_change_points=results["change_points"],
-        output_dir="test_results",
+        output_dir=f"tests/{model_name}",
     )
-    logger.info("Visualizations saved to test_results/")
+    logger.info(f"Visualizations saved to tests/{model_name}")
 
 
 def main():

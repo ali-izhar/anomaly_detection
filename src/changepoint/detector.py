@@ -1,5 +1,7 @@
 # src/changepoint/detector.py
 
+"""Change point detection using the martingale framework derived from conformal prediction."""
+
 import numpy as np
 import logging
 from typing import List, Dict, Any, Optional
@@ -10,8 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChangePointDetector:
-    """
-    Detector class for identifying change points in sequential data
+    """Detector class for identifying change points in sequential data
     using the martingale framework derived from conformal prediction.
 
     Main Steps:

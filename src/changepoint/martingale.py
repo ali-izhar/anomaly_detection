@@ -1,8 +1,11 @@
 # src/changepoint/martingale.py
 
+"""Compute a power martingale for online change detection over a univariate data stream
+using conformal p-values and a chosen strangeness measure."""
+
 import numpy as np
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 
 from .strangeness import strangeness_point, get_pvalue
 
