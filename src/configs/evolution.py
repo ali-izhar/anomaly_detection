@@ -13,18 +13,78 @@ class EvolutionManager:
         """
         self.rng = rng or np.random.RandomState()
 
-    def evolve_parameters(self, model: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Evolve parameters based on model-specific rules.
+    def evolve_parameters(
+        self, model: str, params: Dict[str, Any], use_gaussian: bool = False
+    ) -> Dict[str, Any]:
+        """Evolve parameters based on model-specific rules or Gaussian steps.
 
         Args:
             model: Model name ('ba', 'ws', 'er', 'sbm')
             params: Current parameters including bounds
+            use_gaussian: If True, use Gaussian evolution with _std suffixes,
+                        otherwise use uniform evolution with min/max bounds
         Returns:
             New parameter set
         """
+        if use_gaussian:
+            return self._evolve_gaussian(params)
+
         if hasattr(self, f"_evolve_{model}"):
             return getattr(self, f"_evolve_{model}")(params)
-        return self._evolve_default(params)
+        return self._evolve_uniform(params)
+
+    def _evolve_gaussian(self, params: Dict) -> Dict:
+        """Evolve parameters by Gaussian steps for fields with _std suffix.
+
+        Args:
+            params: Current parameters
+        Returns:
+            Updated parameters
+        """
+        evolved = params.copy()
+
+        for key, value in params.items():
+            std_key = f"{key}_std"
+            if std_key in params and params[std_key] is not None:
+                std = params[std_key]
+                new_val = self.rng.normal(value, std)
+
+                if isinstance(value, int):
+                    new_val = int(round(new_val))
+                    if key not in ["min_changes", "max_changes"]:
+                        new_val = max(1, new_val)
+                elif isinstance(value, float):
+                    if "prob" in key:
+                        new_val = float(np.clip(new_val, 0.0, 1.0))
+                    else:
+                        new_val = max(0.0, new_val)
+
+                evolved[key] = new_val
+
+        return evolved
+
+    def _evolve_uniform(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Default evolution using uniform sampling between min/max bounds.
+
+        Args:
+            params: Current parameters including bounds
+        Returns:
+            New parameter set
+        """
+        new_params = params.copy()
+
+        for key, value in params.items():
+            min_key = f"min_{key}"
+            max_key = f"max_{key}"
+            if min_key in params and max_key in params:
+                if isinstance(value, int):
+                    new_params[key] = self.rng.randint(
+                        params[min_key], params[max_key] + 1
+                    )
+                else:
+                    new_params[key] = self.rng.uniform(params[min_key], params[max_key])
+
+        return new_params
 
     def _evolve_sbm(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Evolve SBM parameters while preserving community structure.
@@ -131,28 +191,5 @@ class EvolutionManager:
 
         new_params["prob"] = new_p
         new_params["n"] = params["n"]  # Keep n constant
-
-        return new_params
-
-    def _evolve_default(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Default evolution using min/max bounds.
-
-        Args:
-            params: Current parameters including bounds
-        Returns:
-            New parameter set
-        """
-        new_params = params.copy()
-
-        for key, value in params.items():
-            min_key = f"min_{key}"
-            max_key = f"max_{key}"
-            if min_key in params and max_key in params:
-                if isinstance(value, int):
-                    new_params[key] = self.rng.randint(
-                        params[min_key], params[max_key] + 1
-                    )
-                else:
-                    new_params[key] = self.rng.uniform(params[min_key], params[max_key])
 
         return new_params

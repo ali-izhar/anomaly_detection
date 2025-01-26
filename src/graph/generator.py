@@ -292,6 +292,9 @@ class GraphGenerator:
             if num_blocks > n:
                 current["num_blocks"] = n
 
+        # Use evolution manager for controlled parameter changes
+        evolution_manager = EvolutionManager(self.rng)
+
         for _ in range(length):
             # Only pass relevant parameters to generator
             model_params = {
@@ -300,36 +303,8 @@ class GraphGenerator:
             G = self.generator(**model_params)
             adj = graph_to_adjacency(G)
             graphs.append(adj)
-            current = self._evolve_parameters(current)
+            current = evolution_manager.evolve_parameters(
+                self.model, current, use_gaussian=True
+            )
 
         return graphs
-
-    def _evolve_parameters(self, params: Dict) -> Dict:
-        """Evolve parameters by Gaussian steps for fields with _std suffix.
-
-        Args:
-            params: Current parameters
-        Returns:
-            Updated parameters
-        """
-        evolved = params.copy()
-
-        for key, value in params.items():
-            std_key = f"{key}_std"
-            if std_key in params and params[std_key] is not None:
-                std = params[std_key]
-                new_val = self.rng.normal(value, std)
-
-                if isinstance(value, int):
-                    new_val = int(round(new_val))
-                    if key not in ["min_changes", "max_changes"]:
-                        new_val = max(1, new_val)
-                elif isinstance(value, float):
-                    if "prob" in key:
-                        new_val = float(np.clip(new_val, 0.0, 1.0))
-                    else:
-                        new_val = max(0.0, new_val)
-
-                evolved[key] = new_val
-
-        return evolved
