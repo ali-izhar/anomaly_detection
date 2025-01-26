@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # tests/test_detector.py
 
 """
@@ -29,6 +30,7 @@ from src.changepoint.detector import ChangePointDetector
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.visualizer import NetworkVisualizer
+from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,96 @@ def extract_numeric_features(feature_dict: dict) -> np.ndarray:
     )
 
 
+def visualize_network_states(
+    model_name: str,
+    graphs: list,
+    true_change_points: list,
+    detected_change_points: list,
+    output_dir: str = "test_results",
+):
+    """Create visualizations of network states at key points.
+
+    Args:
+        model_name: Full name of the network model
+        graphs: List of adjacency matrices
+        true_change_points: List of true change point indices
+        detected_change_points: List of detected change point indices
+        output_dir: Directory to save visualizations
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    viz = NetworkVisualizer()
+
+    # Create network state visualizations at key points
+    key_points = sorted(
+        list(set([0] + true_change_points + detected_change_points + [len(graphs) - 1]))
+    )
+    n_points = len(key_points)
+
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+
+    # Prepare node colors for SBM
+    node_color = None
+    if "stochastic_block_model" in model_name.lower():
+        graph = nx.from_numpy_array(graphs[0])
+        n = graph.number_of_nodes()
+        num_blocks = int(np.sqrt(n))  # Estimate number of blocks
+        block_sizes = [n // num_blocks] * (num_blocks - 1)
+        block_sizes.append(n - sum(block_sizes))
+        node_color = []
+        for j, size in enumerate(block_sizes):
+            node_color.extend([f"C{j}"] * size)
+
+    for i, time_idx in enumerate(key_points):
+        # Plot network state
+        point_type = (
+            "Initial State"
+            if time_idx == 0
+            else (
+                "Final State"
+                if time_idx == len(graphs) - 1
+                else (
+                    "True Change Point"
+                    if time_idx in true_change_points
+                    else (
+                        "Detected Change Point"
+                        if time_idx in detected_change_points
+                        else "State"
+                    )
+                )
+            )
+        )
+
+        viz.plot_network(
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network {point_type} at t={time_idx}",
+            layout="spring",
+            node_color=node_color,
+        )
+
+        # Plot adjacency matrix
+        viz.plot_adjacency(
+            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
+        )
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_states.png"),
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+
 def visualize_results(
     model_name: str,
     graphs: list,
@@ -101,7 +193,7 @@ def visualize_results(
     detected_change_points: list,
     output_dir: str = "test_results",
 ):
-    """Create visualizations of network evolution and change detection results.
+    """Create visualizations of network states and features at key points.
 
     Args:
         model_name: Full name of the network model
@@ -189,33 +281,68 @@ def visualize_results(
     axes = axes.flatten()
 
     # Get list of features to plot
-    feature_names = ['degrees', 'density', 'clustering', 'betweenness', 
-                    'eigenvector', 'closeness', 'singular_values', 'laplacian_eigenvalues']
-    
+    feature_names = [
+        "degrees",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_values",
+        "laplacian_eigenvalues",
+    ]
+
     for i, feature_name in enumerate(feature_names):
         ax = axes[i]
         time = range(len(features_raw))
-        
+
         # Extract feature values
         if isinstance(features_raw[0][feature_name], list):
             # For list features (like degrees), compute mean and std
-            mean_values = [np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0 for f in features_raw]
-            std_values = [np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0 for f in features_raw]
-            
+            mean_values = [
+                np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
+            std_values = [
+                np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
+
             # Plot mean line with std band
-            ax.plot(time, mean_values, color=viz.COLORS['actual'], alpha=viz.LINE_ALPHA, linewidth=viz.LINE_WIDTH)
-            ax.fill_between(time, 
-                          np.array(mean_values) - np.array(std_values),
-                          np.array(mean_values) + np.array(std_values),
-                          color=viz.COLORS['actual'], alpha=0.1)
+            ax.plot(
+                time,
+                mean_values,
+                color=viz.COLORS["actual"],
+                alpha=viz.LINE_ALPHA,
+                linewidth=viz.LINE_WIDTH,
+            )
+            ax.fill_between(
+                time,
+                np.array(mean_values) - np.array(std_values),
+                np.array(mean_values) + np.array(std_values),
+                color=viz.COLORS["actual"],
+                alpha=0.1,
+            )
         else:
             # For scalar features (like density)
             values = [f[feature_name] for f in features_raw]
-            ax.plot(time, values, color=viz.COLORS['actual'], alpha=viz.LINE_ALPHA, linewidth=viz.LINE_WIDTH)
+            ax.plot(
+                time,
+                values,
+                color=viz.COLORS["actual"],
+                alpha=viz.LINE_ALPHA,
+                linewidth=viz.LINE_WIDTH,
+            )
 
         # Add true change points as red vertical lines
         for cp in true_change_points:
-            ax.axvline(cp, color='red', linestyle='--', alpha=0.5, linewidth=viz.LINE_WIDTH * 0.8)
+            ax.axvline(
+                cp,
+                color="red",
+                linestyle="--",
+                alpha=0.5,
+                linewidth=viz.LINE_WIDTH * 0.8,
+            )
 
         # Add detected change points as orange dots
         for cp in detected_change_points:
@@ -223,10 +350,20 @@ def visualize_results(
                 y_val = mean_values[cp]
             else:
                 y_val = features_raw[cp][feature_name]
-            ax.plot(cp, y_val, 'o', color='orange', markersize=4, alpha=0.8, markeredgewidth=1)
+            ax.plot(
+                cp,
+                y_val,
+                "o",
+                color="orange",
+                markersize=4,
+                alpha=0.8,
+                markeredgewidth=1,
+            )
 
         # Set title and labels
-        ax.set_title(feature_name.replace('_', ' ').title(), fontsize=viz.TITLE_SIZE, pad=4)
+        ax.set_title(
+            feature_name.replace("_", " ").title(), fontsize=viz.TITLE_SIZE, pad=4
+        )
         ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE, labelpad=2)
         ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE, labelpad=2)
         ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
@@ -340,15 +477,50 @@ def run_change_detection(
 
     # 7. Create visualizations
     logger.info("Creating visualizations...")
+    output_dir = f"tests/{model_name}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Visualize network states and features
     visualize_results(
         model_name=model_name,
         graphs=graphs,
         features_raw=features_raw,
         true_change_points=true_change_points,
         detected_change_points=results["change_points"],
-        output_dir=f"tests/{model_name}",
+        output_dir=output_dir,
     )
-    logger.info(f"Visualizations saved to tests/{model_name}")
+
+    # Prepare feature martingales for visualization
+    feature_names = [
+        "degree",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_value",
+        "laplacian",
+    ]
+    feature_martingales = {
+        name: {
+            "martingales": results["martingales"],
+            "p_values": results["p_values"],
+            "strangeness": results["strangeness"],
+        }
+        for name in feature_names
+    }
+
+    # Visualize martingale analysis
+    martingale_viz = MartingaleVisualizer(
+        martingales=feature_martingales,
+        change_points=true_change_points,
+        threshold=threshold,
+        epsilon=epsilon,
+        output_dir=output_dir,
+    )
+    martingale_viz.create_visualization()
+
+    logger.info(f"Visualizations saved to {output_dir}/")
 
 
 def main():

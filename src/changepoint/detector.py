@@ -58,7 +58,7 @@ class ChangePointDetector:
         Dict[str, Any]
             {
               "change_points": List[int],
-              "martingale_values": np.ndarray,
+              "martingales": np.ndarray,
               "p_values": List[float],
               "strangeness": List[float]
             }
@@ -86,7 +86,7 @@ class ChangePointDetector:
 
         return {
             "change_points": results["change_detected_instant"],
-            "martingale_values": results["martingales"],
+            "martingales": results["martingales"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
         }
@@ -129,7 +129,7 @@ class ChangePointDetector:
         Dict[str, Any]
             {
               "change_points": List[int],
-              "martingale_values": np.ndarray,
+              "martingales": np.ndarray,
               "p_values": List[List[float]],
               "strangeness": List[List[float]]
             }
@@ -157,7 +157,7 @@ class ChangePointDetector:
 
         return {
             "change_points": results["change_detected_instant"],
-            "martingale_values": results["martingale_sum"],
+            "martingales": results["martingale_sum"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
         }

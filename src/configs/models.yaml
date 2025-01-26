@@ -7,7 +7,7 @@ barabasi_albert:
   seq_len: 200
   min_segment: 40
   min_changes: 1
-  max_changes: 3
+  max_changes: 2
   # Initial attachment parameter
   m: 1  # Start with minimum connections
   min_m: 1  # Tree-like sparse phase
@@ -24,7 +24,7 @@ watts_strogatz:
   seq_len: 200
   min_segment: 40
   min_changes: 1
-  max_changes: 3
+  max_changes: 2
   k_nearest: 6
   min_k: 4
   max_k: 8
@@ -40,7 +40,7 @@ erdos_renyi:
   seq_len: 200
   min_segment: 40
   min_changes: 1
-  max_changes: 3
+  max_changes: 2
   # Initial probability
   prob: 0.05  # Start with sparse connections
   min_prob: 0.05  # Very sparse phase
@@ -60,7 +60,7 @@ stochastic_block_model:
   seq_len: 200
   min_segment: 40
   min_changes: 1
-  max_changes: 3
+  max_changes: 2
   num_blocks: 2
   min_block_size: 50  # n//2
   max_block_size: 50  # n//2
