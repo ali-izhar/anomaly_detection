@@ -89,8 +89,18 @@ class TestBasicVisualization:
         """Test different network layouts."""
         for name, graph in sample_graphs.items():
             if graph.number_of_nodes() > 0:  # Skip empty graph
+                # Set layout-specific parameters
+                layout_params = {}
+                if layout == "spring":
+                    layout_params = {"k": 0.5}  # k parameter only for spring layout
+                elif layout == "shell":
+                    layout_params = {"nlist": [range(graph.number_of_nodes())]}
+
                 fig, ax = visualizer.plot_network(
-                    graph, title=f"{name} - {layout}", layout=layout
+                    graph,
+                    title=f"{name} - {layout}",
+                    layout=layout,
+                    layout_params=layout_params,
                 )
                 assert isinstance(fig, plt.Figure)
                 assert isinstance(ax, plt.Axes)
@@ -110,7 +120,10 @@ class TestBasicVisualization:
         visualizer = NetworkVisualizer(style=custom_style)
         graph = sample_graphs["random"]
 
-        fig, ax = visualizer.plot_network(graph, title="Custom Style")
+        # Test with spring layout and its specific parameters
+        fig, ax = visualizer.plot_network(
+            graph, title="Custom Style", layout="spring", layout_params={"k": 0.5}
+        )
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 

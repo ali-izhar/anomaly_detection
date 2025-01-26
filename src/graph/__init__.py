@@ -2,8 +2,10 @@
 
 from .features import NetworkFeatureExtractor
 from .generator import GraphGenerator
+from .visualizer import NetworkVisualizer
 
 __all__ = [
     "NetworkFeatureExtractor",
     "GraphGenerator",
+    "NetworkVisualizer",
 ]

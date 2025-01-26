@@ -225,11 +225,93 @@ class TestEdgeCases:
     def test_minimum_graph_size(self, test_configs):
         """Test generation with minimum allowed graph size."""
         min_configs = test_configs.copy()
+
+        # Model-specific minimum sizes
+        min_sizes = {
+            "ba": 4,  # BA needs at least m+1 nodes
+            "ws": 6,  # WS needs enough nodes for k_nearest
+            "er": 3,  # ER can work with 3 nodes
+            "sbm": 4,  # SBM needs at least 2 nodes per block
+        }
+
         for model in min_configs:
-            min_configs[model]["n"] = 3  # Minimum size for most models
+            # Create a fresh config for each model
+            min_configs[model] = min_configs[model].copy()
+
+            # Set sequence parameters
+            min_configs[model]["seq_len"] = 20  # Short sequence
+            min_configs[model]["min_segment"] = 5  # Small enough for our short sequence
+            min_configs[model]["min_changes"] = 0  # No required changes
+            min_configs[model]["max_changes"] = 0  # Force no changes
+            min_configs[model]["n"] = min_sizes[model]
+            min_configs[model]["seed"] = 42  # Fixed seed for reproducibility
+
+            # Adjust model-specific parameters for minimum size
+            if model == "ba":
+                min_configs[model].update(
+                    {
+                        "m": 1,
+                        "min_m": 1,
+                        "max_m": 1,
+                        "m_std": None,
+                        "phase_mode": "sparse",
+                    }
+                )
+            elif model == "ws":
+                min_configs[model].update(
+                    {
+                        "k_nearest": 2,
+                        "min_k": 2,
+                        "max_k": 2,
+                        "k_std": None,
+                        "rewire_prob": 0.1,
+                        "min_rewire_prob": 0.1,
+                        "max_rewire_prob": 0.1,
+                        "rewire_prob_std": None,
+                    }
+                )
+            elif model == "er":
+                min_configs[model].update(
+                    {
+                        "prob": 0.2,
+                        "min_prob": 0.2,
+                        "max_prob": 0.2,
+                        "prob_std": None,
+                        "phase_mode": "sparse",
+                        "target_clustering": 0.3,
+                        "min_clustering": 0.3,
+                        "max_clustering": 0.3,
+                        "clustering_std": None,
+                    }
+                )
+            elif model == "sbm":
+                min_configs[model].update(
+                    {
+                        "num_blocks": 2,
+                        "min_block_size": min_sizes[model] // 2,
+                        "max_block_size": min_sizes[model] // 2,
+                        "intra_prob": 0.3,
+                        "inter_prob": 0.1,
+                        "min_intra_prob": 0.3,
+                        "max_intra_prob": 0.3,
+                        "min_inter_prob": 0.1,
+                        "max_inter_prob": 0.1,
+                        "intra_prob_std": None,
+                        "inter_prob_std": None,
+                        "blocks_std": None,
+                    }
+                )
+
             generator = GraphGenerator(model)
             result = generator.generate_sequence(min_configs[model])
-            assert all(g.shape == (3, 3) for g in result["graphs"])
+
+            # Verify the results
+            assert len(result["graphs"]) == 20  # Check sequence length
+            assert len(result["change_points"]) == 0  # No changes should occur
+            assert all(
+                g.shape == (min_sizes[model], min_sizes[model])
+                for g in result["graphs"]
+            )
 
     def test_invalid_parameters(self, test_configs):
         """Test handling of invalid parameters."""

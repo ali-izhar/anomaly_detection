@@ -135,12 +135,27 @@ class NetworkVisualizer:
         ax: Optional[Axes] = None,
         title: str = "Network Graph",
         layout: str = "spring",
+        layout_params: Optional[Dict] = None,
         node_color: Optional[List] = None,
         edge_color: Optional[List] = None,
         node_size: Optional[List] = None,
         edge_width: Optional[List] = None,
     ) -> Tuple[Figure, Axes]:
-        """Plot network graph with nodes and edges."""
+        """Plot network graph with nodes and edges.
+
+        Args:
+            graph: NetworkX graph or adjacency matrix
+            ax: Matplotlib axes to plot on
+            title: Plot title
+            layout: Graph layout algorithm ('spring', 'circular', 'spectral', 'random', 'shell')
+            layout_params: Parameters specific to the chosen layout algorithm
+            node_color: Colors for nodes
+            edge_color: Colors for edges
+            node_size: Sizes for nodes
+            edge_width: Widths for edges
+        Returns:
+            (figure, axes) tuple
+        """
         if ax is None:
             fig, ax = plt.subplots(
                 figsize=(self.SINGLE_COLUMN_WIDTH / 2, self.STANDARD_HEIGHT / 2)
@@ -169,30 +184,31 @@ class NetworkVisualizer:
             ax.set_yticks([])
             return fig, ax
 
-        # Get layout with adjusted parameters for compactness
+        # Get layout with appropriate parameters
         if layout not in self.LAYOUTS:
             logger.warning(f"Unknown layout: {layout}, falling back to spring layout")
             layout = "spring"
-        pos = self.LAYOUTS[layout](graph, k=0.5)  # Reduced k for more compactness
 
-        # Draw network
+        layout_params = layout_params or {}
+        pos = self.LAYOUTS[layout](graph, **layout_params)
+
+        # Draw the network
         nx.draw_networkx(
             graph,
             pos=pos,
             ax=ax,
-            node_color=node_color or self.style["node_color"],
-            edge_color=edge_color or self.style["edge_color"],
-            node_size=node_size or self.style["node_size"],
-            width=edge_width or self.style["width"],
-            alpha=self.style["alpha"],
-            with_labels=self.style["with_labels"],
-            arrows=self.style["arrows"],
-            font_size=self.style["font_size"],
+            node_color=node_color or self.style.get("node_color", "lightblue"),
+            edge_color=edge_color or self.style.get("edge_color", "gray"),
+            node_size=node_size or self.style.get("node_size", 300),
+            width=edge_width or self.style.get("width", 1),
+            alpha=self.style.get("alpha", 0.7),
+            with_labels=True,
+            font_size=self.style.get("font_size", 8),
         )
 
         ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
-        ax.axis("off")
-
+        ax.set_xticks([])
+        ax.set_yticks([])
         return fig, ax
 
     def plot_graph_sequence(
