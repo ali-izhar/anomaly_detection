@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""
+Test script for martingale-based change detection on a sequence of
+NetworkX graphs using actual network data generation.
+
+Example usage:
+    python test_detector.py ba    # Test with Barabási-Albert model
+    python test_detector.py ws    # Test with Watts-Strogatz model
+    python test_detector.py er    # Test with Erdős-Rényi model
+    python test_detector.py sbm   # Test with Stochastic Block Model
+"""
+
+import sys
+import os
+import argparse
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+import logging
+from pathlib import Path
+
+# Add project root to Python path
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.changepoint.detector import ChangePointDetector
+from src.graph.generator import GraphGenerator
+from src.graph.features import NetworkFeatureExtractor
+from src.graph.visualizer import NetworkVisualizer
+from src.configs.loader import get_config
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+def get_full_model_name(alias: str) -> str:
+    """Get full model name from alias."""
+    REVERSE_ALIASES = {
+        "ba": "barabasi_albert",
+        "ws": "watts_strogatz",
+        "er": "erdos_renyi",
+        "sbm": "stochastic_block_model",
+    }
+    return REVERSE_ALIASES.get(alias, alias)
+
+
+def extract_numeric_features(feature_dict: dict) -> np.ndarray:
+    """Extract numeric features from feature dictionary in a consistent order.
+
+    Args:
+        feature_dict: Dictionary of network features
+    Returns:
+        numpy array of numeric features
+    """
+    # Extract basic metrics
+    degrees = feature_dict.get("degrees", [])
+    avg_degree = np.mean(degrees) if degrees else 0.0
+    density = feature_dict.get("density", 0.0)
+    clustering = feature_dict.get("clustering", [])
+    avg_clustering = np.mean(clustering) if clustering else 0.0
+
+    # Extract centrality metrics
+    betweenness = feature_dict.get("betweenness", [])
+    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
+    eigenvector = feature_dict.get("eigenvector", [])
+    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
+    closeness = feature_dict.get("closeness", [])
+    avg_closeness = np.mean(closeness) if closeness else 0.0
+
+    # Extract spectral metrics
+    singular_values = feature_dict.get("singular_values", [])
+    largest_sv = max(singular_values) if singular_values else 0.0
+    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
+    smallest_nonzero_le = (
+        min(x for x in laplacian_eigenvalues if x > 1e-10)
+        if laplacian_eigenvalues
+        else 0.0
+    )
+
+    return np.array(
+        [
+            avg_degree,
+            density,
+            avg_clustering,
+            avg_betweenness,
+            avg_eigenvector,
+            avg_closeness,
+            largest_sv,
+            smallest_nonzero_le,
+        ]
+    )
+
+
+def visualize_results(
+    model_name: str,
+    graphs: list,
+    features_raw: list,
+    true_change_points: list,
+    detected_change_points: list,
+    output_dir: str = "test_results",
+):
+    """Create visualizations of network evolution and change detection results.
+
+    Args:
+        model_name: Full name of the network model
+        graphs: List of adjacency matrices
+        features_raw: List of raw feature dictionaries
+        true_change_points: List of true change point indices
+        detected_change_points: List of detected change point indices
+        output_dir: Directory to save visualizations
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    viz = NetworkVisualizer()
+
+    # 1. Create network state visualizations at key points
+    key_points = sorted(
+        list(set([0] + true_change_points + detected_change_points + [len(graphs) - 1]))
+    )
+    n_points = len(key_points)
+
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+
+    # Prepare node colors for SBM
+    node_color = None
+    if "stochastic_block_model" in model_name.lower():
+        graph = nx.from_numpy_array(graphs[0])
+        n = graph.number_of_nodes()
+        num_blocks = int(np.sqrt(n))  # Estimate number of blocks
+        block_sizes = [n // num_blocks] * (num_blocks - 1)
+        block_sizes.append(n - sum(block_sizes))
+        node_color = []
+        for j, size in enumerate(block_sizes):
+            node_color.extend([f"C{j}"] * size)
+
+    for i, time_idx in enumerate(key_points):
+        # Plot network state
+        point_type = (
+            "Initial State"
+            if time_idx == 0
+            else (
+                "Final State"
+                if time_idx == len(graphs) - 1
+                else (
+                    "True Change Point"
+                    if time_idx in true_change_points
+                    else (
+                        "Detected Change Point"
+                        if time_idx in detected_change_points
+                        else "State"
+                    )
+                )
+            )
+        )
+
+        viz.plot_network(
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network {point_type} at t={time_idx}",
+            layout="spring",
+            node_color=node_color,
+        )
+
+        # Plot adjacency matrix
+        viz.plot_adjacency(
+            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
+        )
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_states.png"),
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+    # 2. Plot feature evolution
+    fig, _ = viz.plot_all_features(
+        features_raw,
+        change_points=true_change_points + detected_change_points,
+        n_cols=2,
+    )
+
+    plt.suptitle(
+        f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
+        + "True Change Points (Red), Detected Change Points (Blue)",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_features.png"),
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+
+def run_change_detection(
+    model_alias: str, threshold: float = 60.0, epsilon: float = 0.7
+):
+    """Run change point detection on network sequence from specified model.
+
+    Args:
+        model_alias: Short name of the model ('ba', 'ws', 'er', 'sbm')
+        threshold: Detection threshold for martingale
+        epsilon: Sensitivity parameter for martingale (0,1)
+    """
+    # 1. Get full model name and configuration
+    model_name = get_full_model_name(model_alias)
+    config = get_config(model_name)
+    params = config["params"].__dict__
+
+    # 2. Generate network sequence with actual change points
+    generator = GraphGenerator(model_alias)
+    logger.info(f"Generating {model_name} network sequence...")
+    result = generator.generate_sequence(params)
+
+    graphs = result["graphs"]  # List of adjacency matrices
+    true_change_points = result["change_points"]
+
+    # 3. Extract features from each graph using all available extractors
+    logger.info("Extracting network features...")
+    feature_extractor = NetworkFeatureExtractor()
+    features_raw = []  # Store raw feature dictionaries for visualization
+    features_numeric = []  # Store numeric features for change detection
+
+    for adj_matrix in graphs:
+        graph = nx.from_numpy_array(adj_matrix)
+        # Get all available feature types
+        feature_dict = feature_extractor.get_features(graph)
+        features_raw.append(feature_dict)
+        numeric_features = extract_numeric_features(feature_dict)
+        features_numeric.append(numeric_features)
+
+    # Convert features to numpy array
+    data = np.array(features_numeric)
+    logger.info(f"Extracted feature matrix of shape {data.shape}")
+
+    # 4. Create a ChangePointDetector instance
+    cpd = ChangePointDetector()
+
+    logger.info(
+        "Running change detection with threshold=%f, epsilon=%f", threshold, epsilon
+    )
+
+    # 5. Run the detector
+    results = cpd.detect_changes(
+        data=data,
+        threshold=threshold,
+        epsilon=epsilon,
+        reset=True,  # Reset history + martingale after detection
+        max_window=None,  # Use all historical data
+        random_state=42,  # Fix seed for reproducibility
+    )
+
+    # 6. Print results and compare with true change points
+    print(
+        f"\n==== Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+    )
+    print(f"Network parameters: {params}")
+    print(f"\nFeatures used for detection:")
+    print("- Average degree")
+    print("- Density")
+    print("- Average clustering coefficient")
+    print("- Average betweenness centrality")
+    print("- Average eigenvector centrality")
+    print("- Average closeness centrality")
+    print("- Largest singular value")
+    print("- Smallest non-zero Laplacian eigenvalue")
+
+    print(f"\nTrue change points: {true_change_points}")
+    print(f"Detected change points: {results['change_points']}")
+
+    # Calculate detection accuracy
+    if true_change_points and results["change_points"]:
+        # Simple metric: for each true change point, find the closest detected point
+        errors = []
+        for true_cp in true_change_points:
+            closest_detected = min(
+                results["change_points"], key=lambda x: abs(x - true_cp)
+            )
+            error = abs(closest_detected - true_cp)
+            errors.append(error)
+
+        avg_error = np.mean(errors)
+        print(f"\nDetection Performance:")
+        print(f"Average detection delay: {avg_error:.2f} time steps")
+
+    # 7. Create visualizations
+    logger.info("Creating visualizations...")
+    visualize_results(
+        model_name=model_name,
+        graphs=graphs,
+        features_raw=features_raw,
+        true_change_points=true_change_points,
+        detected_change_points=results["change_points"],
+        output_dir="test_results",
+    )
+    logger.info("Visualizations saved to test_results/")
+
+
+def main():
+    """Run change detection test based on command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Test change point detection on network evolution."
+    )
+    parser.add_argument(
+        "model",
+        choices=["ba", "ws", "er", "sbm"],
+        help="Model to test: ba (Barabási-Albert), ws (Watts-Strogatz), "
+        "er (Erdős-Rényi), sbm (Stochastic Block Model)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=60.0,
+        help="Detection threshold for martingale (default: 60.0)",
+    )
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=0.7,
+        help="Sensitivity parameter for martingale (default: 0.7)",
+    )
+
+    args = parser.parse_args()
+    run_change_detection(args.model, args.threshold, args.epsilon)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,5 @@
 # src/changepoint/detector.py
 
-"""Change point detection using the martingale framework."""
-
 import numpy as np
 import logging
 from typing import List, Dict, Any, Optional
@@ -12,14 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 class ChangePointDetector:
-    """Detector class for identifying change points in sequential data
+    """
+    Detector class for identifying change points in sequential data
     using the martingale framework derived from conformal prediction.
 
-    The main idea is:
+    Main Steps:
     1. Compute a strangeness measure for new points (or sets of points).
     2. Convert strangeness to a p-value using a nonparametric, rank-based method.
-    3. Update a power martingale with the new p-value.
-    4. If the martingale exceeds a given threshold, report a change point.
+    3. Update a power martingale with the new p-value:
+         M_n = M_(n-1) * epsilon * (p_n)^(epsilon - 1)
+    4. If the martingale exceeds a threshold, report a change point.
     """
 
     def detect_changes(
@@ -31,64 +31,51 @@ class ChangePointDetector:
         max_window: Optional[int] = None,
         random_state: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Detect change points in single-view sequential data.
-
-        - We treat each row of `data` as a new observation in time.
-        - At time i, we compute a strangeness measure for the i-th observation
-          relative to a historical window of previous observations.
-        - We then compute a conformal p-value for the new observation,
-          and update a power martingale:
-
-            M_n = M_(n-1) * epsilon * (p_n)^(epsilon - 1),
-
-          where epsilon in (0,1) adjusts sensitivity to small p-values
-          (high anomalies). When M_n > `threshold`, we declare a change.
+        """
+        Detect change points in single-view sequential data.
 
         Parameters
         ----------
         data : np.ndarray
-            Sequential observations to monitor. Shape: (n_samples, n_features).
-            - n_samples is the temporal dimension (time steps).
-            - n_features can be 1 for truly univariate, or >1 if each time
-              step has multiple attributes (treated as a single "point").
+            Shape: (n_samples, n_features). Each row is an observation in time.
+            If n_features=1, it's truly univariate. If >1, we treat each row
+            as a single "multi-dimensional" observation.
         threshold : float
-            Detection threshold tau > 0. If martingale M_n > threshold, we
-            flag a change point at time n.
+            Detection threshold (> 0). If the power martingale exceeds this, we flag a change.
         epsilon : float
             Power martingale sensitivity parameter in (0,1).
-            - Smaller epsilon => more weight on low p-values => more
-              sensitive to anomalies.
+        reset : bool, optional
+            If True, reset the martingale and clear history when a change is detected.
         max_window : int, optional
-            Maximum window size for memory efficiency (sliding window).
-            If None, it uses all past data for strangeness computation.
+            Maximum window size for strangeness computation.
+            If None, use all past data.
         random_state : int, optional
             Random seed for reproducibility.
 
         Returns
         -------
         Dict[str, Any]
-            A dictionary with the following keys:
-            - **change_points**: Indices where a change point was detected.
-            - **martingale_values**: The sequence of martingale values over time.
-            - **p_values**: The conformal p-value sequence.
-            - **strangeness**: The computed strangeness values per observation.
-
-        Raises
-        ------
-        ValueError
-            If the input data is empty.
+            {
+              "change_points": List[int],
+              "martingale_values": np.ndarray,
+              "p_values": List[float],
+              "strangeness": List[float]
+            }
         """
         if len(data) == 0:
             raise ValueError("Empty data sequence")
 
         logger.info(
-            f"Starting change detection with threshold={threshold}, "
-            f"epsilon={epsilon}, max_window={max_window}, "
+            f"Starting change detection (single view) with threshold={threshold}, "
+            f"epsilon={epsilon}, reset={reset}, max_window={max_window}, "
             f"random_state={random_state}"
         )
 
+        # Convert to a Python list-of-lists for strangeness routines
+        data_list = data.tolist()
+
         results = compute_martingale(
-            data=data.tolist(),
+            data=data_list,
             threshold=threshold,
             epsilon=epsilon,
             reset=reset,
@@ -112,59 +99,51 @@ class ChangePointDetector:
         max_martingale: Optional[float] = None,
         random_state: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Detect change points in multi-view (multi-feature) sequential data.
+        """
+        Detect change points in multi-view (multi-feature) sequential data.
 
-        - We assume we have `d` different views (or separate feature sets),
-          each producing a time series: data[j] with j in [0, d-1].
-        - For each feature j, we maintain a separate power martingale M_j(n).
-        - We sum them at each time n: M_total(n) = sum_j M_j(n).
-        - If M_total(n) > threshold, we declare a change point.
+        We have d separate feature sets or "views," each a time series:
+            data[j]  for j=0..(d-1).
+        Each is monitored with its own power martingale. We sum those martingales
+        at each time to get M_total(n). If M_total(n) > threshold, we flag a change.
 
         Parameters
         ----------
         data : List[np.ndarray]
-            Each element is an array of shape (n_samples, ?), representing
-            a feature or view over time. For instance, data[j] is the j-th
-            feature dimension over the entire timeseries. The length of each
-            data[j] must match n_samples, though the number of columns may
-            differ.
+            Each data[j] must be length n_samples along time dimension.
         threshold : float
-            Detection threshold for the combined martingale sum.
+            Detection threshold for sum of martingales.
         epsilon : float
-            Power martingale sensitivity parameter in (0,1).
+            Sensitivity parameter in (0,1).
         max_window : int, optional
-            Maximum window size to keep for each feature's historical data.
+            Rolling window size for each feature's strangeness history.
         max_martingale : float, optional
-            If specified, the algorithm will stop early if the sum of
-            martingales exceeds this value (an "early stop" criterion).
+            If specified, we stop early if the sum of martingales
+            exceeds this "early stop" threshold.
         random_state : int, optional
-            Random seed for reproducibility.
+            Seed for reproducibility.
 
         Returns
         -------
         Dict[str, Any]
-            - **change_points**: Indices in [0, n_samples-1] where a change
-              was detected.
-            - **martingale_values**: Combined martingale sum at each step.
-            - **p_values**: p-values per feature (list of lists).
-            - **strangeness**: strangeness values per feature (list of lists).
-
-        Raises
-        ------
-        ValueError
-            If data is empty or threshold is <= 0.
+            {
+              "change_points": List[int],
+              "martingale_values": np.ndarray,
+              "p_values": List[List[float]],
+              "strangeness": List[List[float]]
+            }
         """
         if not data or len(data) == 0:
-            raise ValueError("Empty data sequence")
+            raise ValueError("Empty data sequence for multiview detection")
 
         logger.info(
-            f"Starting multiview detection with threshold={threshold}, "
+            f"Starting multiview change detection with threshold={threshold}, "
             f"epsilon={epsilon}, max_window={max_window}, "
             f"max_martingale={max_martingale}, random_state={random_state}"
         )
 
-        # Convert numpy arrays to lists for processing
-        data_lists = [d.tolist() for d in data]
+        # Convert each feature array to list-of-lists
+        data_lists = [arr.tolist() for arr in data]
 
         results = multiview_martingale_test(
             data=data_lists,
