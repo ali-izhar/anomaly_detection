@@ -1,5 +1,7 @@
 # src/graph/visualizer.py
 
+"""Visualizes network graphs and features."""
+
 from typing import Dict, List, Optional, Tuple, Union
 
 import logging

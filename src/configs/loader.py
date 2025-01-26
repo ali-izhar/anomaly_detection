@@ -1,5 +1,7 @@
 # src/configs/loader.py
 
+"""Loads model configurations from YAML files."""
+
 from pathlib import Path
 from typing import Dict, Any, Union
 

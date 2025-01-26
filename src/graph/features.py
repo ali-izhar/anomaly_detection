@@ -1,5 +1,7 @@
 # src/graph/features.py
 
+"""Extracts features from networkx graphs."""
+
 from abc import ABC, abstractmethod
 from typing import Dict, List
 

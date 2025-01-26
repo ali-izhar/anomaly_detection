@@ -1,3 +1,7 @@
+# src/configs/evolution.py
+
+"""Controls the evolution of graph parameters."""
+
 from typing import Dict, Any
 import numpy as np
 
