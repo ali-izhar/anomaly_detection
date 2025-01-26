@@ -7,6 +7,7 @@ import numpy as np
 import networkx as nx
 
 from .utils import graph_to_adjacency
+from ..configs.evolution import EvolutionManager
 
 logger = logging.getLogger(__name__)
 
@@ -227,57 +228,13 @@ class GraphGenerator:
         param_sets = [params]
         current = params.copy()
 
-        # For SBM, preserve community structure while allowing dramatic changes
-        if self.model == "sbm":
-            min_ratio = 3.0  # Minimum ratio between intra and inter probabilities
-            
-            for _ in range(num_changes):
-                new_params = current.copy()
-                
-                # Generate new intra_prob first
-                new_intra = self.rng.uniform(
-                    current["min_intra_prob"],
-                    current["max_intra_prob"]
-                )
-                
-                # Set inter_prob to maintain community structure
-                max_allowed_inter = new_intra / min_ratio
-                new_inter = self.rng.uniform(
-                    current["min_inter_prob"],
-                    min(max_allowed_inter, current["max_inter_prob"])
-                )
-                
-                new_params["intra_prob"] = new_intra
-                new_params["inter_prob"] = new_inter
-                
-                # Keep structural parameters constant
-                new_params["n"] = current["n"]
-                new_params["num_blocks"] = current["num_blocks"]
-                
-                param_sets.append(new_params)
-                current = new_params
-                
-        else:
-            # Original parameter generation for other models
-            for _ in range(num_changes):
-                new_params = current.copy()
+        # Use evolution manager for controlled parameter changes
+        evolution_manager = EvolutionManager(self.rng)
 
-                # Mutate parameters with min/max bounds
-                for key in current:
-                    min_key = f"min_{key}"
-                    max_key = f"max_{key}"
-                    if min_key in current and max_key in current:
-                        if isinstance(current[key], int):
-                            new_params[key] = self.rng.randint(
-                                current[min_key], current[max_key] + 1
-                            )
-                        else:
-                            new_params[key] = self.rng.uniform(
-                                current[min_key], current[max_key]
-                            )
-
-                param_sets.append(new_params)
-                current = new_params
+        for _ in range(num_changes):
+            new_params = evolution_manager.evolve_parameters(self.model, current)
+            param_sets.append(new_params)
+            current = new_params
 
         return param_sets
 
