@@ -1,5 +1,7 @@
 # src/changepoint/detector.py
 
+"""Change point detection using the martingale framework."""
+
 import numpy as np
 import logging
 from typing import List, Dict, Any, Optional
@@ -27,6 +29,7 @@ class ChangePointDetector:
         epsilon: float,
         reset: bool = False,
         max_window: Optional[int] = None,
+        random_state: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Detect change points in single-view sequential data.
 
@@ -58,6 +61,8 @@ class ChangePointDetector:
         max_window : int, optional
             Maximum window size for memory efficiency (sliding window).
             If None, it uses all past data for strangeness computation.
+        random_state : int, optional
+            Random seed for reproducibility.
 
         Returns
         -------
@@ -78,7 +83,8 @@ class ChangePointDetector:
 
         logger.info(
             f"Starting change detection with threshold={threshold}, "
-            f"epsilon={epsilon}, max_window={max_window}"
+            f"epsilon={epsilon}, max_window={max_window}, "
+            f"random_state={random_state}"
         )
 
         results = compute_martingale(
@@ -87,6 +93,7 @@ class ChangePointDetector:
             epsilon=epsilon,
             reset=reset,
             window_size=max_window,
+            random_state=random_state,
         )
 
         return {
@@ -103,6 +110,7 @@ class ChangePointDetector:
         epsilon: float,
         max_window: Optional[int] = None,
         max_martingale: Optional[float] = None,
+        random_state: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Detect change points in multi-view (multi-feature) sequential data.
 
@@ -129,6 +137,8 @@ class ChangePointDetector:
         max_martingale : float, optional
             If specified, the algorithm will stop early if the sum of
             martingales exceeds this value (an "early stop" criterion).
+        random_state : int, optional
+            Random seed for reproducibility.
 
         Returns
         -------
@@ -150,7 +160,7 @@ class ChangePointDetector:
         logger.info(
             f"Starting multiview detection with threshold={threshold}, "
             f"epsilon={epsilon}, max_window={max_window}, "
-            f"max_martingale={max_martingale}"
+            f"max_martingale={max_martingale}, random_state={random_state}"
         )
 
         # Convert numpy arrays to lists for processing
@@ -162,6 +172,7 @@ class ChangePointDetector:
             epsilon=epsilon,
             window_size=max_window,
             early_stop_threshold=max_martingale,
+            random_state=random_state,
         )
 
         return {

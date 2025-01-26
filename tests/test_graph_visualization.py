@@ -1,4 +1,4 @@
-# tests/test_visualization.py
+# tests/test_graph_visualization.py
 
 """
 Test the visualization module.

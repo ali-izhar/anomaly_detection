@@ -1,5 +1,7 @@
 # src/changepoint/martingale.py
 
+"""Martingale framework for change point detection."""
+
 import numpy as np
 import logging
 from typing import List, Dict, Any, Tuple, Optional
@@ -15,6 +17,7 @@ def compute_martingale(
     epsilon: float,
     reset: bool = True,
     window_size: Optional[int] = None,
+    random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute a *power martingale* for online change detection over a univariate data stream
     using conformal p-values and a chosen strangeness measure.
@@ -46,6 +49,8 @@ def compute_martingale(
     window_size : int, optional
         Maximum number of recent observations to keep in the 'window' for
         strangeness computation. If None (default), keeps all.
+    random_state : int, optional
+        Random seed for reproducibility.
 
     Returns
     -------
@@ -88,11 +93,15 @@ def compute_martingale(
 
             # ----- 1. Compute strangeness and p-value -----
             # If the window is empty, treat strangeness as [0] (i.e., no history yet)
-            strg = strangeness_point(window + [point]) if window else [0]
+            strg = (
+                strangeness_point(window + [point], random_state=random_state)
+                if window
+                else [0]
+            )
             # The new strangeness is the last element in the list
             saved_strangeness.append(strg[-1])
 
-            pvalue = get_pvalue(strg)
+            pvalue = get_pvalue(strg, random_state=random_state)
             pvalues.append(pvalue)
 
             # ----- 2. Update martingale -----
@@ -135,6 +144,7 @@ def multiview_martingale_test(
     batch_size: int = 1000,
     window_size: Optional[int] = None,
     early_stop_threshold: Optional[float] = None,
+    random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compute a *multivariate (multiview) martingale test*, combining evidence across multiple features.
 
@@ -159,6 +169,8 @@ def multiview_martingale_test(
         Maximum window size for memory efficiency in each feature's history.
     early_stop_threshold : float, optional
         If specified, stops processing early if the combined martingale sum exceeds this value.
+    random_state : int, optional
+        Random seed for reproducibility.
 
     Returns
     -------
@@ -222,6 +234,7 @@ def multiview_martingale_test(
                     martingales,
                     epsilon,
                     early_stop_threshold,
+                    random_state=random_state,
                 )
 
                 (
@@ -281,6 +294,7 @@ def process_instant(
     martingales: List[List[float]],
     epsilon: float,
     early_stop_threshold: Optional[float] = None,
+    random_state: Optional[int] = None,
 ) -> Tuple[List[float], List[float], List[float], float, List[List[Any]]]:
     """Process a single time instant for all features in a multiview scenario.
 
@@ -305,6 +319,8 @@ def process_instant(
         Power martingale sensitivity parameter, epsilon in (0,1).
     early_stop_threshold : float, optional
         If specified, stops processing early if any single-feature martingale exceeds this.
+    random_state : int, optional
+        Random seed for reproducibility.
 
     Returns
     -------
@@ -322,8 +338,12 @@ def process_instant(
             window = windows[j]
 
             # If no history, we treat the initial strangeness as [0].
-            strg = strangeness_point(window + [point]) if window else [0]
-            pvalue = get_pvalue(strg)
+            strg = (
+                strangeness_point(window + [point], random_state=random_state)
+                if window
+                else [0]
+            )
+            pvalue = get_pvalue(strg, random_state=random_state)
 
             new_martingale = martingales[j][-1] * epsilon * (pvalue ** (epsilon - 1))
 

@@ -1,5 +1,7 @@
 # src/changepoint/strangeness.py
 
+"""Strangeness measures for change point detection."""
+
 import logging
 import numpy as np
 import random
@@ -12,7 +14,7 @@ logger = logging.getLogger(__name__)
 def strangeness_point(
     data: Union[List[Any], np.ndarray],
     n_clusters: int = 1,
-    random_state: Optional[int] = 42,
+    random_state: Optional[int] = None,
     batch_size: Optional[int] = None,
     return_all_distances: bool = True,
 ) -> np.ndarray:
@@ -55,6 +57,10 @@ def strangeness_point(
         raise ValueError("Empty data sequence")
 
     try:
+        # Set random seed if provided
+        if random_state is not None:
+            random.seed(random_state)
+
         data_array = np.array(data)
         if data_array.size == 0:
             logger.error("Data array has zero size after np.array conversion")
@@ -84,7 +90,7 @@ def strangeness_point(
             logger.debug("Returning full (N, n_clusters) distance matrix")
             return distances
         else:
-            # If the docstring says “strangeness = min distance to any center,” do .min(axis=1)
+            # If the docstring says "strangeness = min distance to any center," do .min(axis=1)
             strangeness_scores = distances.min(axis=1)
             logger.debug("Returning 1D array of minimum distances (strangeness)")
             return strangeness_scores
@@ -94,7 +100,7 @@ def strangeness_point(
         raise RuntimeError(f"Strangeness computation failed: {str(e)}")
 
 
-def get_pvalue(strangeness: List[float]) -> float:
+def get_pvalue(strangeness: List[float], random_state: Optional[int] = None) -> float:
     """Compute a nonparametric conformal p-value for the latest observation based
     on the empirical distribution of historical strangeness measures.
 
@@ -119,6 +125,8 @@ def get_pvalue(strangeness: List[float]) -> float:
         including the most recent point's strangeness (alpha_n) as the last element.
         - The 'history' portion is alpha_1 to alpha_(n-1).
         - The 'current' portion is alpha_n at the end.
+    random_state : int, optional
+        Random seed for reproducibility of theta generation.
 
     Returns
     -------
@@ -140,6 +148,10 @@ def get_pvalue(strangeness: List[float]) -> float:
             raise ValueError("Strangeness sequence cannot be empty")
 
     try:
+        # Set random seed if provided
+        if random_state is not None:
+            random.seed(random_state)
+
         theta = random.uniform(0, 1)
         current = strangeness[-1]
 
