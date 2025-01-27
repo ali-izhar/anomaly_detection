@@ -20,8 +20,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.graph.visualizer import NetworkVisualizer
 from src.graph.generator import GraphGenerator
+from src.graph.visualizer import NetworkVisualizer
 
 
 @pytest.fixture(autouse=True)

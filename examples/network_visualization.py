@@ -6,17 +6,15 @@ import os
 import sys
 import argparse
 from pathlib import Path
+import matplotlib.pyplot as plt
 
-# Add project root to Python path
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-import matplotlib.pyplot as plt
-
+from src.configs.loader import get_config
 from src.graph.visualizer import NetworkVisualizer
 from src.graph.generator import GraphGenerator
-from src.configs.loader import get_config
 
 
 def calculate_block_sizes(n: int, num_blocks: int) -> list:

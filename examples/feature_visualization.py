@@ -7,7 +7,6 @@ import sys
 import argparse
 from pathlib import Path
 
-# Add project root to Python path
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -15,10 +14,10 @@ if project_root not in sys.path:
 import networkx as nx
 import matplotlib.pyplot as plt
 
+from src.configs.loader import get_config
 from src.graph.visualizer import NetworkVisualizer
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
-from src.configs.loader import get_config
 
 
 def get_full_model_name(alias: str) -> str:
