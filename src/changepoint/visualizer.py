@@ -4,14 +4,55 @@
 
 from pathlib import Path
 from typing import Dict, List, Any
+from dataclasses import dataclass
 
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.ticker import AutoMinorLocator, FuncFormatter
 from matplotlib.gridspec import GridSpec
 
 from .utils import compute_shap_values
+
+
+@dataclass
+class VisualizationConfig:
+    """Configuration for visualization parameters."""
+
+    # Figure sizes (in inches)
+    single_column_width: float = 3.3
+    double_column_width: float = 7.0
+    standard_height: float = 2.5
+    grid_height: float = 3.3
+
+    # Grid parameters
+    grid_spacing: float = 0.4  # Space between subplots
+
+    # Font sizes
+    title_size: int = 8
+    label_size: int = 8
+    tick_size: int = 6
+    legend_size: int = 6
+    annotation_size: int = 6
+
+    # Line parameters
+    line_width: float = 0.8
+    line_alpha: float = 0.8
+    grid_alpha: float = 0.3
+    grid_width: float = 0.5
+
+    # Colors
+    colors: Dict[str, str] = None
+
+    def __post_init__(self):
+        """Initialize default colors if not provided."""
+        if self.colors is None:
+            self.colors = {
+                "actual": "blue",
+                "predicted": "orange",
+                "average": "#2ecc71",
+                "pred_avg": "#9b59b6",
+                "threshold": "#FF7F7F",
+                "change_point": "red",
+            }
 
 
 class MartingaleVisualizer:
@@ -24,6 +65,7 @@ class MartingaleVisualizer:
         threshold: float = 30,
         epsilon: float = 0.8,
         output_dir: str = "martingale_outputs",
+        vis_config: VisualizationConfig = None,
     ):
         """Initialize visualizer with analysis results."""
         self.martingales = martingales
@@ -31,6 +73,7 @@ class MartingaleVisualizer:
         self.threshold = threshold
         self.epsilon = epsilon
         self.output_dir = Path(output_dir)
+        self.vis_config = vis_config or VisualizationConfig()
 
         # Compute SHAP values
         sequence_length = len(next(iter(martingales.values()))["martingales"])
@@ -43,59 +86,52 @@ class MartingaleVisualizer:
 
         # Set paper-style parameters
         plt.style.use("seaborn-v0_8-paper")
-        sns.set_style("whitegrid", {"grid.linestyle": ":"})
-        sns.set_context("paper", font_scale=1.0)
-
-        # Paper-specific sizes (in inches)
-        self.SINGLE_COLUMN_WIDTH = 3.5
-        self.DOUBLE_COLUMN_WIDTH = 7.0
-        self.STANDARD_HEIGHT = 2.5
-        self.GRID_HEIGHT = 2.0
-
-        # Font sizes for paper
-        self.TITLE_SIZE = 9
-        self.LABEL_SIZE = 8
-        self.TICK_SIZE = 7
-        self.LEGEND_SIZE = 7
-        self.ANNOTATION_SIZE = 6
-
-        # Line properties
-        self.LINE_WIDTH = 1.0
-        self.LINE_ALPHA = 0.8
-        self.GRID_ALPHA = 0.15  # Lighter grid
-        self.GRID_WIDTH = 0.5
-
-        # Colors for features and combined metrics
-        self.feature_colors = {
-            "degree": "#1f77b4",  # Blue
-            "clustering": "#ff7f0e",  # Orange
-            "betweenness": "#2ca02c",  # Green
-            "closeness": "#d62728",  # Red
-            "eigenvector": "#9467bd",  # Purple
-            "density": "#8c564b",  # Brown
-            "singular_value": "#e377c2",  # Pink
-            "laplacian": "#7f7f7f",  # Gray
-        }
-
-        # Special colors for combined metrics
-        self.combined_colors = {
-            "average": "#2ca02c",  # Green
-            "sum": "#1f77b4",  # Blue
-        }
+        plt.rcParams.update(
+            {
+                "font.size": self.vis_config.label_size,
+                "axes.titlesize": self.vis_config.title_size,
+                "axes.labelsize": self.vis_config.label_size,
+                "xtick.labelsize": self.vis_config.tick_size,
+                "ytick.labelsize": self.vis_config.tick_size,
+                "legend.fontsize": self.vis_config.legend_size,
+                "lines.linewidth": self.vis_config.line_width,
+                "grid.alpha": self.vis_config.grid_alpha,
+                "grid.linewidth": self.vis_config.grid_width,
+            }
+        )
 
     def create_visualization(self) -> None:
         """Generate separate visualizations for features and combined analysis."""
-        self._plot_feature_grid()
+        self._plot_feature_martingales()
         self._plot_combined_martingales()
         self._plot_shap_values()
 
-    def _plot_feature_grid(self) -> None:
+    def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots."""
-        # Select main features to plot (2x2 grid)
-        main_features = ["degree", "clustering", "betweenness", "closeness"]
+        fig = plt.figure(
+            figsize=(
+                self.vis_config.double_column_width,
+                self.vis_config.grid_height * 2,
+            )
+        )
+        gs = GridSpec(
+            4,
+            2,
+            figure=fig,
+            hspace=self.vis_config.grid_spacing,
+            wspace=self.vis_config.grid_spacing,
+        )
 
-        fig = plt.figure(figsize=(self.DOUBLE_COLUMN_WIDTH, self.GRID_HEIGHT * 2))
-        gs = GridSpec(2, 2, figure=fig, hspace=0.4, wspace=0.3)
+        main_features = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
+        ]
 
         for idx, feature in enumerate(main_features):
             row, col = divmod(idx, 2)
@@ -110,307 +146,297 @@ class MartingaleVisualizer:
                     ]
                 )
 
-                # Plot martingale values
                 ax.plot(
                     martingale_values,
-                    color=self.feature_colors[feature],
-                    linewidth=self.LINE_WIDTH,
-                    alpha=self.LINE_ALPHA,
-                    label="Act.",
+                    color=self.vis_config.colors["actual"],
+                    linewidth=self.vis_config.line_width,
+                    alpha=self.vis_config.line_alpha,
+                    label="Mart.",
                 )
 
-            # Add change points
+                # Dynamic y-axis range based on actual martingale values
+                max_mart = np.max(martingale_values)
+                if max_mart < 0.1:  # Very small values
+                    y_max = max(max_mart * 5, 0.1)
+                    n_ticks = 4
+                elif max_mart < 1:  # Small values
+                    y_max = max(max_mart * 2, 1)
+                    n_ticks = 5
+                elif max_mart < 10:  # Medium values
+                    y_max = max(max_mart * 1.5, 5)
+                    n_ticks = 6
+                else:  # Large values
+                    y_max = max_mart * 1.2
+                    n_ticks = min(7, int(y_max / 5) + 1)
+
+                # Calculate negative range as a small percentage of y_max
+                y_min = -y_max * 0.05
+
+                # Create ticks including the negative range
+                y_ticks = np.linspace(y_min, y_max, n_ticks)
+
+                ax.set_ylim(y_min, y_max)
+                ax.set_yticks(y_ticks)
+
+                # Format tick labels to avoid scientific notation and limit decimals
+                ax.yaxis.set_major_formatter(
+                    plt.FuncFormatter(
+                        lambda x, p: f"{x:.3f}" if abs(x) < 0.01 else f"{x:.2f}"
+                    )
+                )
+
             for cp in self.change_points:
                 ax.axvline(
                     x=cp,
-                    color="red",
+                    color=self.vis_config.colors["change_point"],
                     linestyle="--",
-                    alpha=0.3,
-                    linewidth=self.GRID_WIDTH,
+                    alpha=0.3,  # Reduced alpha for less visual clutter
+                    linewidth=self.vis_config.grid_width,
                 )
 
-            self._customize_plot(
-                ax,
-                feature.title(),
-                "Time" if row == 1 else "",
-                "Mart. Value" if col == 0 else "",
-                legend_cols=1,
-                feature_plot=True,
+            ax.set_title(feature.title(), fontsize=self.vis_config.title_size, pad=3)
+            ax.set_xlim(0, 200)
+            ax.set_xticks(np.arange(0, 201, 50))
+
+            if row == 3:
+                ax.set_xlabel("Time", fontsize=self.vis_config.label_size)
+            else:
+                ax.set_xticklabels([])
+
+            if col == 0:
+                ax.set_ylabel("Mart. Value", fontsize=self.vis_config.label_size)
+
+            if idx == 0:  # Only show legend in first plot
+                ax.legend(
+                    fontsize=self.vis_config.legend_size,
+                    ncol=1,
+                    loc="upper right",
+                    borderaxespad=0.1,
+                    handlelength=1.0,
+                    columnspacing=0.8,
+                )
+            ax.tick_params(
+                axis="both", which="major", labelsize=self.vis_config.tick_size, pad=2
+            )
+            ax.grid(
+                True,
+                linestyle=":",
+                alpha=self.vis_config.grid_alpha * 0.7,  # Reduced grid alpha
+                linewidth=self.vis_config.grid_width * 0.8,  # Thinner grid lines
             )
 
-        # Save with high quality
-        self._save_figure(fig, "feature_martingales.png")
+        plt.tight_layout(pad=0.3)
+        self._save_figure("feature_martingales.png")
 
     def _plot_combined_martingales(self) -> None:
         """Create plot for combined martingales."""
-        # Create figure with black border
         fig = plt.figure(
-            figsize=(self.DOUBLE_COLUMN_WIDTH, self.GRID_HEIGHT)
-        )  # More compact height
-        fig.patch.set_facecolor("white")
-        fig.patch.set_edgecolor("black")
-        fig.patch.set_linewidth(1.0)
-
+            figsize=(self.vis_config.double_column_width, self.vis_config.grid_height)
+        )
         ax = fig.add_subplot(111)
-
         combined_results = self.martingales["combined"]
 
-        # Plot sum martingale with blue color
         sum_martingale = combined_results["martingale_sum"]
         ax.plot(
             sum_martingale,
-            color="#0000FF",  # Solid blue
+            color=self.vis_config.colors["actual"],
             label="Sum Mart.",
-            linewidth=1.2,
-            alpha=1.0,
+            linewidth=self.vis_config.line_width,
+            alpha=self.vis_config.line_alpha,
             zorder=10,
         )
 
-        # Plot average martingale with green dashed line
         avg_martingale = combined_results["martingale_avg"]
         ax.plot(
             avg_martingale,
-            color="#00FF00",  # Green
+            color=self.vis_config.colors["average"],
             label="Avg Mart.",
-            linewidth=1.2,
+            linewidth=self.vis_config.line_width,
             linestyle="--",
-            alpha=0.8,
+            alpha=self.vis_config.line_alpha,
             zorder=8,
         )
 
-        # Add threshold line in gray dashed
         ax.axhline(
             y=self.threshold,
-            color="#666666",  # Gray
+            color=self.vis_config.colors["threshold"],
             linestyle="--",
             alpha=0.7,
-            linewidth=1.0,
+            linewidth=self.vis_config.line_width,
             label="Threshold",
             zorder=7,
         )
 
-        # Add change points as vertical red dashed lines
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
-                color="#FF9999",  # Light red
+                color=self.vis_config.colors["change_point"],
                 linestyle="--",
                 alpha=0.5,
-                linewidth=1.0,
+                linewidth=self.vis_config.grid_width,
                 zorder=6,
             )
 
-        # Customize grid and spines
-        ax.grid(True, which="major", linestyle=":", alpha=0.2, color="gray")
-        ax.grid(True, which="minor", linestyle=":", alpha=0.1, color="gray")
-        for spine in ax.spines.values():
-            spine.set_color("black")
-            spine.set_linewidth(1.0)
-
-        # Set x-axis ticks at intervals of 50
-        ax.set_xticks(np.arange(0, 201, 50))
-        ax.set_xlim(0, 200)
-
-        # Calculate dynamic y-axis limits based on martingale values
-        max_mart = max(np.max(sum_martingale), np.max(avg_martingale))
-        min_mart = min(np.min(sum_martingale), np.min(avg_martingale))
-        y_range = max_mart - min_mart
-
-        # Add padding (25% of range) and ensure threshold is visible
-        y_padding = y_range * 0.25
-        y_min = min(min_mart - y_padding, -y_padding)  # Ensure some negative space
-        y_max = max(
-            max_mart + y_padding, self.threshold + y_padding
-        )  # Ensure threshold is visible
-
-        # Round to nearest 50 for clean tick values
-        y_min = np.floor(y_min / 50) * 50
-        y_max = np.ceil(y_max / 50) * 50
-
-        ax.set_ylim(y_min, y_max)
-        ax.yaxis.set_major_locator(plt.MultipleLocator(50))
-        ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
-
-        # Add detection delay annotations
-        # Find the first threshold crossing after each change point
-        for cp in self.change_points:
-            # Find the detection point (first threshold crossing after change point)
-            detection_idx = None
-            for i in range(cp, len(sum_martingale)):
-                if sum_martingale[i] > self.threshold:
-                    detection_idx = i
-                    break
-
-            if detection_idx is not None:
+            detection_idx = next(
+                (
+                    i
+                    for i in range(cp, len(sum_martingale))
+                    if sum_martingale[i] > self.threshold
+                ),
+                None,
+            )
+            if detection_idx:
                 delay = detection_idx - cp
-                # Position the annotation above the threshold crossing point
-                cross_value = sum_martingale[detection_idx]
-
-                # Calculate arrow positions to extend before CP and above threshold
-                arrow_start_x = cp - 10  # Start before the change point
-                arrow_start_y = (
-                    self.threshold + y_padding / 2
-                )  # Position above threshold proportionally
-
                 ax.annotate(
                     f"d:{delay}",
-                    xy=(detection_idx, cross_value),  # Point to threshold crossing
-                    xytext=(arrow_start_x, arrow_start_y),  # Extended position
-                    color="#0000FF",
-                    fontsize=8,
+                    xy=(detection_idx, self.threshold),
+                    xytext=(cp - 10, self.threshold * 1.1),
+                    color=self.vis_config.colors["actual"],
+                    fontsize=self.vis_config.annotation_size,
                     arrowprops=dict(
                         arrowstyle="->",
-                        color="#0000FF",
+                        color=self.vis_config.colors["actual"],
                         alpha=0.8,
                         linewidth=1.0,
-                        connectionstyle="arc3,rad=0.2",  # Add slight curve to arrow
+                        connectionstyle="arc3,rad=-0.2",
                     ),
                 )
 
-        # Customize legend
-        legend = ax.legend(
+        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
+        ax.grid(
+            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
+        )
+        ax.set_xticks(np.arange(0, 201, 50))
+        ax.set_xlim(0, 200)
+
+        max_mart = max(np.max(sum_martingale), np.max(avg_martingale))
+        y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
+        ax.set_ylim(-5, y_max)
+        ax.yaxis.set_major_locator(plt.MultipleLocator(50))
+        ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
+
+        ax.legend(
             ncol=3,
             loc="upper right",
             bbox_to_anchor=(1.0, 1.02),
-            fontsize=8,
+            fontsize=self.vis_config.legend_size,
             frameon=True,
-            facecolor="white",
-            edgecolor="none",
             handlelength=1.5,
             handletextpad=0.5,
             columnspacing=1.0,
-            borderaxespad=0,
         )
-        legend.get_frame().set_alpha(0.9)
 
-        # Labels
-        ax.set_xlabel("Time", fontsize=9, labelpad=4)
-        ax.set_ylabel("Martingale Value", fontsize=9, labelpad=4)
-        ax.tick_params(axis="both", which="major", labelsize=8)
+        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
+        ax.set_ylabel(
+            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
+        )
+        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
 
-        # Adjust layout to ensure the border is visible
         plt.tight_layout(pad=0.3)
-
-        # Save with high quality
-        self._save_figure(fig, "combined_martingales.png")
+        self._save_figure("combined_martingales.png")
 
     def _plot_shap_values(self) -> None:
         """Create plot for SHAP values."""
-        fig = plt.figure(figsize=(self.DOUBLE_COLUMN_WIDTH, self.GRID_HEIGHT * 1.2))
+        fig = plt.figure(
+            figsize=(
+                self.vis_config.double_column_width,
+                self.vis_config.grid_height * 1.2,
+            )
+        )
         gs = GridSpec(2, 1, figure=fig, height_ratios=[1, 1], hspace=0.1)
 
-        # Plot actual SHAP values
         ax1 = fig.add_subplot(gs[0])
         ax1.text(
             -0.1,
             0.5,
             "Actual",
             transform=ax1.transAxes,
-            fontsize=self.LABEL_SIZE,
+            fontsize=self.vis_config.label_size,
             va="center",
         )
 
-        # Plot predicted SHAP values (placeholder for now)
         ax2 = fig.add_subplot(gs[1])
         ax2.text(
             -0.1,
             0.5,
             "Predicted",
             transform=ax2.transAxes,
-            fontsize=self.LABEL_SIZE,
+            fontsize=self.vis_config.label_size,
             va="center",
         )
 
+        features = [
+            "degree", "density", "clustering", "betweenness",
+            "eigenvector", "closeness", "singular_value", "laplacian"
+        ]
+        colors = plt.cm.tab10(np.linspace(0, 1, len(features)))
+
         for ax in [ax1, ax2]:
             i = 0
-            for name in ["degree", "clustering", "betweenness", "closeness"]:
-                if name in self.martingales and name != "combined":
+            for feature in features:
+                if feature in self.martingales and feature != "combined":
                     ax.plot(
                         self.shap_values[:, i],
-                        label=name.title(),
-                        color=self.feature_colors[name],
-                        linewidth=self.LINE_WIDTH,
-                        alpha=self.LINE_ALPHA,
+                        label=feature.title(),
+                        color=colors[i],
+                        linewidth=self.vis_config.line_width,
+                        alpha=self.vis_config.line_alpha,
                     )
                     i += 1
 
-            # Add change points
             for cp in self.change_points:
                 ax.axvline(
                     x=cp,
-                    color="red",
+                    color=self.vis_config.colors["change_point"],
                     linestyle="--",
-                    alpha=0.3,
-                    linewidth=self.GRID_WIDTH,
+                    alpha=0.3,  # Reduced alpha for less visual clutter
+                    linewidth=self.vis_config.grid_width,
                 )
 
-            self._customize_plot(
-                ax,
-                "",
-                "Time" if ax == ax2 else "",
-                "",
-                legend_cols=2 if ax == ax1 else 0,
-                ylim=(-0.1, 1.1),
+            ax.set_xticks(np.arange(0, 201, 50))
+            ax.set_xlim(0, 200)
+            
+            # Dynamic y-axis range
+            y_vals = self.shap_values
+            y_min, y_max = np.min(y_vals), np.max(y_vals)
+            y_margin = (y_max - y_min) * 0.1
+            ax.set_ylim(y_min - y_margin, y_max + y_margin)
+            
+            # Add grid with reduced alpha
+            ax.grid(
+                True,
+                linestyle=":",
+                alpha=self.vis_config.grid_alpha * 0.7,
+                linewidth=self.vis_config.grid_width * 0.8,
+            )
+            ax.tick_params(
+                axis="both",
+                which="major",
+                labelsize=self.vis_config.tick_size,
+                pad=2,
             )
 
-        # Save with high quality
-        self._save_figure(fig, "shap_values.png")
+            if ax == ax1:
+                ax.legend(
+                    ncol=2,
+                    loc="upper right",
+                    fontsize=self.vis_config.legend_size,
+                    borderaxespad=0.1,
+                    handlelength=1.0,
+                    columnspacing=0.8,
+                )
 
-    def _customize_plot(
-        self,
-        ax: plt.Axes,
-        title: str,
-        xlabel: str,
-        ylabel: str,
-        legend_cols: int = 1,
-        feature_plot: bool = False,
-        ylim: tuple = None,
-    ) -> None:
-        """Apply consistent styling to plots."""
-        # Grid styling
-        ax.grid(True, linestyle=":", alpha=self.GRID_ALPHA, linewidth=self.GRID_WIDTH)
-        ax.yaxis.set_minor_locator(AutoMinorLocator())
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.1f}"))
+        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size)
+        plt.tight_layout(pad=0.3)
+        self._save_figure("shap_values.png")
 
-        # Labels with minimal padding
-        if xlabel:
-            ax.set_xlabel(xlabel, fontsize=self.LABEL_SIZE, labelpad=2)
-        if ylabel:
-            ax.set_ylabel(ylabel, fontsize=self.LABEL_SIZE, labelpad=2)
-        if title:
-            ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
-
-        ax.tick_params(axis="both", which="major", labelsize=self.TICK_SIZE, pad=2)
-
-        # Set y-limits if specified
-        if ylim is not None:
-            ax.set_ylim(ylim)
-
-        # Compact legend if needed
-        if legend_cols > 0:
-            legend = ax.legend(
-                fontsize=self.LEGEND_SIZE,
-                ncol=legend_cols,
-                loc="upper right",
-                bbox_to_anchor=(1, 1.02),
-                frameon=True,
-                facecolor="white",
-                edgecolor="none",
-                borderaxespad=0.1,
-                handlelength=1.0,
-                columnspacing=0.8,
-            )
-            legend.get_frame().set_alpha(0.8)
-
-    def _save_figure(self, fig: plt.Figure, filename: str) -> None:
+    def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         plt.savefig(
             self.output_dir / filename,
             dpi=300,
             bbox_inches="tight",
-            facecolor="white",
-            edgecolor="none",
             pad_inches=0.02,
         )
-        plt.close(fig)
+        plt.close()

@@ -298,13 +298,14 @@ def multiview_martingale_test(
                 )
                 change_points.append(i)
 
-                # reset each feature's window + martingale to 1
+                # reset each feature's window but keep individual martingales
                 for j in range(num_features):
                     windows[j] = []
-                    martingales[j][-1] = 1.0  # reset
-                    individual_martingales[j].append(1.0)  # reset individual martingale
-                # optionally keep the new data point in the cleared window:
-                #   windows[j] = [data[j][i]]   (design choice)
+                    martingales[j][-1] = 1.0  # reset for next iteration
+                    # Don't reset individual martingales to preserve the detection signal
+                    individual_martingales[j][-1] = new_martingales[
+                        j
+                    ]  # Keep the actual martingale value
 
             # add the new data to each feature's window
             for j in range(num_features):

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/test_detector.py
 
 """
@@ -20,6 +19,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import logging
 from pathlib import Path
+import seaborn as sns
+from matplotlib.gridspec import GridSpec
 
 # Add project root to Python path
 project_root = str(Path(__file__).parent.parent)
@@ -194,19 +195,34 @@ def visualize_results(
     feature_results: dict,
     output_dir: str = "test_results",
 ):
-    """Create visualizations of network states and features at key points.
-
-    Args:
-        model_name: Full name of the network model
-        graphs: List of adjacency matrices
-        features_raw: List of raw feature dictionaries
-        true_change_points: List of true change point indices
-        detected_change_points: List of detected change point indices
-        feature_results: Dictionary of detection results for each feature
-        output_dir: Directory to save visualizations
-    """
+    """Create visualizations of network states and features at key points."""
     os.makedirs(output_dir, exist_ok=True)
     viz = NetworkVisualizer()
+
+    # Set paper-style parameters
+    plt.style.use("seaborn-v0_8-paper")
+    sns.set_style("whitegrid", {"grid.linestyle": ":"})
+    sns.set_context("paper", font_scale=1.0)
+
+    # Consistent colors for features
+    feature_colors = {
+        "degree": "#1f77b4",  # Blue
+        "clustering": "#ff7f0e",  # Orange
+        "betweenness": "#2ca02c",  # Green
+        "closeness": "#d62728",  # Red
+        "eigenvector": "#9467bd",  # Purple
+        "density": "#8c564b",  # Brown
+        "singular_value": "#e377c2",  # Pink
+        "laplacian": "#7f7f7f",  # Gray
+    }
+
+    # Special colors for indicators
+    line_colors = {
+        "actual": "#1f77b4",  # Blue
+        "predicted": "#ff7f0e",  # Orange
+        "threshold": "#666666",  # Gray
+        "changepoint": "#FF9999",  # Light red
+    }
 
     # 1. Create network state visualizations at key points
     key_points = sorted(
@@ -214,23 +230,22 @@ def visualize_results(
     )
     n_points = len(key_points)
 
-    fig, axes = plt.subplots(
-        n_points,
-        2,
-        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    # Create figure with black border
+    fig = plt.figure(
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2)
     )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Network States",
-        fontsize=viz.TITLE_SIZE,
-        y=0.98,
-    )
+    fig.patch.set_facecolor("white")
+    fig.patch.set_edgecolor("black")
+    fig.patch.set_linewidth(1.0)
+
+    gs = GridSpec(n_points, 2, figure=fig, hspace=0.3, wspace=0.25)
 
     # Prepare node colors for SBM
     node_color = None
     if "stochastic_block_model" in model_name.lower():
         graph = nx.from_numpy_array(graphs[0])
         n = graph.number_of_nodes()
-        num_blocks = int(np.sqrt(n))  # Estimate number of blocks
+        num_blocks = int(np.sqrt(n))
         block_sizes = [n // num_blocks] * (num_blocks - 1)
         block_sizes.append(n - sum(block_sizes))
         node_color = []
@@ -238,7 +253,6 @@ def visualize_results(
             node_color.extend([f"C{j}"] * size)
 
     for i, time_idx in enumerate(key_points):
-        # Plot network state
         point_type = (
             "Initial State"
             if time_idx == 0
@@ -257,30 +271,45 @@ def visualize_results(
             )
         )
 
+        ax1 = fig.add_subplot(gs[i, 0])
+        ax2 = fig.add_subplot(gs[i, 1])
+
         viz.plot_network(
             graphs[time_idx],
-            ax=axes[i, 0],
+            ax=ax1,
             title=f"Network {point_type} at t={time_idx}",
             layout="spring",
             node_color=node_color,
         )
 
-        # Plot adjacency matrix
         viz.plot_adjacency(
-            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
+            graphs[time_idx], ax=ax2, title=f"Adjacency Matrix at t={time_idx}"
         )
 
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    plt.tight_layout(pad=0.3)
     plt.savefig(
         os.path.join(output_dir, f"{model_name}_states.png"),
-        bbox_inches="tight",
         dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+        edgecolor="none",
+        pad_inches=0.02,
     )
     plt.close()
 
     # 2. Plot feature evolution
-    fig, axes = plt.subplots(4, 2, figsize=(viz.SINGLE_COLUMN_WIDTH, viz.GRID_HEIGHT))
-    axes = axes.flatten()
+    # Create figure with black border
+    fig = plt.figure(figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.GRID_HEIGHT * 2))
+    fig.patch.set_facecolor("white")
+    fig.patch.set_edgecolor("black")
+    fig.patch.set_linewidth(1.0)
+
+    gs = GridSpec(4, 2, figure=fig, hspace=0.4, wspace=0.3)
 
     # Get list of features to plot
     feature_names = [
@@ -295,7 +324,8 @@ def visualize_results(
     ]
 
     for i, feature_name in enumerate(feature_names):
-        ax = axes[i]
+        row, col = divmod(i, 2)
+        ax = fig.add_subplot(gs[row, col])
         time = range(len(features_raw))
 
         # Extract feature values
@@ -314,15 +344,15 @@ def visualize_results(
             ax.plot(
                 time,
                 mean_values,
-                color=viz.COLORS["actual"],
-                alpha=viz.LINE_ALPHA,
-                linewidth=viz.LINE_WIDTH,
+                color=line_colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
             )
             ax.fill_between(
                 time,
                 np.array(mean_values) - np.array(std_values),
                 np.array(mean_values) + np.array(std_values),
-                color=viz.COLORS["actual"],
+                color=line_colors["actual"],
                 alpha=0.1,
             )
         else:
@@ -331,23 +361,22 @@ def visualize_results(
             ax.plot(
                 time,
                 values,
-                color=viz.COLORS["actual"],
-                alpha=viz.LINE_ALPHA,
-                linewidth=viz.LINE_WIDTH,
+                color=line_colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
             )
 
-        # Add true change points as red vertical lines
+        # Add true change points
         for cp in true_change_points:
             ax.axvline(
                 cp,
-                color="red",
+                color=line_colors["changepoint"],
                 linestyle="--",
                 alpha=0.5,
-                linewidth=viz.LINE_WIDTH * 0.8,
+                linewidth=0.8,
             )
 
-        # Add feature-specific detected change points as orange dots
-        # Map feature names to their detection result keys
+        # Add feature-specific detected change points
         feature_mapping = {
             "degrees": "degree",
             "density": "density",
@@ -371,20 +400,26 @@ def visualize_results(
                     cp,
                     y_val,
                     "o",
-                    color="orange",
-                    markersize=6,  # Increased size for better visibility
+                    color=line_colors["predicted"],
+                    markersize=6,
                     alpha=0.8,
                     markeredgewidth=1,
                 )
 
         # Set title and labels
         ax.set_title(
-            feature_name.replace("_", " ").title(), fontsize=viz.TITLE_SIZE, pad=4
+            feature_name.replace("_", " ").title(),
+            fontsize=viz.TITLE_SIZE,
+            pad=4,
         )
-        ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE, labelpad=2)
-        ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.set_xlabel("Time" if row == 3 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.set_ylabel("Value" if col == 0 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
         ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
-        ax.grid(True, alpha=viz.GRID_ALPHA, linewidth=viz.GRID_WIDTH)
+        ax.grid(True, alpha=0.15, linewidth=0.5, linestyle=":")
+
+        # Set x-axis ticks at intervals of 50
+        ax.set_xticks(np.arange(0, 201, 50))
+        ax.set_xlim(0, 200)
 
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
@@ -392,11 +427,14 @@ def visualize_results(
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.tight_layout(pad=0.3)
     plt.savefig(
         os.path.join(output_dir, f"{model_name}_features.png"),
-        bbox_inches="tight",
         dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+        edgecolor="none",
+        pad_inches=0.02,
     )
     plt.close()
 
