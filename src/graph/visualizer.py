@@ -148,7 +148,7 @@ class NetworkVisualizer:
             ax: Matplotlib axes to plot on
             title: Plot title
             layout: Graph layout algorithm ('spring', 'circular', 'spectral', 'random', 'shell')
-            layout_params: Parameters specific to the chosen layout algorithm
+            layout_params: Parameters specific to the chosen layout algorithm, or pre-computed positions
             node_color: Colors for nodes
             edge_color: Colors for edges
             node_size: Sizes for nodes
@@ -185,12 +185,18 @@ class NetworkVisualizer:
             return fig, ax
 
         # Get layout with appropriate parameters
-        if layout not in self.LAYOUTS:
-            logger.warning(f"Unknown layout: {layout}, falling back to spring layout")
-            layout = "spring"
-
         layout_params = layout_params or {}
-        pos = self.LAYOUTS[layout](graph, **layout_params)
+        if "pos" in layout_params:
+            # Use pre-computed positions
+            pos = layout_params["pos"]
+        else:
+            # Compute new layout
+            if layout not in self.LAYOUTS:
+                logger.warning(
+                    f"Unknown layout: {layout}, falling back to spring layout"
+                )
+                layout = "spring"
+            pos = self.LAYOUTS[layout](graph, **layout_params)
 
         # Draw the network
         nx.draw_networkx(
