@@ -54,50 +54,108 @@ class GraphPredictor:
         self._error_window = error_window
         self._prev_mses = deque(maxlen=error_window)
         self._metrics = {"mae": [], "rmse": []}
-        self._density_history = deque(maxlen=k)  # Track recent densities
-        self._last_prediction = None  # Store last prediction for adaptation
+        self._density_history = deque(maxlen=k)
+        self._prediction_history = deque(maxlen=k)  # Track recent predictions
+        self._last_prediction = None
 
-    def forecast(
-        self,
-        history_adjs: np.ndarray,
-        current_adj: np.ndarray,
-        h: int = 5,
-    ) -> np.ndarray:
-        """Forecast the next h adjacency matrices using the method in Section 5 of the paper."""
-        logger.info(f"Starting forecast for horizon h={h}")
+    def forecast(self, history_adjs, current_adj, h=1):
+        """
+        Forecast future adjacency matrices with consistent smoothing.
+        """
+        extended_history = history_adjs + [current_adj]
+        n = current_adj.shape[0]
+        predictions = np.zeros((h, n, n))
 
-        # Initialize storage for final predictions
-        N = current_adj.shape[0]
-        predicted_adjs = np.zeros((h, N, N))
+        # Compute smoothed density statistics using full history
+        densities = [np.mean(adj) for adj in extended_history]
+        self._density_history.extend(densities)
 
-        # Start with the "history" plus the current adjacency as the new window
-        extended_history = []
-        if history_adjs is not None and len(history_adjs) > 0:
-            for mat in history_adjs:
-                extended_history.append(mat)
-        extended_history.append(current_adj)
-        logger.debug(f"Extended history size: {len(extended_history)}")
+        # Use exponential moving average for smoother trend detection
+        if len(self._density_history) > 2:
+            weights = np.exp(np.linspace(-2, 0, len(self._density_history)))
+            weights /= np.sum(weights)
+            smooth_densities = np.array(list(self._density_history))
+            weighted_densities = np.convolve(weights, smooth_densities, mode="valid")[
+                -3:
+            ]
+            trend = (
+                np.mean(np.diff(weighted_densities))
+                if len(weighted_densities) > 1
+                else 0
+            )
+            volatility = (
+                np.std(weighted_densities) if len(weighted_densities) > 1 else 0
+            )
+        else:
+            trend = 0
+            volatility = 0
 
-        for i in range(h):
-            logger.debug(f"Predicting step {i+1}/{h}")
+        # Unified stability measure (combines trend and volatility)
+        stability_score = 1.0 - min(1.0, (abs(trend) / 0.02 + volatility / 0.03))
 
-            # -- (A) TEMPORAL PREDICTION
-            A_t_T = self._temporal_prediction(extended_history)
-            logger.debug(f"Temporal prediction density: {np.mean(A_t_T):.3f}")
+        # Base prediction with temporal patterns
+        base_pred = self._temporal_prediction(extended_history)
 
-            # -- (B) STRUCTURAL PRESERVATION
-            A_t_S = self._structural_preservation(A_t_T)
-            logger.debug(f"Structural preservation density: {np.mean(A_t_S):.3f}")
+        # Structural preservation with adaptive gamma
+        struct_pred = self._structural_preservation(
+            base_pred, current_adj, stability_score
+        )
 
-            # -- (C) ADAPTIVE INTEGRATION
-            A_final = self._adaptive_integration(A_t_T, A_t_S)
-            logger.debug(f"Final prediction density: {np.mean(A_final):.3f}")
+        # Initial prediction
+        pred = self._adaptive_integration(base_pred, struct_pred, stability_score)
 
-            predicted_adjs[i] = A_final
-            extended_history.append(A_final)
+        # Apply consistent thresholding
+        threshold = 0.5  # Fixed base threshold
+        if self._last_prediction is not None:
+            # Adjust threshold based on previous prediction's density
+            target_density = np.mean(self._last_prediction) + trend
+            current_density = np.mean(pred)
+            if abs(current_density - target_density) > 0.05:
+                # Use quantile-based threshold
+                sorted_vals = np.sort(pred.flatten())
+                k = int((1 - target_density) * n * n)
+                k = max(0, min(k, len(sorted_vals) - 1))  # Ensure k is valid
+                threshold = sorted_vals[k] if k > 0 else 0.5
 
-        logger.info(f"Completed forecast for {h} steps")
-        return predicted_adjs
+        # Single thresholding step with stability-based smoothing
+        binary_pred = (pred > threshold).astype(float)
+        smooth_factor = stability_score * 0.2  # Max 20% smoothing
+        pred = (1 - smooth_factor) * binary_pred + smooth_factor * pred
+
+        predictions[0] = pred
+        self._prediction_history.append(pred)
+        prev_pred = pred
+
+        # Make dependent predictions
+        for step in range(1, h):
+            # Use stability score to determine mixing weights
+            temporal_weight = 0.6 + 0.3 * (1 - stability_score)  # 0.6-0.9 range
+
+            # Temporal prediction using both history and recent predictions
+            temp_history = extended_history + [p for p in predictions[:step]]
+            temp_pred = self._temporal_prediction(temp_history)
+
+            # Mix with previous prediction
+            mixed_pred = temporal_weight * temp_pred + (1 - temporal_weight) * prev_pred
+
+            # Structural preservation
+            struct_pred = self._structural_preservation(
+                mixed_pred, prev_pred, stability_score
+            )
+
+            # Final integration
+            next_pred = self._adaptive_integration(
+                mixed_pred, struct_pred, stability_score
+            )
+
+            # Consistent thresholding
+            binary_next = (next_pred > threshold).astype(float)
+            next_pred = (1 - smooth_factor) * binary_next + smooth_factor * next_pred
+
+            predictions[step] = next_pred
+            prev_pred = next_pred
+
+        return predictions
 
     def update_beta(self, actual_adj: np.ndarray, predicted_adj: np.ndarray) -> None:
         """
@@ -168,10 +226,7 @@ class GraphPredictor:
     # PRIVATE HELPER METHODS
 
     def _temporal_prediction(self, extended_history: list) -> np.ndarray:
-        """
-        Enhanced weighted average with adaptive decay and momentum-based stabilization.
-        More aggressive adaptation to downward trends.
-        """
+        """Temporal prediction with consistent smoothing."""
         use_history = (
             extended_history[-self.k :]
             if len(extended_history) >= self.k
@@ -179,119 +234,36 @@ class GraphPredictor:
         )
         m = len(use_history)
 
-        # Compute base weights with newer matrices getting higher weights
-        weights_unnorm = [self.alpha ** (m - j - 1) for j in range(m)]
+        if m == 0:
+            return np.zeros_like(extended_history[-1])
 
-        # Adapt decay rate based on recent density changes
-        densities = [np.mean(mat) for mat in use_history]
-        self._density_history.extend(densities)
+        # Compute exponential weights
+        weights = np.exp(np.linspace(-2, 0, m))  # Consistent exp decay
+        weights = weights / np.sum(weights)
 
-        if len(self._density_history) > 1:
-            # Measure both immediate and trend volatility
-            recent_changes = np.diff(list(self._density_history)[-4:])
-            immediate_volatility = np.std(recent_changes)
-            trend_direction = np.mean(recent_changes)
-
-            # Detect if we're in a transition period
-            in_transition = immediate_volatility > 0.03 or abs(trend_direction) > 0.02
-
-            if in_transition:
-                # During transition, use very recent history with more aggressive weights
-                weights_unnorm = [0.0] * len(weights_unnorm)
-                weights_unnorm[-3:] = [0.1, 0.3, 0.6]  # More weight on most recent
-
-                # Adjust based on trend direction
-                if abs(trend_direction) > 0.02:
-                    # Base trend factor
-                    trend_factor = 1.0 + np.sign(trend_direction) * min(
-                        abs(trend_direction), 0.1
-                    )
-
-                    # More aggressive for downward trends
-                    if trend_direction < 0:
-                        trend_factor *= 1.2  # 20% more aggressive on downward trends
-                        # Extra weight to recent matrices for downward trends
-                        weights_unnorm[-1] *= 1.2
-                        weights_unnorm[-2] *= 1.1
-
-                    weights_unnorm[-1] *= trend_factor
-            else:
-                # Normal operation with decay
-                decay_factor = np.exp(-immediate_volatility * 8)
-                weights_unnorm = [
-                    w * (decay_factor**i) for i, w in enumerate(weights_unnorm)
-                ]
-
-        # Normalize weights
-        sum_w = sum(weights_unnorm)
-        weights = [w / sum_w for w in weights_unnorm]
-
-        logger.debug(f"Temporal weights: {weights}")
-
-        # Weighted sum with momentum stabilization
+        # Weighted combination
         N = use_history[-1].shape[0]
         A_T = np.zeros((N, N))
-
         for idx, mat in enumerate(use_history):
             A_T += weights[idx] * mat
 
-        # Apply momentum stabilization if we have previous prediction
-        if self._last_prediction is not None:
-            current_density = np.mean(A_T)
-            last_density = np.mean(self._last_prediction)
-            density_diff = abs(current_density - last_density)
-
-            if density_diff > 0.1:  # Large change
-                # More aggressive momentum for downward changes
-                if current_density < last_density:
-                    A_T = (
-                        0.8 * A_T + 0.2 * self._last_prediction
-                    )  # Less smoothing for downward
-                else:
-                    A_T = (
-                        0.7 * A_T + 0.3 * self._last_prediction
-                    )  # Normal smoothing for upward
-
         return A_T
 
-    def _structural_preservation(self, A_t_T: np.ndarray) -> np.ndarray:
-        """
-        Project the matrix A_t_T onto a structurally correct adjacency A_t_S,
-        with adaptive gamma and stability controls.
-        """
-        # Adapt gamma based on recent prediction errors and density changes
+    def _structural_preservation(
+        self, A_t_T: np.ndarray, current_adj: np.ndarray, stability_score: float
+    ) -> np.ndarray:
+        """Structural preservation with stability-based adaptation."""
+        # Adapt gamma based on stability
         if len(self._prev_mses) > 0:
             mean_error = np.mean(list(self._prev_mses))
+            # More stable gamma adaptation
+            self.gamma = self.gamma * np.exp(-mean_error * 2)
+            self.gamma = max(0.01, min(0.3, self.gamma))
 
-            # Check for transition period
-            if len(self._density_history) > 3:
-                recent_densities = list(self._density_history)[-4:]
-                density_changes = np.diff(recent_densities)
+            # Reduce gamma more during instability
+            self.gamma *= stability_score
 
-                # Detect if we're in transition
-                volatility = np.std(density_changes)
-                trend = np.mean(density_changes)
-                in_transition = volatility > 0.03 or abs(trend) > 0.02
-
-                if in_transition:
-                    # Reduce structural preservation during transition
-                    self.gamma = max(0.01, self.gamma * 0.5)
-                else:
-                    # Normal gamma adaptation
-                    self.gamma = self.gamma * np.exp(-mean_error * 4)
-                    self.gamma = max(0.01, min(0.3, self.gamma))
-
-            logger.debug(f"Adapted gamma: {self.gamma:.3f}")
-
-        A_bin = (A_t_T > 0.5).astype(float)
-        np.fill_diagonal(A_bin, 0.0)
-        A_bin = np.maximum(A_bin, A_bin.T)
-
-        if self.gamma > 0:
-            A_opt = self._optimize_structure(A_t_T, A_bin)
-            return A_opt
-
-        return A_bin
+        return self._optimize_structure(A_t_T, current_adj)
 
     def _optimize_structure(self, A_t_T: np.ndarray, A_init: np.ndarray) -> np.ndarray:
         """
@@ -299,8 +271,8 @@ class GraphPredictor:
         """
         N = A_t_T.shape[0]
 
-        # Start with high confidence edges
-        A_opt = (A_t_T > 0.6).astype(float)
+        # Start with more aggressive threshold for high confidence edges
+        A_opt = (A_t_T > 0.55).astype(float)  # Lower threshold from 0.6
 
         # Count how many more edges we need
         target_density = np.mean(A_t_T)
@@ -313,17 +285,17 @@ class GraphPredictor:
             probs = A_t_T[mask]
 
             if len(probs) > remaining_edges:
-                # Add stability bonus for edges that existed in previous prediction
-                if self._last_prediction is not None:
-                    stability_bonus = 0.1 * self._last_prediction[mask]
-                    probs = probs + stability_bonus
-
-                # Add community structure bonus
+                # Enhanced community structure bonus
                 community_bonus = self._get_community_bonus(A_t_T)
-                probs = probs + 0.2 * community_bonus[mask]
+                community_weight = 0.3  # Increased from 0.2
+                probs = probs + community_weight * community_bonus[mask]
 
-                threshold = np.sort(probs)[-remaining_edges]
-                A_opt[mask] = (probs >= threshold).astype(float)
+                # Use soft thresholding for remaining edges
+                sorted_probs = np.sort(probs)
+                k = min(remaining_edges, len(sorted_probs) - 1)  # Ensure k is valid
+                threshold = sorted_probs[-k] if k > 0 else 0.5
+                confidence_factor = np.minimum(1.0, (probs - threshold + 0.1) / 0.1)
+                A_opt[mask] = confidence_factor * (probs >= threshold)
 
         # Ensure symmetry and zero diagonal
         A_opt = np.maximum(A_opt, A_opt.T)
@@ -352,25 +324,12 @@ class GraphPredictor:
 
         return bonus
 
-    def _adaptive_integration(self, A_t_T: np.ndarray, A_t_S: np.ndarray) -> np.ndarray:
-        """
-        Combine the temporal adjacency and structural adjacency with adaptive mixing.
-        During transitions, especially favor temporal predictions.
-        """
-        # Check if we're in a transition period
-        if len(self._density_history) > 3:
-            recent_changes = np.diff(list(self._density_history)[-4:])
-            volatility = np.std(recent_changes)
-            trend = np.mean(recent_changes)
-
-            if volatility > 0.03 or abs(trend) > 0.02:  # In transition
-                # Increase temporal weight more aggressively
-                if trend < 0:  # Downward trend
-                    self.beta = min(
-                        0.9, self.beta + 0.15
-                    )  # More aggressive for downward
-                else:
-                    self.beta = min(0.8, self.beta + 0.1)  # Normal transition
-                logger.debug(f"Transition detected, increased beta to {self.beta:.3f}")
+    def _adaptive_integration(
+        self, A_t_T: np.ndarray, A_t_S: np.ndarray, stability_score: float
+    ) -> np.ndarray:
+        """Integration with stability-based mixing."""
+        # Adjust beta based on stability
+        target_beta = 0.5 + 0.3 * (1 - stability_score)  # 0.5-0.8 range
+        self.beta = 0.7 * self.beta + 0.3 * target_beta  # Smooth beta changes
 
         return self.beta * A_t_T + (1.0 - self.beta) * A_t_S

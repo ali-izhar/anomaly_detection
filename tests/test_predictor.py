@@ -1,10 +1,16 @@
 """Tests for the graph predictor module."""
 
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 import networkx as nx
+from pathlib import Path
+
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from src.predictor.predictor import GraphPredictor
 from src.graph.generator import GraphGenerator

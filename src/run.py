@@ -341,8 +341,8 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     params = config["params"].__dict__
     params.update(
         {
-            "n": 30,  # Number of nodes (as in Section 6.1)
-            "seq_len": 100,  # Sequence length matching paper experiments
+            "n": 50,  # Number of nodes (as in Section 6.1)
+            "seq_len": 200,  # Sequence length matching paper experiments
             "min_changes": 1,  # Minimum structural changes
             "max_changes": 2,  # Maximum structural changes
             "min_segment": 40,  # Minimum segment length (Section 6.1)
@@ -371,7 +371,7 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     predictor = GraphPredictor(
         k=DEFAULT_PARAMS["window_size"],  # Window size k=10 from Section 6.3
         alpha=0.8,  # Decay factor for temporal patterns (Section 5.1)
-        gamma=0.1,  # Weight for structural constraints (Section 5.1)
+        initial_gamma=0.1,  # Weight for structural constraints (Section 5.1)
         initial_beta=0.5,  # Initial mixing parameter (adapted online)
     )
 

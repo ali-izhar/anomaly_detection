@@ -183,17 +183,17 @@ def plot_performance_evolution(
 
     # Apply moving average smoothing
     window = 5  # Window size for moving average
-    accuracies_smooth = np.convolve(accuracies, np.ones(window)/window, mode='valid')
-    recalls_smooth = np.convolve(recalls, np.ones(window)/window, mode='valid')
-    fprs_smooth = np.convolve(fprs, np.ones(window)/window, mode='valid')
-    
+    accuracies_smooth = np.convolve(accuracies, np.ones(window) / window, mode="valid")
+    recalls_smooth = np.convolve(recalls, np.ones(window) / window, mode="valid")
+    fprs_smooth = np.convolve(fprs, np.ones(window) / window, mode="valid")
+
     # Adjust time points for smoothed data
-    smooth_time_points = time_points[window-1:]
+    smooth_time_points = time_points[window - 1 :]
 
     # Plot smoothed metrics with original data as light points
-    ax.plot(time_points, accuracies, 'o', color="#0072B2", alpha=0.2, markersize=2)
-    ax.plot(time_points, recalls, 'o', color="#009E73", alpha=0.2, markersize=2)
-    ax.plot(time_points, fprs, 'o', color="#D55E00", alpha=0.2, markersize=2)
+    ax.plot(time_points, accuracies, "o", color="#0072B2", alpha=0.2, markersize=2)
+    ax.plot(time_points, recalls, "o", color="#009E73", alpha=0.2, markersize=2)
+    ax.plot(time_points, fprs, "o", color="#D55E00", alpha=0.2, markersize=2)
 
     ax.plot(
         smooth_time_points,
@@ -224,7 +224,7 @@ def plot_performance_evolution(
     def rolling_std(data, window):
         result = np.zeros(len(data) - window + 1)
         for i in range(len(result)):
-            result[i] = np.std(data[i:i+window])
+            result[i] = np.std(data[i : i + window])
         return result
 
     acc_std = rolling_std(accuracies, window)
