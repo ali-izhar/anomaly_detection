@@ -77,7 +77,7 @@ class MartingaleVisualizer:
 
         # Compute SHAP values
         sequence_length = len(next(iter(martingales.values()))["martingales"])
-        self.shap_values = compute_shap_values(
+        self.shap_values, self.feature_names = compute_shap_values(
             martingales=martingales,
             change_points=change_points,
             sequence_length=sequence_length,
@@ -340,93 +340,82 @@ class MartingaleVisualizer:
         fig = plt.figure(
             figsize=(
                 self.vis_config.double_column_width,
-                self.vis_config.grid_height * 1.2,
+                self.vis_config.grid_height
+                * 0.8,  # Reduced height since we only have one panel
             )
         )
-        gs = GridSpec(2, 1, figure=fig, height_ratios=[1, 1], hspace=0.1)
+        ax = fig.add_subplot(111)
 
-        ax1 = fig.add_subplot(gs[0])
-        ax1.text(
+        # Add vertical "Actual" label
+        ax.text(
             -0.1,
             0.5,
             "Actual",
-            transform=ax1.transAxes,
+            transform=ax.transAxes,
             fontsize=self.vis_config.label_size,
             va="center",
+            ha="right",
+            rotation=90,
         )
 
-        ax2 = fig.add_subplot(gs[1])
-        ax2.text(
-            -0.1,
-            0.5,
-            "Predicted",
-            transform=ax2.transAxes,
-            fontsize=self.vis_config.label_size,
-            va="center",
+        # Create color map for available features
+        n_features = len(self.feature_names)
+        colors = plt.cm.tab10(np.linspace(0, 1, n_features))
+
+        # Plot SHAP values for each feature
+        for i, feature in enumerate(self.feature_names):
+            ax.plot(
+                self.shap_values[:, i],
+                label=feature.title(),
+                color=colors[i],
+                linewidth=self.vis_config.line_width,
+                alpha=self.vis_config.line_alpha,
+            )
+
+        # Add change point markers
+        for cp in self.change_points:
+            ax.axvline(
+                x=cp,
+                color=self.vis_config.colors["change_point"],
+                linestyle="--",
+                alpha=0.3,
+                linewidth=self.vis_config.grid_width,
+            )
+
+        ax.set_xticks(np.arange(0, 201, 50))
+        ax.set_xlim(0, 200)
+
+        # Dynamic y-axis range with small margin
+        y_vals = self.shap_values
+        y_min, y_max = np.min(y_vals), np.max(y_vals)
+        y_margin = max((y_max - y_min) * 0.1, 0.1)  # At least 0.1 margin
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
+
+        # Add grid with reduced alpha
+        ax.grid(
+            True,
+            linestyle=":",
+            alpha=self.vis_config.grid_alpha * 0.7,
+            linewidth=self.vis_config.grid_width * 0.8,
+        )
+        ax.tick_params(
+            axis="both",
+            which="major",
+            labelsize=self.vis_config.tick_size,
+            pad=2,
         )
 
-        features = [
-            "degree", "density", "clustering", "betweenness",
-            "eigenvector", "closeness", "singular_value", "laplacian"
-        ]
-        colors = plt.cm.tab10(np.linspace(0, 1, len(features)))
+        # Legend configuration
+        ax.legend(
+            ncol=2,
+            loc="upper right",
+            fontsize=self.vis_config.legend_size,
+            borderaxespad=0.1,
+            handlelength=1.0,
+            columnspacing=0.8,
+        )
 
-        for ax in [ax1, ax2]:
-            i = 0
-            for feature in features:
-                if feature in self.martingales and feature != "combined":
-                    ax.plot(
-                        self.shap_values[:, i],
-                        label=feature.title(),
-                        color=colors[i],
-                        linewidth=self.vis_config.line_width,
-                        alpha=self.vis_config.line_alpha,
-                    )
-                    i += 1
-
-            for cp in self.change_points:
-                ax.axvline(
-                    x=cp,
-                    color=self.vis_config.colors["change_point"],
-                    linestyle="--",
-                    alpha=0.3,  # Reduced alpha for less visual clutter
-                    linewidth=self.vis_config.grid_width,
-                )
-
-            ax.set_xticks(np.arange(0, 201, 50))
-            ax.set_xlim(0, 200)
-            
-            # Dynamic y-axis range
-            y_vals = self.shap_values
-            y_min, y_max = np.min(y_vals), np.max(y_vals)
-            y_margin = (y_max - y_min) * 0.1
-            ax.set_ylim(y_min - y_margin, y_max + y_margin)
-            
-            # Add grid with reduced alpha
-            ax.grid(
-                True,
-                linestyle=":",
-                alpha=self.vis_config.grid_alpha * 0.7,
-                linewidth=self.vis_config.grid_width * 0.8,
-            )
-            ax.tick_params(
-                axis="both",
-                which="major",
-                labelsize=self.vis_config.tick_size,
-                pad=2,
-            )
-
-            if ax == ax1:
-                ax.legend(
-                    ncol=2,
-                    loc="upper right",
-                    fontsize=self.vis_config.legend_size,
-                    borderaxespad=0.1,
-                    handlelength=1.0,
-                    columnspacing=0.8,
-                )
-
-        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size)
+        ax.set_xlabel("Time", fontsize=self.vis_config.label_size)
         plt.tight_layout(pad=0.3)
         self._save_figure("shap_values.png")
 

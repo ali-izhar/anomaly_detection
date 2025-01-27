@@ -11,7 +11,7 @@ def compute_shap_values(
     sequence_length: int,
     threshold: float,
     window_size: int = 5,
-) -> np.ndarray:
+) -> tuple[np.ndarray, List[str]]:
     """Compute SHAP values using CustomThresholdModel on martingale values.
 
     Args:
@@ -22,29 +22,49 @@ def compute_shap_values(
         window_size: Window size for SHAP computation (default: 5)
 
     Returns:
-        numpy.ndarray: SHAP values matrix of shape [n_timesteps x n_features]
+        tuple: (shap_values, feature_names)
+            - shap_values: numpy.ndarray of shape [n_timesteps x n_features]
+            - feature_names: list of feature names in order matching shap_values columns
     """
-    # Convert martingale values to feature matrix
-    feature_matrix = []
+    # Define fixed feature order to match visualization
+    feature_order = [
+        "degree",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_value",
+        "laplacian",
+    ]
 
-    # Process all features except 'combined'
-    for name, results in martingales.items():
-        if name != "combined":  # Skip the combined feature
+    # Convert martingale values to feature matrix with consistent ordering
+    feature_matrix = []
+    feature_names = []  # Keep track of which features were actually found
+
+    for feature in feature_order:
+        if feature in martingales and feature != "combined":
             # Convert array of arrays to flat array
             martingales_array = np.array(
                 [
                     x.item() if isinstance(x, np.ndarray) else x
-                    for x in results["martingales"]
+                    for x in martingales[feature]["martingales"]
                 ]
             )
             feature_matrix.append(martingales_array)
+            feature_names.append(feature)
+
+    if not feature_matrix:
+        raise ValueError("No valid features found in martingales dictionary")
 
     X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
 
     model = CustomThresholdModel(threshold=threshold)
-    return model.compute_shap_values(
+    shap_values = model.compute_shap_values(
         X=X,
         change_points=change_points,
         sequence_length=sequence_length,
         window_size=window_size,
     )
+
+    return shap_values, feature_names
