@@ -173,8 +173,9 @@ def multiview_martingale_test(
     """
     Compute a multivariate (multiview) martingale test, combining evidence across multiple features.
 
-    For d features, each feature j maintains its own power martingale M_j(n). We define
-    M_total(n) = sum_{j=1 to d} M_j(n).
+    For d features, each feature j maintains its own power martingale M_j(n). We compute:
+    M_total(n) = sum_{j=1 to d} M_j(n)
+    M_avg(n) = M_total(n) / d
     A change is detected if M_total(n) > threshold.
 
     Parameters
@@ -202,6 +203,8 @@ def multiview_martingale_test(
         - pvalues: p-value sequences for each feature (list of lists).
         - strangeness: strangeness sequences for each feature.
         - martingale_sum: time series of M_total(n).
+        - martingale_avg: time series of M_avg(n).
+        - individual_martingales: individual martingale time series for each feature.
     """
     if not data or not data[0]:
         logger.error("Empty data sequence provided")
@@ -232,10 +235,14 @@ def multiview_martingale_test(
     pvalues = [[] for _ in range(num_features)]
     strangeness_vals = [[] for _ in range(num_features)]
 
-    # We'll store the sum M_total(n) across time
-    # At t=0, M_j(0)=1 => sum is d
+    # We'll store both sum and average M_total(n) across time
+    # At t=0, M_j(0)=1 => sum is d, avg is 1
     martingale_sum = [float(num_features)]
+    martingale_avg = [1.0]
     change_points: List[int] = []
+
+    # Store individual martingales for each feature
+    individual_martingales = [[1.0] for _ in range(num_features)]
 
     # Helper loop to go through data in batches
     idx = 0
@@ -268,10 +275,13 @@ def multiview_martingale_test(
                 prev_m = martingales[j][-1]
                 new_m = prev_m * epsilon * (pv ** (epsilon - 1))
                 new_martingales.append(new_m)
+                individual_martingales[j].append(new_m)  # Store individual martingale
 
-            # sum across features => M_total(n)
+            # sum and average across features
             total_m = sum(new_martingales)
+            avg_m = total_m / num_features
             martingale_sum.append(total_m)
+            martingale_avg.append(avg_m)
 
             # update each feature's memory
             for j in range(num_features):
@@ -279,7 +289,7 @@ def multiview_martingale_test(
                 mj = new_martingales[j]
                 martingales[j].append(mj)
 
-            logger.debug(f"Time={i}, M_total={total_m:.4f}")
+            logger.debug(f"Time={i}, M_total={total_m:.4f}, M_avg={avg_m:.4f}")
 
             # detect a change
             if total_m > threshold:
@@ -292,6 +302,7 @@ def multiview_martingale_test(
                 for j in range(num_features):
                     windows[j] = []
                     martingales[j][-1] = 1.0  # reset
+                    individual_martingales[j].append(1.0)  # reset individual martingale
                 # optionally keep the new data point in the cleared window:
                 #   windows[j] = [data[j][i]]   (design choice)
 
@@ -309,6 +320,10 @@ def multiview_martingale_test(
         "change_detected_instant": change_points,
         "pvalues": pvalues,
         "strangeness": strangeness_vals,
-        # skip the initial sum (which was d at time=0) if you only want (num_samples) length
+        # skip the initial values if you only want (num_samples) length
         "martingale_sum": np.array(martingale_sum[1:], dtype=float),
+        "martingale_avg": np.array(martingale_avg[1:], dtype=float),
+        "individual_martingales": [
+            np.array(m[1:], dtype=float) for m in individual_martingales
+        ],
     }

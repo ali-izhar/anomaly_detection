@@ -1,6 +1,6 @@
 """Utility functions for changepoint analysis."""
 
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import numpy as np
 from .threshold import CustomThresholdModel
 
@@ -27,15 +27,17 @@ def compute_shap_values(
     # Convert martingale values to feature matrix
     feature_matrix = []
 
+    # Process all features except 'combined'
     for name, results in martingales.items():
-        # Convert array of arrays to flat array
-        martingales_array = np.array(
-            [
-                x.item() if isinstance(x, np.ndarray) else x
-                for x in results["martingales"]
-            ]
-        )
-        feature_matrix.append(martingales_array)
+        if name != "combined":  # Skip the combined feature
+            # Convert array of arrays to flat array
+            martingales_array = np.array(
+                [
+                    x.item() if isinstance(x, np.ndarray) else x
+                    for x in results["martingales"]
+                ]
+            )
+            feature_matrix.append(martingales_array)
 
     X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
 
@@ -46,31 +48,3 @@ def compute_shap_values(
         sequence_length=sequence_length,
         window_size=window_size,
     )
-
-
-def compute_combined_martingales(
-    martingales: Dict[str, Dict[str, Any]]
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute sum and average of martingale values across features.
-
-    Args:
-        martingales: Dictionary containing martingale values for each feature
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: (sum_martingale, avg_martingale)
-            - sum_martingale: Sum of martingales across features
-            - avg_martingale: Average of martingales across features
-    """
-    # Convert martingale sequences to arrays
-    martingale_arrays = []
-    for m in martingales.values():
-        values = np.array(
-            [x.item() if isinstance(x, np.ndarray) else x for x in m["martingales"]]
-        )
-        martingale_arrays.append(values)
-
-    # Compute sum and average
-    M_sum = np.sum(martingale_arrays, axis=0)
-    M_avg = M_sum / len(martingales)
-
-    return M_sum, M_avg

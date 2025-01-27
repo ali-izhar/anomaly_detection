@@ -105,8 +105,10 @@ class ChangePointDetector:
 
         We have d separate feature sets or "views," each a time series:
             data[j]  for j=0..(d-1).
-        Each is monitored with its own power martingale. We sum those martingales
-        at each time to get M_total(n). If M_total(n) > threshold, we flag a change.
+        Each is monitored with its own power martingale. We compute:
+        M_total(n) = sum_{j=1 to d} M_j(n)
+        M_avg(n) = M_total(n) / d
+        If M_total(n) > threshold, we flag a change.
 
         Parameters
         ----------
@@ -129,7 +131,9 @@ class ChangePointDetector:
         Dict[str, Any]
             {
               "change_points": List[int],
-              "martingales": np.ndarray,
+              "martingales_sum": np.ndarray,
+              "martingales_avg": np.ndarray,
+              "individual_martingales": List[np.ndarray],
               "p_values": List[List[float]],
               "strangeness": List[List[float]]
             }
@@ -157,7 +161,9 @@ class ChangePointDetector:
 
         return {
             "change_points": results["change_detected_instant"],
-            "martingales": results["martingale_sum"],
+            "martingales_sum": results["martingale_sum"],
+            "martingales_avg": results["martingale_avg"],
+            "individual_martingales": results["individual_martingales"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
         }

@@ -442,14 +442,7 @@ def run_change_detection(
     data = np.array(features_numeric)
     logger.info(f"Extracted feature matrix of shape {data.shape}")
 
-    # 4. Create a ChangePointDetector instance
-    cpd = ChangePointDetector()
-
-    logger.info(
-        "Running change detection with threshold=%f, epsilon=%f", threshold, epsilon
-    )
-
-    # 5. Run the detector on each feature separately
+    # Define feature names
     feature_names = [
         "degree",
         "density",
@@ -461,30 +454,47 @@ def run_change_detection(
         "laplacian",
     ]
 
-    # Store individual feature results
+    # 4. Create a ChangePointDetector instance
+    cpd = ChangePointDetector()
+
+    # 5. Run the detector using multiview martingale test
+    logger.info(
+        "Running multiview change detection with threshold=%f, epsilon=%f",
+        threshold,
+        epsilon,
+    )
+
+    # Run detector on all features together
+    multiview_result = cpd.detect_changes_multiview(
+        data=[
+            data[:, i : i + 1] for i in range(data.shape[1])
+        ],  # Split features into separate views
+        threshold=threshold,  # Threshold only for combined evidence
+        epsilon=epsilon,
+        max_window=None,
+        random_state=42,
+    )
+
+    # Store results for visualization
     feature_results = {}
-    all_detected_points = set()
 
-    # Run detector on each feature
+    # Use individual martingales from multiview result
     for i, feature_name in enumerate(feature_names):
-        feature_data = data[:, i : i + 1]  # Keep 2D shape
-        feature_result = cpd.detect_changes(
-            data=feature_data,
-            threshold=threshold,
-            epsilon=epsilon,
-            reset=True,
-            max_window=None,
-            random_state=42,
-        )
-        feature_results[feature_name] = feature_result
-        all_detected_points.update(feature_result["change_points"])
+        feature_results[feature_name] = {
+            "change_points": multiview_result["change_points"],
+            "martingales": multiview_result["individual_martingales"][
+                i
+            ],  # Use individual martingales from multiview
+            "p_values": multiview_result["p_values"][i],
+            "strangeness": multiview_result["strangeness"][i],
+        }
 
-    # Combine detected points and sort
-    combined_change_points = sorted(list(all_detected_points))
+    # Combined change points are the same as multiview result
+    combined_change_points = multiview_result["change_points"]
 
     # 6. Print results and compare with true change points
     print(
-        f"\n==== Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+        f"\n==== Multiview Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
     print(f"Network parameters: {params}")
     print(f"\nFeatures used for detection:")
@@ -498,12 +508,22 @@ def run_change_detection(
     print("- Smallest non-zero Laplacian eigenvalue")
 
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points (combined): {combined_change_points}")
+    print(f"Detected change points: {combined_change_points}")
 
-    # Print individual feature detections
-    print("\nDetections by feature:")
-    for feature_name, result in feature_results.items():
-        print(f"- {feature_name}: {result['change_points']}")
+    # Print martingale statistics
+    print("\nMartingale Statistics:")
+    print(
+        f"- Final sum martingale value: {multiview_result['martingales_sum'][-1]:.2f}"
+    )
+    print(
+        f"- Final average martingale value: {multiview_result['martingales_avg'][-1]:.2f}"
+    )
+    print(
+        f"- Maximum sum martingale value: {np.max(multiview_result['martingales_sum']):.2f}"
+    )
+    print(
+        f"- Maximum average martingale value: {np.max(multiview_result['martingales_avg']):.2f}"
+    )
 
     # Calculate detection accuracy
     if true_change_points and combined_change_points:
@@ -539,11 +559,23 @@ def run_change_detection(
     # Prepare feature martingales for visualization
     feature_martingales = {
         name: {
-            "martingales": results["martingales"],
+            "martingales": results["martingales"],  # Individual feature martingales
             "p_values": results["p_values"],
             "strangeness": results["strangeness"],
         }
         for name, results in feature_results.items()
+    }
+
+    # Add combined martingales as a special feature
+    feature_martingales["combined"] = {
+        "martingales": multiview_result[
+            "martingales_sum"
+        ],  # Use sum for main martingale line
+        "p_values": [1.0] * len(multiview_result["martingales_sum"]),  # Dummy p-values
+        "strangeness": [0.0]
+        * len(multiview_result["martingales_sum"]),  # Dummy strangeness
+        "martingale_sum": multiview_result["martingales_sum"],
+        "martingale_avg": multiview_result["martingales_avg"],
     }
 
     # Visualize martingale analysis
