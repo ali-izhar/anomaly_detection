@@ -433,11 +433,11 @@ def test_feature_prediction(n_trials: int = 5):
     # Override with test parameters
     params.update(
         {
-            "n": 30,  # Network size
-            "seq_len": 50,  # Sequence length
+            "n": 50,  # Network size
+            "seq_len": 200,  # Sequence length
             "min_changes": 1,
-            "max_changes": 1,
-            "min_segment": 20,
+            "max_changes": 2,
+            "min_segment": 40,
             "intra_prob": 0.8,
             "inter_prob": 0.1,
         }
