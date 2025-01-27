@@ -25,13 +25,11 @@ from typing import List, Dict, Any
 from collections import deque
 import logging
 
-# Setup logging
-logger = logging.getLogger(__name__)
-
 from .predictor.predictor import GraphPredictor
 from .graph.features import NetworkFeatureExtractor
 from .changepoint.detector import ChangePointDetector
 
+logger = logging.getLogger(__name__)
 
 # Default parameters
 DEFAULT_PARAMS = {
@@ -99,6 +97,7 @@ def run_forecast_martingale_detection(
     window_size: int = DEFAULT_PARAMS["window_size"],
     predictor: GraphPredictor = None,
     random_state: int = None,
+    progress_callback=None,  # Add callback parameter
 ) -> Dict[str, Any]:
     """
     Implementation of Algorithm 1 from Section 5 of the paper.
@@ -227,6 +226,10 @@ def run_forecast_martingale_detection(
             if t < n - horizon:
                 actual_next = nx.to_numpy_array(graph_sequence[t + 1])
                 predictor.update_beta(actual_next, predicted_graphs[0])
+
+        # Update progress if callback provided
+        if progress_callback is not None:
+            progress_callback(t)
 
     logger.info(f"Detection completed. Found {len(change_points)} change points")
     return {

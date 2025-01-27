@@ -16,7 +16,6 @@ from scipy import optimize
 from collections import deque
 import logging
 
-# Setup logging
 logger = logging.getLogger(__name__)
 
 
@@ -220,88 +219,37 @@ class GraphPredictor:
     def _optimize_structure(self, A_t_T: np.ndarray, A_init: np.ndarray) -> np.ndarray:
         """Optimize the adjacency matrix to preserve structural properties."""
         N = A_t_T.shape[0]
-        x0 = A_init.flatten()
         logger.debug(f"Starting structural optimization for {N}x{N} matrix")
 
-        def objective(x):
-            A = x.reshape(N, N)
-            diff = A - A_t_T
-            frobenius = np.sum(diff * diff)
-            penalty = np.sum(np.abs(A - A.T))
-            obj_value = frobenius + self.gamma * penalty
-            logger.debug(f"Objective value: {obj_value:.3f}")
-            return obj_value
+        # Start with binary initialization
+        A_opt = A_init.copy()
 
-        # Gradient of objective
-        def gradient(x):
-            A = x.reshape(N, N)
-            grad = 2 * (A - A_t_T)
-            grad += self.gamma * (
-                np.ones_like(A) - np.ones_like(A).T
-            )  # Symmetry gradient
-            return grad.flatten()
+        # Simple iterative projection approach
+        for _ in range(3):  # Limited iterations
+            # 1. Project to symmetric
+            A_opt = 0.5 * (A_opt + A_opt.T)
 
-        # Constraints
-        constraints = []
+            # 2. Zero diagonal
+            np.fill_diagonal(A_opt, 0)
 
-        # 1. Symmetry constraint: A[i,j] = A[j,i]
-        for i in range(N):
-            for j in range(i + 1, N):
-                idx1 = i * N + j
-                idx2 = j * N + i
-                # Create constraint vector
-                c = np.zeros(N * N)
-                c[idx1] = 1
-                c[idx2] = -1
+            # 3. Project to binary and maintain density
+            target_density = np.mean(A_t_T)
+            current = A_opt.copy()
+            k = int(target_density * N * (N - 1))  # Target number of edges
 
-                constraints.append(
-                    {
-                        "type": "eq",
-                        "fun": lambda x, c=c: np.array(
-                            [c.dot(x)]
-                        ),  # Wrap in array for consistent dimensions
-                        "jac": lambda x, c=c: c.reshape(1, -1),  # Ensure Jacobian is 2D
-                    }
-                )
+            # Get top k values (excluding diagonal)
+            mask = ~np.eye(N, dtype=bool)
+            flat_indices = np.argsort(current[mask].flatten())[-k:]
 
-        # 2. Diagonal constraint: A[i,i] = 0
-        for i in range(N):
-            idx = i * N + i
-            c = np.zeros(N * N)
-            c[idx] = 1
-            constraints.append(
-                {
-                    "type": "eq",
-                    "fun": lambda x, c=c: np.array([c.dot(x)]),  # Wrap in array
-                    "jac": lambda x, c=c: c.reshape(1, -1),  # 2D Jacobian
-                }
-            )
+            # Create new binary matrix
+            A_opt = np.zeros_like(A_opt)
+            A_opt[mask] = 0
+            A_opt[mask].flatten()[flat_indices] = 1
 
-        # Bounds: 0 ≤ A[i,j] ≤ 1
-        bounds = [(0, 1) for _ in range(N * N)]
+            # Ensure symmetry
+            A_opt = np.maximum(A_opt, A_opt.T)
 
-        # Optimize
-        result = optimize.minimize(
-            objective,
-            x0,
-            method="SLSQP",
-            jac=gradient,
-            bounds=bounds,
-            constraints=constraints,
-            options={"maxiter": 100, "ftol": 1e-6},
-        )
-
-        # Reshape result back to matrix
-        A_opt = result.x.reshape(N, N)
-
-        # Ensure binary values
-        A_opt = (A_opt > 0.5).astype(float)
-
-        # Final cleanup
-        np.fill_diagonal(A_opt, 0.0)  # Ensure zero diagonal
-        A_opt = np.maximum(A_opt, A_opt.T)  # Ensure symmetry
-
-        logger.debug(f"Optimization completed with status: {result.status}")
+        logger.debug(f"Optimization completed with density: {np.mean(A_opt):.3f}")
         return A_opt
 
     def _adaptive_integration(self, A_t_T: np.ndarray, A_t_S: np.ndarray) -> np.ndarray:

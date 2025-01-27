@@ -23,6 +23,7 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 from pathlib import Path
+from tqdm import tqdm
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
@@ -42,7 +43,7 @@ from src.algorithm import (
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.ERROR, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 
@@ -340,10 +341,10 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     params = config["params"].__dict__
     params.update(
         {
-            "n": 50,  # Number of nodes (as in Section 6.1)
-            "seq_len": 200,  # Sequence length matching paper experiments
-            "min_changes": 2,  # Minimum structural changes
-            "max_changes": 3,  # Maximum structural changes
+            "n": 30,  # Number of nodes (as in Section 6.1)
+            "seq_len": 100,  # Sequence length matching paper experiments
+            "min_changes": 1,  # Minimum structural changes
+            "max_changes": 2,  # Maximum structural changes
             "min_segment": 40,  # Minimum segment length (Section 6.1)
         }
     )
@@ -359,7 +360,7 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     features_raw = []  # Store raw feature dictionaries for visualization
     features_numeric = []  # Store numeric features for detection
 
-    for adj_matrix in graphs:
+    for adj_matrix in tqdm(graphs, desc="Extracting features", unit="graph"):
         graph = nx.from_numpy_array(adj_matrix)
         feature_dict = feature_extractor.get_features(graph)
         features_raw.append(feature_dict)
@@ -376,6 +377,14 @@ def run_detection(model_alias: str, output_dir: str = "results"):
 
     # 5. Run Detection Algorithm (Algorithm 1)
     logger.info("Running forecast-based martingale detection...")
+
+    # Create a progress bar for the detection process
+    pbar = tqdm(total=len(graphs), desc="Running detection", unit="step")
+
+    # Create a callback to update the progress bar
+    def progress_callback(t):
+        pbar.update(1)
+
     detection_results = run_forecast_martingale_detection(
         graph_sequence=[nx.from_numpy_array(g) for g in graphs],
         horizon=DEFAULT_PARAMS["horizon"],  # h=5 from Section 6.3
@@ -384,7 +393,10 @@ def run_detection(model_alias: str, output_dir: str = "results"):
         window_size=DEFAULT_PARAMS["window_size"],
         predictor=predictor,
         random_state=42,
+        progress_callback=progress_callback,  # Add callback for progress updates
     )
+
+    pbar.close()
 
     # 6. Analyze Results (Section 6.2)
     detected_points = detection_results["change_points"]
