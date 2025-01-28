@@ -1,8 +1,4 @@
-# Change Point Detection
-
-This module demonstrates **martingale-based change detection** in sequential data (including **multi-view** or multi-feature scenarios), grounded in **conformal prediction** principles. The approach combines **strangeness measures**, **p-values**, and a **power martingale** update rule to detect distributional shifts over time.
-
-## What Is a Change Point?
+## What is a Change Point?
 
 Given a data stream $X_1, X_2, \ldots, X_n$, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs significantly from the distribution of $X_{k+1:n}$. In practice, we usually do **online** detection — we process observations one at a time and raise an alarm as soon as a suspected shift is detected.
 
@@ -94,36 +90,6 @@ where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conform
 **Challenges**:
 - Choosing $\epsilon$ and $\tau$ can be domain-specific.
 - Large dimensional data might need sophisticated strangeness measures (e.g., embeddings).
-
-## Example Usage
-
-1. **Single-View**:
-   ```python
-   from changepoint.detector import ChangePointDetector
-   import numpy as np
-
-   data = np.array([0.1, 0.2, 0.5, 1.2, 1.25, 0.3]).reshape(-1,1)
-   detector = ChangePointDetector()
-   result = detector.detect_changes(data, threshold=5.0, epsilon=0.6, max_window=3)
-   print(result["change_points"])
-   print(result["martingale_values"])
-   ```
-
-2. **Multi-View**:
-    ```python
-    feat1 = np.array([0.1, 0.2, 0.5, 1.2, 1.25, 0.3]).reshape(-1,1)
-    feat2 = np.array([2.1, 2.2, 2.5, 1.9, 2.0, 2.1]).reshape(-1,1)
-
-    detector = ChangePointDetector()
-    result = detector.detect_changes_multiview(
-        data=[feat1, feat2],
-        threshold=7.0,
-        epsilon=0.4,
-        max_window=3
-    )
-    print(result["change_points"])
-    print(result["martingale_values"])
-    ```
 
 ## References
 

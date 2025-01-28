@@ -2,10 +2,11 @@
 
 """Example script demonstrating network generation and visualization for different models."""
 
+from pathlib import Path
+
 import os
 import sys
 import argparse
-from pathlib import Path
 import matplotlib.pyplot as plt
 
 project_root = str(Path(__file__).parent.parent)

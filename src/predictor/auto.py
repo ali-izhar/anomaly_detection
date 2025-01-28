@@ -1,4 +1,4 @@
-# src/predictor/combined.py
+# src/predictor/auto.py
 
 from typing import List, Dict, Any
 from collections import deque

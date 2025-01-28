@@ -8,15 +8,17 @@ Usage:
     python examples/martingale_visualization.py sbm
 """
 
+from pathlib import Path
+
 import sys
 import os
 import argparse
+import logging
+import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import logging
-from pathlib import Path
 import seaborn as sns
+
 from matplotlib.gridspec import GridSpec
 
 project_root = str(Path(__file__).parent.parent)
@@ -29,7 +31,6 @@ from src.configs.loader import get_config
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
-
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

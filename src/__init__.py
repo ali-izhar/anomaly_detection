@@ -1,3 +1,1 @@
-"""
-src package initialization.
-"""
+# src/__init__.py

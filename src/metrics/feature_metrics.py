@@ -1,16 +1,54 @@
+# src/metrics/feature_metrics.py
+
 """Metrics for evaluating feature prediction accuracy."""
 
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, TypeVar, Union
 import numpy as np
+from numpy.typing import NDArray
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Type aliases for better readability
+FeatureDict = Dict[str, Union[float, List[float]]]
+T = TypeVar("T", bound=Union[float, List[float]])
+
+# Constants
+EPSILON = 1e-8
+DEFAULT_HIST_BINS = 50
+MIN_SAMPLES_FOR_REGRESSION = 3
+
+
+@dataclass
+class FeatureMetrics:
+    """Container for feature prediction metrics."""
+
+    mse: float
+    rmse: float
+    mae: float
+    mape: float
+    r2: float
+    mean_bias: float
+    std_error: float
+
+
+@dataclass
+class DistributionMetrics:
+    """Container for distribution-based metrics."""
+
+    kl_divergence: float
+    js_divergence: float
+    wasserstein: float
+    ks_statistic: float
+    mean_diff: float
+    std_diff: float
 
 
 def compute_feature_metrics(
-    actual_features: List[Dict],
-    predicted_features: List[Dict],
-    feature_names: List[str] = None,
-) -> Dict[str, Dict[str, float]]:
-    """Compute comprehensive metrics comparing actual vs predicted features.
+    actual_features: List[FeatureDict],
+    predicted_features: List[FeatureDict],
+    feature_names: Optional[List[str]] = None,
+) -> Dict[str, FeatureMetrics]:
+    """Compute metrics comparing actual vs predicted features.
 
     Args:
         actual_features: List of dictionaries containing actual feature values
@@ -18,92 +56,41 @@ def compute_feature_metrics(
         feature_names: Optional list of feature names to evaluate. If None, uses all features.
 
     Returns:
-        Dictionary mapping feature names to their metrics:
-        {
-            'feature_name': {
-                'mse': Mean squared error,
-                'rmse': Root mean squared error,
-                'mae': Mean absolute error,
-                'mape': Mean absolute percentage error,
-                'r2': R-squared score,
-                'mean_bias': Mean bias (predicted - actual),
-                'std_error': Standard deviation of error
-            }
-        }
+        Dictionary mapping feature names to their metrics.
+
+    Raises:
+        ValueError: If input lengths mismatch or empty features provided.
     """
+    if not actual_features or not predicted_features:
+        raise ValueError("Empty feature lists provided")
+
     if len(actual_features) != len(predicted_features):
         raise ValueError(
             f"Length mismatch: actual ({len(actual_features)}) vs "
             f"predicted ({len(predicted_features)})"
         )
 
-    if not actual_features:
-        raise ValueError("Empty feature lists provided")
+    feature_names = feature_names or list(actual_features[0].keys())
+    metrics: Dict[str, FeatureMetrics] = {}
 
-    # Get feature names if not provided
-    if feature_names is None:
-        feature_names = list(actual_features[0].keys())
-
-    metrics = {}
     for feature in feature_names:
-        # Extract values, handling both scalar and list features
-        actual_values = []
-        predicted_values = []
+        actual_values, predicted_values = _extract_feature_values(
+            actual_features, predicted_features, feature
+        )
 
-        for actual, predicted in zip(actual_features, predicted_features):
-            # For list features (like degrees), use mean
-            if isinstance(actual[feature], list):
-                actual_values.append(np.mean(actual[feature]))
-                predicted_values.append(np.mean(predicted[feature]))
-            else:
-                actual_values.append(actual[feature])
-                predicted_values.append(predicted[feature])
-
-        actual_values = np.array(actual_values)
-        predicted_values = np.array(predicted_values)
-
-        # Compute basic error metrics
-        mse = mean_squared_error(actual_values, predicted_values)
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(actual_values, predicted_values)
-
-        # Compute MAPE, handling zero values
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mape = (
-                np.mean(np.abs((actual_values - predicted_values) / actual_values))
-                * 100
-            )
-            mape = np.nan_to_num(mape, nan=np.inf)  # Replace NaN with inf
-
-        # Compute R-squared
-        ss_res = np.sum((actual_values - predicted_values) ** 2)
-        ss_tot = np.sum((actual_values - np.mean(actual_values)) ** 2)
-        r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-
-        # Compute bias and error statistics
-        errors = predicted_values - actual_values
-        mean_bias = np.mean(errors)
-        std_error = np.std(errors)
-
-        metrics[feature] = {
-            "mse": float(mse),
-            "rmse": float(rmse),
-            "mae": float(mae),
-            "mape": float(mape),
-            "r2": float(r2),
-            "mean_bias": float(mean_bias),
-            "std_error": float(std_error),
-        }
+        metrics[feature] = _compute_single_feature_metrics(
+            np.array(actual_values), np.array(predicted_values)
+        )
 
     return metrics
 
 
 def compute_feature_distribution_metrics(
-    actual_features: List[Dict],
-    predicted_features: List[Dict],
-    feature_names: List[str] = None,
-) -> Dict[str, Dict[str, float]]:
-    """Compute distribution-based metrics for features that are lists (e.g., degrees).
+    actual_features: List[FeatureDict],
+    predicted_features: List[FeatureDict],
+    feature_names: Optional[List[str]] = None,
+) -> Dict[str, DistributionMetrics]:
+    """Compute distribution-based metrics for features that are lists.
 
     Args:
         actual_features: List of dictionaries containing actual feature values
@@ -111,84 +98,148 @@ def compute_feature_distribution_metrics(
         feature_names: Optional list of feature names to evaluate. If None, uses all features.
 
     Returns:
-        Dictionary mapping feature names to their distribution metrics:
-        {
-            'feature_name': {
-                'kl_divergence': KL divergence between distributions,
-                'js_divergence': Jensen-Shannon divergence,
-                'wasserstein': Wasserstein distance,
-                'ks_statistic': Kolmogorov-Smirnov statistic,
-                'mean_diff': Difference in means,
-                'std_diff': Difference in standard deviations
-            }
-        }
+        Dictionary mapping feature names to their distribution metrics.
+
+    Raises:
+        ValueError: If input lengths mismatch or empty features provided.
     """
+    if not actual_features or not predicted_features:
+        raise ValueError("Empty feature lists provided")
+
     if len(actual_features) != len(predicted_features):
         raise ValueError(
             f"Length mismatch: actual ({len(actual_features)}) vs "
             f"predicted ({len(predicted_features)})"
         )
 
-    if not actual_features:
-        raise ValueError("Empty feature lists provided")
+    feature_names = feature_names or list(actual_features[0].keys())
+    metrics: Dict[str, DistributionMetrics] = {}
 
-    # Get feature names if not provided
-    if feature_names is None:
-        feature_names = list(actual_features[0].keys())
-
-    metrics = {}
     for feature in feature_names:
-        # Only process list features
+        # Skip non-list features
         if not isinstance(actual_features[0][feature], list):
             continue
 
-        # Compute metrics for each timestep and average
-        timestep_metrics = []
-        for actual, predicted in zip(actual_features, predicted_features):
-            actual_dist = np.array(actual[feature])
-            pred_dist = np.array(predicted[feature])
+        timestep_metrics = _compute_timestep_distribution_metrics(
+            actual_features, predicted_features, feature
+        )
 
-            if len(actual_dist) == 0 or len(pred_dist) == 0:
-                continue
-
-            # Compute basic statistics differences
-            mean_diff = np.mean(pred_dist) - np.mean(actual_dist)
-            std_diff = np.std(pred_dist) - np.std(actual_dist)
-
-            # Compute Wasserstein distance
-            wasserstein = _compute_wasserstein(actual_dist, pred_dist)
-
-            # Compute KS statistic
-            ks_stat = _compute_ks_statistic(actual_dist, pred_dist)
-
-            # Compute KL and JS divergences
-            kl_div = _compute_kl_divergence(actual_dist, pred_dist)
-            js_div = _compute_js_divergence(actual_dist, pred_dist)
-
-            timestep_metrics.append(
-                {
-                    "kl_divergence": kl_div,
-                    "js_divergence": js_div,
-                    "wasserstein": wasserstein,
-                    "ks_statistic": ks_stat,
-                    "mean_diff": mean_diff,
-                    "std_diff": std_diff,
-                }
-            )
-
-        # Average metrics across timesteps
         if timestep_metrics:
-            metrics[feature] = {
-                metric: float(np.mean([m[metric] for m in timestep_metrics]))
-                for metric in timestep_metrics[0].keys()
-            }
+            metrics[feature] = _average_distribution_metrics(timestep_metrics)
 
     return metrics
 
 
-def _compute_wasserstein(actual: np.ndarray, predicted: np.ndarray) -> float:
+def _extract_feature_values(
+    actual_features: List[FeatureDict],
+    predicted_features: List[FeatureDict],
+    feature: str,
+) -> tuple[List[float], List[float]]:
+    """Extract and process feature values from actual and predicted features."""
+    actual_values = []
+    predicted_values = []
+
+    for actual, predicted in zip(actual_features, predicted_features):
+        # Handle both scalar and list features
+        actual_val = (
+            np.mean(actual[feature])
+            if isinstance(actual[feature], list)
+            else actual[feature]
+        )
+        pred_val = (
+            np.mean(predicted[feature])
+            if isinstance(predicted[feature], list)
+            else predicted[feature]
+        )
+
+        actual_values.append(actual_val)
+        predicted_values.append(pred_val)
+
+    return actual_values, predicted_values
+
+
+def _compute_single_feature_metrics(
+    actual_values: NDArray[np.float64],
+    predicted_values: NDArray[np.float64],
+) -> FeatureMetrics:
+    """Compute metrics for a single feature."""
+    mse = mean_squared_error(actual_values, predicted_values)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(actual_values, predicted_values)
+
+    # Compute MAPE, handling zero values
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mape = np.mean(np.abs((actual_values - predicted_values) / actual_values)) * 100
+        mape = np.nan_to_num(mape, nan=np.inf)
+
+    # Compute R-squared
+    ss_res = np.sum((actual_values - predicted_values) ** 2)
+    ss_tot = np.sum((actual_values - np.mean(actual_values)) ** 2)
+    r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+
+    # Compute bias and error statistics
+    errors = predicted_values - actual_values
+    mean_bias = float(np.mean(errors))
+    std_error = float(np.std(errors))
+
+    return FeatureMetrics(
+        mse=float(mse),
+        rmse=float(rmse),
+        mae=float(mae),
+        mape=float(mape),
+        r2=float(r2),
+        mean_bias=mean_bias,
+        std_error=std_error,
+    )
+
+
+def _compute_timestep_distribution_metrics(
+    actual_features: List[FeatureDict],
+    predicted_features: List[FeatureDict],
+    feature: str,
+) -> List[DistributionMetrics]:
+    """Compute distribution metrics for each timestep."""
+    metrics = []
+
+    for actual, predicted in zip(actual_features, predicted_features):
+        actual_dist = np.array(actual[feature])
+        pred_dist = np.array(predicted[feature])
+
+        if len(actual_dist) == 0 or len(pred_dist) == 0:
+            continue
+
+        metrics.append(
+            DistributionMetrics(
+                kl_divergence=_compute_kl_divergence(actual_dist, pred_dist),
+                js_divergence=_compute_js_divergence(actual_dist, pred_dist),
+                wasserstein=_compute_wasserstein(actual_dist, pred_dist),
+                ks_statistic=_compute_ks_statistic(actual_dist, pred_dist),
+                mean_diff=float(np.mean(pred_dist) - np.mean(actual_dist)),
+                std_diff=float(np.std(pred_dist) - np.std(actual_dist)),
+            )
+        )
+
+    return metrics
+
+
+def _average_distribution_metrics(
+    metrics: List[DistributionMetrics],
+) -> DistributionMetrics:
+    """Average distribution metrics across timesteps."""
+    return DistributionMetrics(
+        kl_divergence=float(np.mean([m.kl_divergence for m in metrics])),
+        js_divergence=float(np.mean([m.js_divergence for m in metrics])),
+        wasserstein=float(np.mean([m.wasserstein for m in metrics])),
+        ks_statistic=float(np.mean([m.ks_statistic for m in metrics])),
+        mean_diff=float(np.mean([m.mean_diff for m in metrics])),
+        std_diff=float(np.mean([m.std_diff for m in metrics])),
+    )
+
+
+def _compute_wasserstein(
+    actual: NDArray[np.float64], predicted: NDArray[np.float64]
+) -> float:
     """Compute Wasserstein distance between two distributions."""
-    # Sort the distributions
     actual_sorted = np.sort(actual)
     predicted_sorted = np.sort(predicted)
 
@@ -210,9 +261,10 @@ def _compute_wasserstein(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.mean(np.abs(actual_interp - predicted_interp)))
 
 
-def _compute_ks_statistic(actual: np.ndarray, predicted: np.ndarray) -> float:
+def _compute_ks_statistic(
+    actual: NDArray[np.float64], predicted: NDArray[np.float64]
+) -> float:
     """Compute Kolmogorov-Smirnov statistic between two distributions."""
-    # Compute empirical CDFs
     actual_sorted = np.sort(actual)
     predicted_sorted = np.sort(predicted)
 
@@ -239,14 +291,14 @@ def _compute_ks_statistic(actual: np.ndarray, predicted: np.ndarray) -> float:
 
 
 def _compute_kl_divergence(
-    actual: np.ndarray, predicted: np.ndarray, bins: int = 50
+    actual: NDArray[np.float64],
+    predicted: NDArray[np.float64],
+    bins: int = DEFAULT_HIST_BINS,
 ) -> float:
     """Compute KL divergence between two distributions using histogram approximation."""
-    # Compute histogram range
     min_val = min(actual.min(), predicted.min())
     max_val = max(actual.max(), predicted.max())
 
-    # Compute histograms
     actual_hist, _ = np.histogram(
         actual, bins=bins, range=(min_val, max_val), density=True
     )
@@ -255,27 +307,25 @@ def _compute_kl_divergence(
     )
 
     # Add small constant to avoid division by zero
-    epsilon = 1e-10
-    actual_hist = actual_hist + epsilon
-    predicted_hist = predicted_hist + epsilon
+    actual_hist = actual_hist + EPSILON
+    predicted_hist = predicted_hist + EPSILON
 
     # Normalize
     actual_hist = actual_hist / actual_hist.sum()
     predicted_hist = predicted_hist / predicted_hist.sum()
 
-    # Compute KL divergence
     return float(np.sum(actual_hist * np.log(actual_hist / predicted_hist)))
 
 
 def _compute_js_divergence(
-    actual: np.ndarray, predicted: np.ndarray, bins: int = 50
+    actual: NDArray[np.float64],
+    predicted: NDArray[np.float64],
+    bins: int = DEFAULT_HIST_BINS,
 ) -> float:
     """Compute Jensen-Shannon divergence between two distributions."""
-    # Compute histogram range
     min_val = min(actual.min(), predicted.min())
     max_val = max(actual.max(), predicted.max())
 
-    # Compute histograms
     actual_hist, _ = np.histogram(
         actual, bins=bins, range=(min_val, max_val), density=True
     )
@@ -284,9 +334,8 @@ def _compute_js_divergence(
     )
 
     # Add small constant to avoid division by zero
-    epsilon = 1e-10
-    actual_hist = actual_hist + epsilon
-    predicted_hist = predicted_hist + epsilon
+    actual_hist = actual_hist + EPSILON
+    predicted_hist = predicted_hist + EPSILON
 
     # Normalize
     actual_hist = actual_hist / actual_hist.sum()
@@ -295,7 +344,6 @@ def _compute_js_divergence(
     # Compute midpoint distribution
     m = 0.5 * (actual_hist + predicted_hist)
 
-    # Compute JS divergence
     return float(
         0.5 * np.sum(actual_hist * np.log(actual_hist / m))
         + 0.5 * np.sum(predicted_hist * np.log(predicted_hist / m))

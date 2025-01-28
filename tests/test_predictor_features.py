@@ -22,6 +22,8 @@ from src.predictor.factory import PredictorFactory
 from src.metrics.feature_metrics import (
     compute_feature_metrics,
     compute_feature_distribution_metrics,
+    FeatureMetrics,
+    DistributionMetrics,
 )
 
 
@@ -229,8 +231,8 @@ def plot_prediction_comparison(
     predictor_type: str,
     actual_features: List[Dict[str, Any]],
     predicted_features: List[Dict[str, Any]],
-    basic_metrics: Dict[str, Dict[str, float]],
-    dist_metrics: Dict[str, Dict[str, float]],
+    basic_metrics: Dict[str, FeatureMetrics],
+    dist_metrics: Dict[str, DistributionMetrics],
     change_points: List[int],
     warmup: int,
     viz: NetworkVisualizer,
@@ -282,9 +284,9 @@ def plot_prediction_comparison(
             # Add distribution metrics if available
             if feature in dist_metrics:
                 metrics_text = (
-                    f"KL: {dist_metrics[feature]['kl_divergence']:.3f}\n"
-                    f"JS: {dist_metrics[feature]['js_divergence']:.3f}\n"
-                    f"W: {dist_metrics[feature]['wasserstein']:.3f}"
+                    f"KL: {dist_metrics[feature].kl_divergence:.3f}\n"
+                    f"JS: {dist_metrics[feature].js_divergence:.3f}\n"
+                    f"W: {dist_metrics[feature].wasserstein:.3f}"
                 )
             else:
                 metrics_text = ""
@@ -298,9 +300,9 @@ def plot_prediction_comparison(
 
         # Add basic metrics
         basic_text = (
-            f"RMSE: {basic_metrics[feature]['rmse']:.3f}\n"
-            f"MAE: {basic_metrics[feature]['mae']:.3f}\n"
-            f"R²: {basic_metrics[feature]['r2']:.3f}"
+            f"RMSE: {basic_metrics[feature].rmse:.3f}\n"
+            f"MAE: {basic_metrics[feature].mae:.3f}\n"
+            f"R²: {basic_metrics[feature].r2:.3f}"
         )
 
         # Combine metrics text
@@ -380,8 +382,8 @@ def plot_predictor_comparison(
         x = np.arange(len(results))
         width = 0.35
 
-        rmse_values = [results[p]["basic_metrics"][feature]["rmse"] for p in results]
-        r2_values = [results[p]["basic_metrics"][feature]["r2"] for p in results]
+        rmse_values = [results[p]["basic_metrics"][feature].rmse for p in results]
+        r2_values = [results[p]["basic_metrics"][feature].r2 for p in results]
 
         ax.bar(x - width / 2, rmse_values, width, label="RMSE")
         ax.bar(x + width / 2, r2_values, width, label="R²")
@@ -445,9 +447,9 @@ if __name__ == "__main__":
         print(f"\n{predictor_type} Predictor:")
         print(
             "Average RMSE across features:",
-            np.mean([m["rmse"] for m in metrics["basic_metrics"].values()]),
+            np.mean([m.rmse for m in metrics["basic_metrics"].values()]),
         )
         print(
             "Average R² across features:",
-            np.mean([m["r2"] for m in metrics["basic_metrics"].values()]),
+            np.mean([m.r2 for m in metrics["basic_metrics"].values()]),
         )

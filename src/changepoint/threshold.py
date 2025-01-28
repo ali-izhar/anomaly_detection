@@ -1,4 +1,4 @@
-# experiments/threshold.py
+# src/changepoint/threshold.py
 
 """Threshold-based classifier for change point detection in graph sequences."""
 
