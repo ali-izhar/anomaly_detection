@@ -5,12 +5,6 @@ Main script to run the forecast-based martingale detection algorithm on network 
 Implements the experimental setup from Section 6 of the paper:
 'Faster Structural Change Detection in Dynamic Networks via Statistical Forecasting'
 
-The script follows the experimental methodology:
-1. Generate synthetic network sequences with known change points (Section 6.1)
-2. Extract multiview features as defined in Section 4
-3. Run Algorithm 1 for detection (Section 5)
-4. Evaluate and visualize results (Section 6.2)
-
 Usage:
     python src/run.py <model_alias>
 """
@@ -30,20 +24,14 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.graph.generator import GraphGenerator
-from src.graph.features import NetworkFeatureExtractor
 from src.graph.visualizer import NetworkVisualizer
-from src.predictor.adaptive import GraphPredictor
 from src.configs.loader import get_config
-from src.algorithm import (
-    extract_numeric_features,
-    run_forecast_martingale_detection,
-    DEFAULT_PARAMS,
-)
+from src.algorithm import run_forecast_martingale_detection, DEFAULT_PARAMS
 
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.ERROR, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 
@@ -61,22 +49,12 @@ def get_full_model_name(alias: str) -> str:
 def visualize_results(
     model_name: str,
     graphs: list,
-    features_raw: list,
     true_change_points: list,
     detected_change_points: list,
     martingale_results: dict,
     output_dir: str = "results",
 ):
-    """
-    Create visualizations of network states and detection results.
-    Follows visualization approach from Section 6.2 of the paper:
-    1. Network states at key points (initial, change points, final)
-    2. Martingale evolution showing:
-       - M_t (observed martingale) from Algorithm 1, Line 6
-       - Mhat_t (horizon martingale) from Algorithm 1, Line 7
-       - Combined evidence max(M_t, Mhat_t) for detection
-    3. Individual feature martingales to analyze sensitivity
-    """
+    """Create visualizations of network states and detection results."""
     os.makedirs(output_dir, exist_ok=True)
     viz = NetworkVisualizer()
 
@@ -140,8 +118,9 @@ def visualize_results(
     # 2. Martingale Evolution
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12))
 
-    # Plot observed martingales
     time = range(len(martingale_results["M_observed"]))
+
+    # Plot observed martingales
     ax1.plot(
         time,
         martingale_results["M_observed"],
@@ -316,96 +295,43 @@ def visualize_results(
 
 
 def run_detection(model_alias: str, output_dir: str = "results"):
-    """
-    Run the forecast-based martingale detection algorithm on a network sequence.
-    Implements the experimental methodology from Section 6 of the paper.
-
-    Steps (with paper section references):
-    1. Generate synthetic network sequence with changes (Section 6.1)
-    2. Extract multiview features from each snapshot (Section 4)
-    3. Initialize predictor with optimal parameters (Section 6.3)
-    4. Run Algorithm 1 for detection (Section 5)
-    5. Analyze results using metrics from Section 6.2
-    """
-    # 1. Setup - Get full model name for config loading
+    """Run the forecast-based martingale detection algorithm on a network sequence."""
+    # 1. Setup
     model_name = get_full_model_name(model_alias)
     logger.info(f"Running detection on {model_name} network sequence...")
 
-    # 2. Generate Network Sequence (Section 6.1)
+    # 2. Generate Network Sequence
     generator = GraphGenerator(model_alias)
-
-    # Load base configuration from YAML
     config = get_config(model_name)
-
-    # Override experiment-specific parameters
     params = config["params"].__dict__
-    params.update(
-        {
-            "n": 50,  # Number of nodes (as in Section 6.1)
-            "seq_len": 200,  # Sequence length matching paper experiments
-            "min_changes": 1,  # Minimum structural changes
-            "max_changes": 2,  # Maximum structural changes
-            "min_segment": 40,  # Minimum segment length (Section 6.1)
-        }
-    )
-
-    # Generate sequence using parameters
     result = generator.generate_sequence(params)
     graphs = result["graphs"]
     true_change_points = result["change_points"]
 
-    # 3. Extract Features (Section 4)
-    logger.info("Extracting network features...")
-    feature_extractor = NetworkFeatureExtractor()
-    features_raw = []  # Store raw feature dictionaries for visualization
-    features_numeric = []  # Store numeric features for detection
-
-    for adj_matrix in tqdm(graphs, desc="Extracting features", unit="graph"):
-        graph = nx.from_numpy_array(adj_matrix)
-        feature_dict = feature_extractor.get_features(graph)
-        features_raw.append(feature_dict)
-        numeric_features = extract_numeric_features(feature_dict)
-        features_numeric.append(numeric_features)
-
-    # 4. Initialize Predictor (Section 5.1)
-    predictor = GraphPredictor(
-        k=DEFAULT_PARAMS["window_size"],  # Window size k=10 from Section 6.3
-        alpha=0.8,  # Decay factor for temporal patterns (Section 5.1)
-        initial_gamma=0.1,  # Weight for structural constraints (Section 5.1)
-        initial_beta=0.5,  # Initial mixing parameter (adapted online)
-    )
-
-    # 5. Run Detection Algorithm (Algorithm 1)
+    # 3. Run Detection Algorithm
     logger.info("Running forecast-based martingale detection...")
-
-    # Create a progress bar for the detection process
     pbar = tqdm(total=len(graphs), desc="Running detection", unit="step")
-
-    # Create a callback to update the progress bar
-    def progress_callback(t):
-        pbar.update(1)
 
     detection_results = run_forecast_martingale_detection(
         graph_sequence=[nx.from_numpy_array(g) for g in graphs],
-        horizon=DEFAULT_PARAMS["horizon"],  # h=5 from Section 6.3
-        threshold=DEFAULT_PARAMS["threshold"],  # λ=60 from Section 6.3
-        epsilon=DEFAULT_PARAMS["epsilon"],  # ε=0.7 from Section 6.3
+        horizon=DEFAULT_PARAMS["horizon"],
+        threshold=DEFAULT_PARAMS["threshold"],
+        epsilon=DEFAULT_PARAMS["epsilon"],
         window_size=DEFAULT_PARAMS["window_size"],
-        predictor=predictor,
+        predictor_type="adaptive",
         random_state=42,
-        progress_callback=progress_callback,  # Add callback for progress updates
+        progress_callback=lambda t: pbar.update(1),
     )
 
     pbar.close()
 
-    # 6. Analyze Results (Section 6.2)
+    # 4. Analyze Results
     detected_points = detection_results["change_points"]
     logger.info(f"\nResults Summary:")
     logger.info(f"True change points: {true_change_points}")
     logger.info(f"Detected change points: {detected_points}")
 
     if true_change_points and detected_points:
-        # Compute detection delay (key metric from Section 6.2)
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(detected_points, key=lambda x: abs(x - true_cp))
@@ -414,12 +340,11 @@ def run_detection(model_alias: str, output_dir: str = "results"):
         avg_error = np.mean(errors)
         logger.info(f"Average detection delay: {avg_error:.2f} time steps")
 
-    # 7. Visualize Results (Section 6.2)
+    # 5. Visualize Results
     logger.info("Creating visualizations...")
     visualize_results(
         model_name=model_name,
         graphs=graphs,
-        features_raw=features_raw,
         true_change_points=true_change_points,
         detected_change_points=detected_points,
         martingale_results=detection_results,

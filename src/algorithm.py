@@ -21,11 +21,12 @@ Key steps (line numbers reference Algorithm 1 in paper):
 
 import numpy as np
 import networkx as nx
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from collections import deque
 import logging
 
-from .predictor.adaptive import GraphPredictor
+from .predictor.factory import PredictorFactory
+from .predictor.base import BasePredictor
 from .graph.features import NetworkFeatureExtractor
 from .changepoint.detector import ChangePointDetector
 
@@ -95,7 +96,9 @@ def run_forecast_martingale_detection(
     threshold: float = DEFAULT_PARAMS["threshold"],
     epsilon: float = DEFAULT_PARAMS["epsilon"],
     window_size: int = DEFAULT_PARAMS["window_size"],
-    predictor: GraphPredictor = None,
+    predictor: Optional[BasePredictor] = None,
+    predictor_type: str = "adaptive",
+    predictor_config: Optional[Dict[str, Any]] = None,
     random_state: int = None,
     progress_callback=None,  # Add callback parameter
 ) -> Dict[str, Any]:
@@ -114,11 +117,37 @@ def run_forecast_martingale_detection(
         [Line 9] Update history window
         [Line 10] Adapt parameters (beta, gamma)
 
-    Parameters match those defined in Section 5.2 of the paper.
+    Parameters
+    ----------
+    graph_sequence : List[nx.Graph]
+        Sequence of network states to analyze
+    horizon : int, optional
+        Number of future steps to predict (h in Algorithm 1)
+    threshold : float, optional
+        Detection threshold λ
+    epsilon : float, optional
+        Power martingale sensitivity
+    window_size : int, optional
+        Rolling window size k for feature history
+    predictor : Optional[BasePredictor], optional
+        Pre-configured predictor instance. If provided, predictor_type and predictor_config are ignored.
+    predictor_type : str, optional
+        Type of predictor to use if predictor not provided. Default is "adaptive".
+    predictor_config : Optional[Dict[str, Any]], optional
+        Configuration for predictor if predictor not provided
+    random_state : int, optional
+        Random seed for reproducibility
+    progress_callback : callable, optional
+        Callback function to report progress
+
+    Returns
+    -------
+    Dict[str, Any]
+        Detection results including change points and martingale values
     """
     # [Line 1] Initialize
     if predictor is None:
-        predictor = GraphPredictor()
+        predictor = PredictorFactory.create(predictor_type, predictor_config)
 
     n = len(graph_sequence)
     logger.info(f"Starting detection on sequence of length {n}")
@@ -144,28 +173,57 @@ def run_forecast_martingale_detection(
 
         # [Line 3] Current graph processing
         current_graph = graph_sequence[t]
-        adjacency_history.append(nx.to_numpy_array(current_graph))
-
-        feature_extractor = NetworkFeatureExtractor()
-        feature_dict = feature_extractor.get_features(current_graph)
-        numeric_features = extract_numeric_features(feature_dict)
-        features_numeric.append(numeric_features)
+        current_adj = nx.to_numpy_array(current_graph)
+        adjacency_history.append(current_adj)
 
         if t >= window_size:
             logger.debug(f"Running detection at t={t} with window size {window_size}")
 
-            # [Line 6] Update observed martingale M_t
-            data = np.array(features_numeric)
-            logger.debug(f"Feature matrix shape: {data.shape}")
+            # [Line 4] Generate h-step ahead predictions
+            predicted_graphs = predictor.predict(
+                history=[{"adjacency": adj} for adj in list(adjacency_history)],
+                horizon=horizon,
+            )
 
+            # [Line 5] Extract features from both current and predicted states
+            feature_extractor = NetworkFeatureExtractor()
+
+            # Current features f(G_t)
+            current_features = extract_numeric_features(
+                feature_extractor.get_features(current_graph)
+            )
+            features_numeric.append(current_features)
+
+            # Predicted features {f(Ĝ_{t+j})}_{j=1}^h
+            predicted_features = []
+            for pred_adj in predicted_graphs:
+                pred_graph = nx.from_numpy_array(pred_adj)
+                pred_dict = feature_extractor.get_features(pred_graph)
+                pred_numeric = extract_numeric_features(pred_dict)
+                predicted_features.append(pred_numeric)
+
+            # [Line 6-7] Update both martingale streams in parallel
+            # Observed martingale M_t using current features
+            current_data = np.array(features_numeric)
             obs_result = detector.detect_changes_multiview(
-                data=[data[:, i : i + 1] for i in range(data.shape[1])],
+                data=[current_data[:, i : i + 1] for i in range(current_data.shape[1])],
                 threshold=threshold,
                 epsilon=epsilon,
-                max_window=None,  # Let detector handle window size
+                max_window=None,
                 random_state=random_state,
             )
 
+            # Horizon martingale M̂_t using predicted features
+            pred_data = np.array(predicted_features)
+            pred_result = detector.detect_changes_multiview(
+                data=[pred_data[:, i : i + 1] for i in range(pred_data.shape[1])],
+                threshold=threshold,
+                epsilon=epsilon,
+                max_window=None,
+                random_state=random_state,
+            )
+
+            # Store martingale values
             if "martingales_sum" in obs_result:
                 M_obs_sums.append(obs_result["martingales_sum"][-1])
                 logger.debug(
@@ -173,35 +231,6 @@ def run_forecast_martingale_detection(
                 )
             else:
                 logger.warning("No martingales_sum in observed result")
-
-            for i, marts in enumerate(obs_result["individual_martingales"]):
-                individual_marts_obs[i].append(marts[-1])
-
-            # [Lines 4-5] Predict future graphs and extract features
-            predicted_graphs = predictor.forecast(
-                history_adjs=list(adjacency_history)[:-1],
-                current_adj=adjacency_history[-1],
-                h=horizon,
-            )
-
-            pred_features = []
-            for pred_adj in predicted_graphs:
-                pred_graph = nx.from_numpy_array(pred_adj)
-                pred_dict = feature_extractor.get_features(pred_graph)
-                pred_numeric = extract_numeric_features(pred_dict)
-                pred_features.append(pred_numeric)
-
-            # [Line 7] Update horizon martingale Mhat_t
-            pred_data = np.array(pred_features)
-            logger.debug(f"Predicted feature matrix shape: {pred_data.shape}")
-
-            pred_result = detector.detect_changes_multiview(
-                data=[pred_data[:, i : i + 1] for i in range(pred_data.shape[1])],
-                threshold=threshold,
-                epsilon=epsilon,
-                max_window=None,  # Let detector handle window size
-                random_state=random_state,
-            )
 
             if "martingales_sum" in pred_result:
                 M_pred_sums.append(pred_result["martingales_sum"][-1])
@@ -211,10 +240,13 @@ def run_forecast_martingale_detection(
             else:
                 logger.warning("No martingales_sum in predicted result")
 
+            # Store individual feature martingales
+            for i, marts in enumerate(obs_result["individual_martingales"]):
+                individual_marts_obs[i].append(marts[-1])
             for i, marts in enumerate(pred_result["individual_martingales"]):
                 individual_marts_pred[i].append(marts[-1])
 
-            # [Line 8] Check for change point
+            # [Line 8] Check for change point using both streams
             if (
                 obs_result.get("martingales_sum", [0])[-1] > threshold
                 or pred_result.get("martingales_sum", [0])[-1] > threshold
@@ -222,10 +254,8 @@ def run_forecast_martingale_detection(
                 change_points.append(t)
                 logger.info(f"Change point detected at t={t}")
 
-            # [Lines 9-10] Update predictor parameters
-            if t < n - horizon:
-                actual_next = nx.to_numpy_array(graph_sequence[t + 1])
-                predictor.update_beta(actual_next, predicted_graphs[0])
+            # [Line 9-10] Update predictor state with actual observation
+            predictor.update_state({"adjacency": current_adj})
 
         # Update progress if callback provided
         if progress_callback is not None:
