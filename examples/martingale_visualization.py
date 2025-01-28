@@ -26,8 +26,8 @@ if project_root not in sys.path:
 from src.changepoint.detector import ChangePointDetector
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
-from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
+from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
 
 

@@ -15,9 +15,9 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 from src.configs.loader import get_config
-from src.graph.visualizer import NetworkVisualizer
-from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
+from src.graph.generator import GraphGenerator
+from src.graph.visualizer import NetworkVisualizer
 
 
 def get_full_model_name(alias: str) -> str:

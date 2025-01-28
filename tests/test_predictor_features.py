@@ -4,501 +4,289 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-import seaborn as sns
 from pathlib import Path
-from typing import List, Dict, Tuple
-from collections import defaultdict
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.predictor.weighted import EnhancedWeightedPredictor
-from src.graph.generator import GraphGenerator
 from src.configs.loader import get_config
+from src.graph.features import NetworkFeatureExtractor
+from src.graph.generator import GraphGenerator
+from src.graph.visualizer import NetworkVisualizer
+from src.predictor.combined import AutoChangepointPredictor
+from src.metrics.feature_metrics import (
+    compute_feature_metrics,
+    compute_feature_distribution_metrics,
+)
 
 
-def compute_graph_features(G: nx.Graph) -> Dict[str, float]:
-    """Compute comprehensive set of graph features with better handling of edge cases."""
-    features = {}
-
-    # Basic features
-    n = G.number_of_nodes()
-    features["n_nodes"] = n
-    features["n_edges"] = G.number_of_edges()
-    features["density"] = nx.density(G)
-
-    # Degree statistics with error checking
-    degrees = np.array([d for _, d in G.degree()])
-    features["avg_degree"] = float(np.mean(degrees))
-    features["degree_std"] = float(np.std(degrees)) if len(degrees) > 1 else 0.0
-    features["max_degree"] = float(np.max(degrees)) if len(degrees) > 0 else 0.0
-
-    # Clustering with error handling
-    try:
-        features["avg_clustering"] = float(nx.average_clustering(G))
-    except:
-        features["avg_clustering"] = 0.0
-
-    # Component analysis
-    components = list(nx.connected_components(G))
-    features["n_components"] = len(components)
-    features["largest_cc_size"] = len(max(components, key=len)) if components else 0
-
-    # Only compute expensive metrics for smaller graphs
-    if n <= 100:
-        # Get largest component for path-based metrics
-        largest_cc = max(components, key=len) if components else set()
-        largest_cc_graph = G.subgraph(largest_cc).copy() if largest_cc else None
-
-        # Betweenness centrality
-        try:
-            betweenness = nx.betweenness_centrality(G)
-            features["avg_betweenness"] = float(np.mean(list(betweenness.values())))
-        except:
-            features["avg_betweenness"] = 0.0
-
-        # Path length metrics (computed only on largest component)
-        if largest_cc_graph and nx.is_connected(largest_cc_graph):
-            try:
-                features["avg_path_length"] = float(
-                    nx.average_shortest_path_length(largest_cc_graph)
-                )
-                features["diameter"] = float(nx.diameter(largest_cc_graph))
-            except:
-                features["avg_path_length"] = -1.0
-                features["diameter"] = -1.0
-        else:
-            features["avg_path_length"] = -1.0
-            features["diameter"] = -1.0
-
-    return features
+def get_full_model_name(alias: str) -> str:
+    """Get full model name from alias."""
+    REVERSE_ALIASES = {
+        "ba": "barabasi_albert",
+        "ws": "watts_strogatz",
+        "er": "erdos_renyi",
+        "sbm": "stochastic_block_model",
+    }
+    return REVERSE_ALIASES.get(alias, alias)
 
 
-def plot_feature_comparison(
-    actual_features: List[Dict[str, float]],
-    predicted_features: List[Dict[str, float]],
-    time_points: List[int],
-    change_points: List[int],
-    output_dir: Path,
-) -> None:
-    """Plot comparison with better handling of special values."""
-    features = list(actual_features[0].keys())
-    n_features = len(features)
-    n_cols = 3
-    n_rows = (n_features + n_cols - 1) // n_cols
+def generate_network_and_features():
+    """Generate network sequence and compute features once."""
+    # Get full model name and config
+    model_name = get_full_model_name(model_alias)
+    config = get_config(model_name)
+    params = config["params"].__dict__
 
-    plt.style.use("seaborn-v0_8-paper")
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+    # Initialize components
+    generator = GraphGenerator(model_alias)
+    feature_extractor = NetworkFeatureExtractor()
 
-    axes_flat = axes.flatten()
-
-    for idx, feature in enumerate(features):
-        ax = axes_flat[idx]
-
-        # Extract and clean feature values
-        actual_vals = np.array([f[feature] for f in actual_features])
-        pred_vals = np.array([f[feature] for f in predicted_features])
-
-        # Handle special values
-        valid_mask = (
-            (actual_vals != float("inf"))
-            & (actual_vals != -1.0)
-            & (pred_vals != float("inf"))
-            & (pred_vals != -1.0)
-            & ~np.isnan(actual_vals)
-            & ~np.isnan(pred_vals)
-        )
-
-        if np.any(valid_mask):
-            plot_times = np.array(time_points)[valid_mask]
-            actual_plot = actual_vals[valid_mask]
-            pred_plot = pred_vals[valid_mask]
-
-            # Plot with error handling
-            ax.plot(plot_times, actual_plot, "b-", label="Actual", alpha=0.7)
-            ax.plot(plot_times, pred_plot, "r--", label="Predicted", alpha=0.7)
-
-            # Compute metrics only for valid values
-            try:
-                correlation = np.corrcoef(actual_plot, pred_plot)[0, 1]
-                mse = np.mean((actual_plot - pred_plot) ** 2)
-                title = f'{feature.replace("_", " ").title()}\nCorr: {correlation:.2f}, MSE: {mse:.2e}'
-            except:
-                title = feature.replace("_", " ").title()
-        else:
-            title = f'{feature.replace("_", " ").title()}\n(Insufficient Data)'
-
-        # Add change points
-        for cp in change_points:
-            ax.axvline(x=cp, color="gray", linestyle=":", alpha=0.5)
-
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        if idx == 0:
-            ax.legend()
-
-        ax.tick_params(axis="x", rotation=45)
-
-    # Remove empty subplots
-    for idx in range(len(features), len(axes_flat)):
-        fig.delaxes(axes_flat[idx])
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "feature_comparison.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-
-def plot_feature_correlations(
-    actual_features: List[Dict[str, float]],
-    predicted_features: List[Dict[str, float]],
-    output_dir: Path,
-) -> None:
-    """Plot correlations with better handling of special values."""
-    features = list(actual_features[0].keys())
-    correlations = []
-    valid_features = []
-
-    for feature in features:
-        actual_vals = np.array([f[feature] for f in actual_features])
-        pred_vals = np.array([f[feature] for f in predicted_features])
-
-        # Handle special values
-        valid_mask = (
-            (actual_vals != float("inf"))
-            & (actual_vals != -1.0)
-            & (pred_vals != float("inf"))
-            & (pred_vals != -1.0)
-            & ~np.isnan(actual_vals)
-            & ~np.isnan(pred_vals)
-        )
-
-        if np.any(valid_mask):
-            actual_vals = actual_vals[valid_mask]
-            pred_vals = pred_vals[valid_mask]
-
-            try:
-                if (
-                    len(actual_vals) >= 2
-                    and np.std(actual_vals) > 1e-10
-                    and np.std(pred_vals) > 1e-10
-                ):
-                    corr = np.corrcoef(actual_vals, pred_vals)[0, 1]
-                    if not np.isnan(corr):
-                        correlations.append(corr)
-                        valid_features.append(feature)
-            except:
-                continue
-
-    if correlations:
-        plt.figure(figsize=(10, 6))
-        sns.barplot(x=correlations, y=valid_features)
-        plt.title("Feature Prediction Correlations")
-        plt.xlabel("Correlation Coefficient")
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(
-            output_dir / "feature_correlations.png", dpi=300, bbox_inches="tight"
-        )
-        plt.close()
-
-
-def run_single_trial(
-    generator: GraphGenerator, params: dict, predictor: EnhancedWeightedPredictor
-) -> Tuple[List[Dict[str, float]], List[Dict[str, float]], List[int], List[int]]:
-    """Run a single trial of feature prediction."""
-    # Generate sequence
+    # Generate network sequence
+    print(f"Generating {model_name} network sequence...")
     result = generator.generate_sequence(params)
     graphs = result["graphs"]
     change_points = result["change_points"]
 
-    # Initialize storage
-    actual_features = []
-    predicted_features = []
-    time_points = []
+    # Extract features for each graph
+    print("Extracting network features...")
+    features = []
+    for adj_matrix in graphs:
+        graph = nx.from_numpy_array(adj_matrix)
+        features.append(feature_extractor.get_features(graph))
 
-    # Prepare history format
-    history = [
-        {"adjacency": adj, "graph": nx.from_numpy_array(adj)}
-        for adj in graphs[:3]  # Initial history
-    ]
+    return model_name, params, graphs, change_points, features
 
-    # Make predictions and compute features
-    for t in range(3, len(graphs) - 1):
-        # Make prediction
-        predicted_adj = predictor.predict(history, horizon=1)[0]
 
-        # Convert to graphs
-        actual_graph = nx.from_numpy_array(graphs[t + 1])
-        pred_graph = nx.from_numpy_array(predicted_adj)
+def test_network_feature_visualization(
+    model_name, params, graphs, change_points, features
+):
+    """Test network feature visualization for different graph models."""
+    output_dir = "tests/output"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # Compute features
-        actual_feats = compute_graph_features(actual_graph)
-        pred_feats = compute_graph_features(pred_graph)
+    # Initialize visualizer
+    viz = NetworkVisualizer()
 
-        actual_features.append(actual_feats)
-        predicted_features.append(pred_feats)
-        time_points.append(t + 1)
+    # Create network state visualizations
+    print("Creating network state visualizations...")
+    key_points = [0] + change_points + [len(graphs) - 1]
+    n_points = len(key_points)
 
-        # Update history
-        history.append(
-            {"adjacency": graphs[t], "graph": nx.from_numpy_array(graphs[t])}
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+
+    for i, time_idx in enumerate(key_points):
+        # Prepare node colors for SBM
+        node_color = None
+        if model_alias == "sbm":
+            block_sizes = [params["n"] // params["num_blocks"]] * (
+                params["num_blocks"] - 1
+            )
+            block_sizes.append(params["n"] - sum(block_sizes))
+            node_color = []
+            for j, size in enumerate(block_sizes):
+                node_color.extend([f"C{j}"] * size)
+
+        # Plot network state
+        viz.plot_network(
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network State at t={time_idx}"
+            + (" (Change Point)" if time_idx in change_points else ""),
+            layout="spring",
+            node_color=node_color,
         )
 
-    return actual_features, predicted_features, time_points, change_points
-
-
-def compute_trial_metrics(
-    actual_features: List[Dict[str, float]], predicted_features: List[Dict[str, float]]
-) -> Dict[str, Dict[str, float]]:
-    """Compute metrics with better handling of edge cases and numerical stability."""
-    metrics = {}
-    features = list(actual_features[0].keys())
-
-    for feature in features:
-        actual_vals = np.array([f[feature] for f in actual_features])
-        pred_vals = np.array([f[feature] for f in predicted_features])
-
-        # Handle special values
-        valid_mask = (
-            (actual_vals != float("inf"))
-            & (actual_vals != -1.0)
-            & (pred_vals != float("inf"))
-            & (pred_vals != -1.0)
-            & ~np.isnan(actual_vals)
-            & ~np.isnan(pred_vals)
+        # Plot adjacency matrix
+        viz.plot_adjacency(
+            graphs[time_idx],
+            ax=axes[i, 1],
+            title=f"Adjacency Matrix at t={time_idx}",
         )
 
-        if not np.any(valid_mask):
-            continue
-
-        actual_vals = actual_vals[valid_mask]
-        pred_vals = pred_vals[valid_mask]
-
-        # Skip if not enough variation for correlation
-        if (
-            len(actual_vals) < 2
-            or np.std(actual_vals) < 1e-10
-            or np.std(pred_vals) < 1e-10
-        ):
-            continue
-
-        # Compute metrics with error handling
-        try:
-            correlation = float(np.corrcoef(actual_vals, pred_vals)[0, 1])
-            if np.isnan(correlation):
-                continue
-
-            mse = float(np.mean((actual_vals - pred_vals) ** 2))
-            mae = float(np.mean(np.abs(actual_vals - pred_vals)))
-
-            metrics[feature] = {"correlation": correlation, "mse": mse, "mae": mae}
-        except:
-            continue
-
-    return metrics
-
-
-def plot_averaged_feature_comparison(
-    all_trials_data: List[
-        Tuple[List[Dict[str, float]], List[Dict[str, float]], List[int], List[int]]
-    ],
-    output_dir: Path,
-) -> None:
-    """Plot averaged feature comparisons with standard deviation bands."""
-    # Select features to plot (only averages)
-    features_to_plot = [
-        "avg_degree",
-        "avg_clustering",
-        "avg_betweenness",
-        "avg_path_length",
-        "density",
-    ]
-
-    n_features = len(features_to_plot)
-    n_cols = 2
-    n_rows = (n_features + n_cols - 1) // n_cols
-
-    plt.style.use("seaborn-v0_8-paper")
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 4 * n_rows))
-
-    # Flatten axes for easier iteration
-    axes_flat = axes.flatten()
-
-    # Get time points (assuming same across all trials)
-    time_points = all_trials_data[0][2]
-
-    for idx, feature in enumerate(features_to_plot):
-        ax = axes_flat[idx]
-
-        # Collect values across all trials
-        actual_vals_trials = []
-        pred_vals_trials = []
-
-        for actual_features, predicted_features, _, _ in all_trials_data:
-            actual_vals = np.array([f[feature] for f in actual_features])
-            pred_vals = np.array([f[feature] for f in predicted_features])
-
-            # Handle special values
-            valid_mask = (
-                (actual_vals != float("inf"))
-                & (actual_vals != -1.0)
-                & (pred_vals != float("inf"))
-                & (pred_vals != -1.0)
-                & ~np.isnan(actual_vals)
-                & ~np.isnan(pred_vals)
-            )
-
-            if np.any(valid_mask):
-                actual_vals_trials.append(actual_vals[valid_mask])
-                pred_vals_trials.append(pred_vals[valid_mask])
-
-        if actual_vals_trials:
-            # Convert to numpy arrays with padding
-            max_len = max(len(v) for v in actual_vals_trials)
-            actual_array = np.full((len(actual_vals_trials), max_len), np.nan)
-            pred_array = np.full((len(pred_vals_trials), max_len), np.nan)
-
-            for i, (act, pred) in enumerate(zip(actual_vals_trials, pred_vals_trials)):
-                actual_array[i, : len(act)] = act
-                pred_array[i, : len(pred)] = pred
-
-            # Compute means and stds
-            actual_mean = np.nanmean(actual_array, axis=0)
-            actual_std = np.nanstd(actual_array, axis=0)
-            pred_mean = np.nanmean(pred_array, axis=0)
-            pred_std = np.nanstd(pred_array, axis=0)
-
-            # Plot means and std bands
-            plot_times = time_points[: len(actual_mean)]
-
-            ax.plot(plot_times, actual_mean, "b-", label="Actual", alpha=0.7)
-            ax.fill_between(
-                plot_times,
-                actual_mean - actual_std,
-                actual_mean + actual_std,
-                color="b",
-                alpha=0.2,
-            )
-
-            ax.plot(plot_times, pred_mean, "r--", label="Predicted", alpha=0.7)
-            ax.fill_between(
-                plot_times,
-                pred_mean - pred_std,
-                pred_mean + pred_std,
-                color="r",
-                alpha=0.2,
-            )
-
-            # Compute metrics on means
-            valid_mask = ~np.isnan(actual_mean) & ~np.isnan(pred_mean)
-            if np.any(valid_mask):
-                correlation = np.corrcoef(
-                    actual_mean[valid_mask], pred_mean[valid_mask]
-                )[0, 1]
-                mse = np.mean((actual_mean[valid_mask] - pred_mean[valid_mask]) ** 2)
-                title = f'{feature.replace("_", " ").title()}\nCorr: {correlation:.2f}, MSE: {mse:.2e}'
-            else:
-                title = feature.replace("_", " ").title()
-        else:
-            title = f'{feature.replace("_", " ").title()}\n(Insufficient Data)'
-
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        if idx == 0:
-            ax.legend()
-
-        ax.tick_params(axis="x", rotation=45)
-
-    # Remove empty subplots
-    for idx in range(len(features_to_plot), len(axes_flat)):
-        fig.delaxes(axes_flat[idx])
-
-    plt.tight_layout()
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
-        output_dir / "feature_comparison_averaged.png", dpi=300, bbox_inches="tight"
+        Path(output_dir) / f"{model_name}_states.png",
+        bbox_inches="tight",
+        dpi=300,
     )
     plt.close()
 
+    print(f"Done! Network state visualizations have been saved to {output_dir}/")
 
-def test_feature_prediction(n_trials: int = 5):
-    """Test and visualize how well the predictor preserves network features across multiple trials."""
 
-    print(f"\nRunning {n_trials} trials...")
+def test_prediction_feature_comparison(model_name, graphs, change_points, features):
+    """Compare features of actual vs predicted network states."""
+    output_dir = "tests/output"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # 1. Load configuration
-    config = get_config("stochastic_block_model")
-    params = config["params"].__dict__
+    # Initialize components
+    viz = NetworkVisualizer()
+    feature_extractor = NetworkFeatureExtractor()
+    predictor = AutoChangepointPredictor(alpha=0.85, min_phase_length=40)
 
-    # Override with test parameters
-    params.update(
-        {
-            "n": 50,  # Network size
-            "seq_len": 200,  # Sequence length
-            "min_changes": 1,
-            "max_changes": 2,
-            "min_segment": 40,
-            "intra_prob": 0.8,
-            "inter_prob": 0.1,
-        }
+    # Generate predictions
+    predicted_features = []
+
+    # Initial warmup period
+    warmup = 50
+    for t in range(warmup):
+        predictor.forecast(graphs[t], t, h=1)
+
+    # Generate predictions and compare features
+    for t in range(warmup, len(graphs) - 1):
+        # Get predicted next state features
+        pred_adj = predictor.forecast(graphs[t], t, h=1)[0]
+        pred_graph = nx.from_numpy_array(pred_adj)
+        predicted_features.append(feature_extractor.get_features(pred_graph))
+
+    # Get the corresponding actual features for comparison
+    actual_features = features[warmup + 1 : len(graphs)]
+
+    # Compute metrics
+    basic_metrics = compute_feature_metrics(actual_features, predicted_features)
+    dist_metrics = compute_feature_distribution_metrics(
+        actual_features, predicted_features
     )
 
-    # Initialize generator and predictor
-    generator = GraphGenerator("sbm")
-    predictor = EnhancedWeightedPredictor(
-        n_history=3,
-        spectral_reg=0.3,
-        community_reg=0.3,
-        n_communities=2,
-        temporal_window=5,
+    # Plot feature comparisons
+    print("Creating feature comparison plots...")
+    fig, axes = plt.subplots(
+        4, 2, figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.GRID_HEIGHT * 2)
     )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    axes = axes.flatten()
 
-    # Create output directory
-    output_dir = Path("test_results")
-    output_dir.mkdir(exist_ok=True)
+    # Plot each feature comparison
+    feature_names = list(actual_features[0].keys())
+    for i, feature in enumerate(feature_names):
+        ax = axes[i]
+        time = np.arange(len(actual_features))
 
-    # Storage for all trials
-    all_trials_data = []
-    all_metrics = []
+        # For list features (like degrees), plot mean and std
+        if isinstance(actual_features[0][feature], list):
+            # Actual values
+            actual_means = [np.mean(f[feature]) for f in actual_features]
+            actual_stds = [np.std(f[feature]) for f in actual_features]
+            ax.plot(time, actual_means, label="Actual", color=viz.COLORS["actual"])
+            ax.fill_between(
+                time,
+                np.array(actual_means) - np.array(actual_stds),
+                np.array(actual_means) + np.array(actual_stds),
+                color=viz.COLORS["actual"],
+                alpha=0.1,
+            )
 
-    # Run trials
-    for trial in range(n_trials):
-        print(f"\nTrial {trial + 1}/{n_trials}")
+            # Predicted values
+            pred_means = [np.mean(f[feature]) for f in predicted_features]
+            pred_stds = [np.std(f[feature]) for f in predicted_features]
+            ax.plot(time, pred_means, label="Predicted", color=viz.COLORS["predicted"])
+            ax.fill_between(
+                time,
+                np.array(pred_means) - np.array(pred_stds),
+                np.array(pred_means) + np.array(pred_stds),
+                color=viz.COLORS["predicted"],
+                alpha=0.1,
+            )
 
-        # Run single trial
-        trial_data = run_single_trial(generator, params, predictor)
-        all_trials_data.append(trial_data)
+            # Add distribution metrics if available
+            if feature in dist_metrics:
+                metrics_text = (
+                    f"KL: {dist_metrics[feature]['kl_divergence']:.3f}\n"
+                    f"JS: {dist_metrics[feature]['js_divergence']:.3f}\n"
+                    f"W: {dist_metrics[feature]['wasserstein']:.3f}"
+                )
+            else:
+                metrics_text = ""
+        else:
+            # For scalar features
+            actual_values = [f[feature] for f in actual_features]
+            pred_values = [f[feature] for f in predicted_features]
+            ax.plot(time, actual_values, label="Actual", color=viz.COLORS["actual"])
+            ax.plot(time, pred_values, label="Predicted", color=viz.COLORS["predicted"])
+            metrics_text = ""
 
-        # Compute metrics for this trial
-        actual_features, predicted_features, _, _ = trial_data
-        trial_metrics = compute_trial_metrics(actual_features, predicted_features)
-        all_metrics.append(trial_metrics)
+        # Add basic metrics
+        basic_text = (
+            f"RMSE: {basic_metrics[feature]['rmse']:.3f}\n"
+            f"MAE: {basic_metrics[feature]['mae']:.3f}\n"
+            f"R²: {basic_metrics[feature]['r2']:.3f}"
+        )
 
-    # Create averaged visualizations
-    print("\nCreating averaged visualizations...")
-    plot_averaged_feature_comparison(all_trials_data, output_dir)
+        # Combine metrics text
+        full_text = basic_text
+        if metrics_text:
+            full_text += "\n" + metrics_text
 
-    # Compute and print averaged metrics across all trials
-    print("\nAveraged Feature Prediction Summary:")
+        # Add metrics text to plot
+        ax.text(
+            0.02,
+            0.98,
+            full_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            horizontalalignment="left",
+            fontsize=viz.ANNOTATION_SIZE,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
+        )
 
-    # Aggregate metrics across trials
-    aggregated_metrics = defaultdict(lambda: defaultdict(list))
-    for trial_metrics in all_metrics:
-        for feature, metrics in trial_metrics.items():
-            for metric_name, value in metrics.items():
-                if not np.isnan(value):
-                    aggregated_metrics[feature][metric_name].append(value)
+        # Mark change points
+        for cp in change_points:
+            if cp >= warmup and cp < len(graphs) - 1:
+                ax.axvline(
+                    cp - warmup,
+                    color=viz.COLORS["change_point"],
+                    linestyle="--",
+                    alpha=0.5,
+                )
 
-    # Print averaged metrics
-    for feature in aggregated_metrics:
-        print(f"\n{feature}:")
-        for metric_name in ["correlation", "mse", "mae"]:
-            values = aggregated_metrics[feature][metric_name]
-            if values:  # Only print if we have valid values
-                mean_val = np.mean(values)
-                std_val = np.std(values)
-                print(f"  {metric_name.upper()}: {mean_val:.3f} ± {std_val:.3f}")
+        ax.set_title(feature.replace("_", " ").title(), fontsize=viz.TITLE_SIZE)
+        ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE)
+        ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE)
+        ax.tick_params(labelsize=viz.TICK_SIZE)
+        ax.grid(True, alpha=viz.GRID_ALPHA)
+        ax.legend(fontsize=viz.LEGEND_SIZE)
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        Path(output_dir) / f"{model_name}_prediction_features.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+    print(f"Done! Comparison plots saved to {output_dir}/")
 
 
 if __name__ == "__main__":
-    test_feature_prediction(n_trials=30)
+    if len(sys.argv) != 2 or sys.argv[1] not in ["ba", "ws", "er", "sbm"]:
+        print("Usage: python test_predictor_features.py <model_alias>")
+        print("where model_alias is one of: ba, ws, er, sbm")
+        sys.exit(1)
+
+    model_alias = sys.argv[1]
+
+    # Generate network and compute features once
+    model_name, params, graphs, change_points, features = (
+        generate_network_and_features()
+    )
+
+    # Run visualizations using the same data
+    test_network_feature_visualization(
+        model_name, params, graphs, change_points, features
+    )
+    test_prediction_feature_comparison(model_name, graphs, change_points, features)
