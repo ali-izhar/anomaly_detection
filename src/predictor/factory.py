@@ -7,6 +7,8 @@ from .base import BasePredictor
 from .adaptive import AdaptivePredictor
 from .auto import AutoChangepointPredictor
 from .weighted import EnhancedWeightedPredictor
+from .statistical import StatisticalAdaptivePredictor
+from .aware import ChangepointAwarePredictor
 
 
 class PredictorFactory:
@@ -22,6 +24,8 @@ class PredictorFactory:
         "adaptive": AdaptivePredictor,
         "auto": AutoChangepointPredictor,
         "weighted": EnhancedWeightedPredictor,
+        "statistical": StatisticalAdaptivePredictor,
+        "aware": ChangepointAwarePredictor,
     }
 
     # Default configurations for each predictor type
@@ -44,6 +48,17 @@ class PredictorFactory:
             "n_communities": 2,
             "temporal_window": 10,
             "distribution_reg": 0.3,
+        },
+        "statistical": {
+            "alpha": 0.8,
+            "change_threshold": 5,
+            "min_phase_length": 40,
+            "history_size": 40,
+        },
+        "aware": {
+            "n_nodes": 50,
+            "alpha": 0.99,
+            "min_phase": 40,
         },
     }
 
@@ -81,9 +96,11 @@ class PredictorFactory:
         ----------
         predictor_type : str
             Type of predictor to create. Must be one of:
-            - "graph": Standard graph predictor with temporal memory
+            - "adaptive": Adaptive predictor with changepoint detection
+            - "auto": Auto-changepoint predictor with temporal memory
             - "weighted": Enhanced weighted predictor with distribution awareness
-            - "changepoint": Predictor with automatic changepoint detection
+            - "adaptive_rnn": Graph Adaptive RNN Predictor
+            - "hbtgn": Hierarchical Bayesian Temporal Graph Network Predictor
         config : Optional[Dict[str, Any]]
             Configuration overrides for the predictor.
             If None, uses default configuration.
