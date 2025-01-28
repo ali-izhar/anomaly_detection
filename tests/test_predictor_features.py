@@ -1,3 +1,5 @@
+# tests/test_predictor_features.py
+
 """Tests for comparing actual vs predicted graph features."""
 
 import sys
@@ -5,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 from pathlib import Path
+import argparse
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
@@ -14,7 +17,7 @@ from src.configs.loader import get_config
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
-from src.predictor.combined import AutoChangepointPredictor
+from src.predictor.factory import PredictorFactory
 from src.metrics.feature_metrics import (
     compute_feature_metrics,
     compute_feature_distribution_metrics,
@@ -125,7 +128,14 @@ def test_network_feature_visualization(
     print(f"Done! Network state visualizations have been saved to {output_dir}/")
 
 
-def test_prediction_feature_comparison(model_name, graphs, change_points, features):
+def test_prediction_feature_comparison(
+    model_name,
+    graphs,
+    change_points,
+    features,
+    predictor_type="auto",
+    predictor_config=None,
+):
     """Compare features of actual vs predicted network states."""
     output_dir = "tests/output"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -133,22 +143,39 @@ def test_prediction_feature_comparison(model_name, graphs, change_points, featur
     # Initialize components
     viz = NetworkVisualizer()
     feature_extractor = NetworkFeatureExtractor()
-    predictor = AutoChangepointPredictor(alpha=0.85, min_phase_length=40)
+
+    # Create predictor using factory
+    predictor = PredictorFactory.create(predictor_type, predictor_config)
+    print(
+        f"Using {predictor_type} predictor with config:", predictor_config or "default"
+    )
 
     # Generate predictions
     predicted_features = []
 
     # Initial warmup period
     warmup = 50
+    history = []
     for t in range(warmup):
-        predictor.forecast(graphs[t], t, h=1)
+        state = {"adjacency": graphs[t], "time": t}
+        history.append(state)
+        predictor.update_state(state)
 
     # Generate predictions and compare features
     for t in range(warmup, len(graphs) - 1):
+        # Update current state
+        state = {"adjacency": graphs[t], "time": t}
+        history.append(state)
+        if len(history) > predictor.history_size:
+            history = history[-predictor.history_size :]
+
         # Get predicted next state features
-        pred_adj = predictor.forecast(graphs[t], t, h=1)[0]
-        pred_graph = nx.from_numpy_array(pred_adj)
+        pred_adjs = predictor.predict(history, horizon=1)
+        pred_graph = nx.from_numpy_array(pred_adjs[0])
         predicted_features.append(feature_extractor.get_features(pred_graph))
+
+        # Update predictor state
+        predictor.update_state(state)
 
     # Get the corresponding actual features for comparison
     actual_features = features[warmup + 1 : len(graphs)]
@@ -165,7 +192,7 @@ def test_prediction_feature_comparison(model_name, graphs, change_points, featur
         4, 2, figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.GRID_HEIGHT * 2)
     )
     fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison",
+        f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
@@ -263,7 +290,7 @@ def test_prediction_feature_comparison(model_name, graphs, change_points, featur
 
     plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
-        Path(output_dir) / f"{model_name}_prediction_features.png",
+        Path(output_dir) / f"{model_name}_{predictor_type}_prediction_features.png",
         bbox_inches="tight",
         dpi=300,
     )
@@ -271,14 +298,38 @@ def test_prediction_feature_comparison(model_name, graphs, change_points, featur
 
     print(f"Done! Comparison plots saved to {output_dir}/")
 
+    # Return metrics for comparison
+    return {"basic_metrics": basic_metrics, "distribution_metrics": dist_metrics}
+
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ["ba", "ws", "er", "sbm"]:
-        print("Usage: python test_predictor_features.py <model_alias>")
-        print("where model_alias is one of: ba, ws, er, sbm")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Test network predictors")
+    parser.add_argument(
+        "model", choices=["ba", "ws", "er", "sbm"], help="Network model type"
+    )
+    parser.add_argument(
+        "--predictor",
+        choices=list(PredictorFactory.PREDICTOR_TYPES.keys()),
+        default="auto",
+        help="Predictor type to use",
+    )
+    parser.add_argument(
+        "--config", type=str, help="JSON string of predictor config overrides"
+    )
+    args = parser.parse_args()
 
-    model_alias = sys.argv[1]
+    model_alias = args.model
+
+    # Parse config if provided
+    predictor_config = None
+    if args.config:
+        import json
+
+        try:
+            predictor_config = json.loads(args.config)
+        except json.JSONDecodeError:
+            print("Error: Invalid JSON config string")
+            sys.exit(1)
 
     # Generate network and compute features once
     model_name, params, graphs, change_points, features = (
@@ -289,4 +340,25 @@ if __name__ == "__main__":
     test_network_feature_visualization(
         model_name, params, graphs, change_points, features
     )
-    test_prediction_feature_comparison(model_name, graphs, change_points, features)
+
+    # Test prediction with specified predictor
+    metrics = test_prediction_feature_comparison(
+        model_name,
+        graphs,
+        change_points,
+        features,
+        predictor_type=args.predictor,
+        predictor_config=predictor_config,
+    )
+
+    # Print summary metrics
+    print("\nPrediction Performance Summary:")
+    print(f"Predictor: {args.predictor}")
+    print(
+        "Average RMSE across features:",
+        np.mean([m["rmse"] for m in metrics["basic_metrics"].values()]),
+    )
+    print(
+        "Average R² across features:",
+        np.mean([m["r2"] for m in metrics["basic_metrics"].values()]),
+    )

@@ -1,17 +1,23 @@
+# src/predictor/weighted.py
+
 """Enhanced weighted average network predictor with distribution awareness."""
 
+from typing import List, Dict, Any, Optional, Tuple
+
+import warnings
 import networkx as nx
 import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
+
 from scipy import sparse, stats
 from scipy.sparse.linalg import eigsh
 from sklearn.cluster import SpectralClustering
-import warnings
+
+from .base import BasePredictor
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-class EnhancedWeightedPredictor:
+class EnhancedWeightedPredictor(BasePredictor):
     """Enhanced predictor that preserves network distributions and structural properties."""
 
     def __init__(
@@ -36,6 +42,7 @@ class EnhancedWeightedPredictor:
     ):
         """Initialize predictor with distribution awareness."""
         self.n_history = n_history
+        self._history_size = n_history  # Set history size property
 
         if weights is None:
             weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])  # More historical context
@@ -637,14 +644,36 @@ class EnhancedWeightedPredictor:
     def predict(
         self, history: List[Dict[str, Any]], horizon: int = 1
     ) -> List[np.ndarray]:
-        """Enhanced prediction with distribution awareness."""
+        """
+        Predict future network states with distribution awareness.
+
+        Parameters
+        ----------
+        history : List[Dict[str, Any]]
+            List of historical network states, each containing an 'adjacency' key
+        horizon : int, optional
+            Number of steps to predict ahead, by default 1
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of predicted adjacency matrices
+        """
         if len(history) < self.n_history:
             raise ValueError(
                 f"Not enough history. Need {self.n_history}, got {len(history)}."
             )
 
-        predictions = []
-        current_history = list(history)
+        # Extract adjacency matrices and create state dictionaries
+        current_history = []
+        for state in history:
+            adj = state["adjacency"]
+            current_history.append(
+                {
+                    "adjacency": adj,
+                    "graph": nx.from_numpy_array(adj) if self.binary else None,
+                }
+            )
 
         # Update distribution tracking
         self._update_distribution_history(current_history[-1]["adjacency"])
@@ -658,6 +687,7 @@ class EnhancedWeightedPredictor:
             self.weights = self.weights / self.weights.sum()
             self.change_points.append(len(current_history))
 
+        predictions = []
         for _ in range(horizon):
             # Get recent states
             last_states = current_history[-self.n_history :]
@@ -670,7 +700,6 @@ class EnhancedWeightedPredictor:
                     [self.weights, np.ones(self.smoothing_window) * 0.1]
                 )
                 weights = weights / weights.sum()
-
                 pred = np.zeros_like(last_adjs[0], dtype=float)
                 for w, adj in zip(weights, smoothed_history):
                     pred += w * adj
@@ -739,3 +768,81 @@ class EnhancedWeightedPredictor:
                 self.weights = self.weights / self.weights.sum()
 
         return predictions
+
+    def update_state(self, actual_state: Dict[str, Any]) -> None:
+        """
+        Update predictor's internal state with new observation.
+
+        Parameters
+        ----------
+        actual_state : Dict[str, Any]
+            The actual observed network state containing 'adjacency' matrix
+        """
+        actual_adj = actual_state["adjacency"]
+
+        # Update distribution history
+        self._update_distribution_history(actual_adj)
+
+        # Update feature history
+        features = self._compute_network_features(actual_adj)
+        self.feature_history.append(features)
+
+        # Detect and update phase if needed
+        if len(self.feature_history) >= self.temporal_window:
+            recent_history = [{"adjacency": actual_adj, "features": features}]
+            if self._detect_phase_transition(recent_history):
+                self.phase_start = len(self.pattern_history)
+                self.current_phase = self._detect_model_type(actual_adj)
+
+        # Update pattern history
+        self.pattern_history.append(
+            {"adjacency": actual_adj, "features": features, "phase": self.current_phase}
+        )
+
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the predictor.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing current predictor state and metrics
+        """
+        return {
+            "parameters": {
+                "weights": self.weights.tolist(),
+                "current_phase": self.current_phase,
+                "phase_start": self.phase_start,
+            },
+            "distribution_history": {
+                k: list(v) for k, v in self.distribution_history.items()
+            },
+            "change_points": self.change_points,
+            "features": {
+                "current": self.feature_history[-1] if self.feature_history else None,
+                "ema": self.ema_features,
+            },
+        }
+
+    def reset(self) -> None:
+        """Reset the predictor to its initial state."""
+        # Reset weights to initial values
+        self.weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])
+        self.weights = np.maximum(self.weights, self.min_weight)
+        self.weights = self.weights / self.weights.sum()
+
+        # Clear histories
+        self.pattern_history = []
+        self.feature_history = []
+        self.change_points = []
+        self.distribution_history = {
+            "degree": [],
+            "clustering": [],
+            "path_length": [],
+            "betweenness": [],
+        }
+
+        # Reset phase tracking
+        self.phase_start = 0
+        self.current_phase = "unknown"
+        self.ema_features = {}

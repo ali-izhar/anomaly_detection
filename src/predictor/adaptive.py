@@ -1,4 +1,4 @@
-# src/predictor/predictor.py
+# src/predictor/adaptive.py
 
 """
 Implements the predictive (preemptive) forecasting logic described in:
@@ -11,14 +11,17 @@ Then feed these predicted adjacencies into the martingale pipeline to
 compute horizon martingales, etc.
 """
 
-import numpy as np
 from collections import deque
+from typing import List, Dict, Any
+
+import numpy as np
 import logging
+from .base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
 
-class GraphPredictor:
+class AdaptivePredictor(BasePredictor):
     """A predictor that replicates the paper's approach:
     1) Weighted average (temporal memory) with adaptive decay.
     2) Structural role preservation with adaptive gamma.
@@ -48,6 +51,7 @@ class GraphPredictor:
             Number of recent prediction errors to track for adaptation.
         """
         self.k = k
+        self._history_size = k  # Set history size property
         self.alpha = alpha
         self.gamma = initial_gamma
         self.beta = initial_beta
@@ -58,16 +62,37 @@ class GraphPredictor:
         self._prediction_history = deque(maxlen=k)  # Track recent predictions
         self._last_prediction = None
 
-    def forecast(self, history_adjs, current_adj, h=1):
+    def predict(
+        self, history: List[Dict[str, Any]], horizon: int = 1
+    ) -> List[np.ndarray]:
         """
-        Forecast future adjacency matrices with consistent smoothing.
+        Predict future adjacency matrices with consistent smoothing.
+
+        Parameters
+        ----------
+        history : List[Dict[str, Any]]
+            List of historical network states, each containing an 'adjacency' key
+        horizon : int, optional
+            Number of steps to predict ahead, by default 1
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of predicted adjacency matrices
         """
-        extended_history = history_adjs + [current_adj]
+        # Extract adjacency matrices from history
+        history_adjs = [state["adjacency"] for state in history]
+        if len(history_adjs) < 1:
+            raise ValueError("Need at least one historical state")
+
+        current_adj = history_adjs[-1]
+        extended_history = history_adjs[:-1]
+
+        predictions = []
         n = current_adj.shape[0]
-        predictions = np.zeros((h, n, n))
 
         # Compute smoothed density statistics using full history
-        densities = [np.mean(adj) for adj in extended_history]
+        densities = [np.mean(adj) for adj in extended_history + [current_adj]]
         self._density_history.extend(densities)
 
         # Use exponential moving average for smoother trend detection
@@ -94,7 +119,7 @@ class GraphPredictor:
         stability_score = 1.0 - min(1.0, (abs(trend) / 0.02 + volatility / 0.03))
 
         # Base prediction with temporal patterns
-        base_pred = self._temporal_prediction(extended_history)
+        base_pred = self._temporal_prediction(extended_history + [current_adj])
 
         # Structural preservation with adaptive gamma
         struct_pred = self._structural_preservation(
@@ -122,17 +147,17 @@ class GraphPredictor:
         smooth_factor = stability_score * 0.2  # Max 20% smoothing
         pred = (1 - smooth_factor) * binary_pred + smooth_factor * pred
 
-        predictions[0] = pred
+        predictions.append(pred)
         self._prediction_history.append(pred)
         prev_pred = pred
 
-        # Make dependent predictions
-        for step in range(1, h):
+        # Make dependent predictions for horizon > 1
+        for step in range(1, horizon):
             # Use stability score to determine mixing weights
             temporal_weight = 0.6 + 0.3 * (1 - stability_score)  # 0.6-0.9 range
 
             # Temporal prediction using both history and recent predictions
-            temp_history = extended_history + [p for p in predictions[:step]]
+            temp_history = extended_history + [current_adj] + predictions
             temp_pred = self._temporal_prediction(temp_history)
 
             # Mix with previous prediction
@@ -152,75 +177,63 @@ class GraphPredictor:
             binary_next = (next_pred > threshold).astype(float)
             next_pred = (1 - smooth_factor) * binary_next + smooth_factor * next_pred
 
-            predictions[step] = next_pred
+            predictions.append(next_pred)
             prev_pred = next_pred
 
         return predictions
 
-    def update_beta(self, actual_adj: np.ndarray, predicted_adj: np.ndarray) -> None:
+    def update_state(self, actual_state: Dict[str, Any]) -> None:
         """
-        Enhanced beta adaptation based on prediction errors and density changes.
+        Update predictor's internal state with new observation.
+
+        Parameters
+        ----------
+        actual_state : Dict[str, Any]
+            The actual observed network state containing 'adjacency' matrix
         """
-        # Compute current error
-        diff = actual_adj - predicted_adj
-        mse = np.mean(diff**2)
-        self._prev_mses.append(mse)
+        actual_adj = actual_state["adjacency"]
+        if self._last_prediction is not None:
+            self._update_beta(actual_adj, self._last_prediction)
+        self._last_prediction = actual_adj.copy()
 
-        # Track density change
-        actual_density = np.mean(actual_adj)
-        pred_density = np.mean(predicted_adj)
-        density_error = abs(actual_density - pred_density)
-
-        # Compute weighted error combining MSE and density error
-        if len(self._prev_mses) > 1:
-            # Weight recent errors more heavily
-            weights = np.exp(np.arange(len(self._prev_mses)))
-            weights = weights / np.sum(weights)
-            weighted_mse = np.sum(weights * np.array(self._prev_mses))
-
-            # Equal weight to MSE and density error (changed from 0.7/0.3)
-            delta = 0.5 * weighted_mse + 0.5 * density_error
-
-            # More aggressive beta adaptation
-            self.beta = 1.0 / (
-                1.0 + np.exp(delta * 8)
-            )  # Increased sensitivity from 5 to 8
-            logger.debug(
-                f"Updated beta to {self.beta:.3f} (MSE: {mse:.3f}, density error: {density_error:.3f})"
-            )
-
-        # Store metrics
-        mae = np.mean(np.abs(diff))
-        rmse = np.sqrt(mse)
-        self._metrics["mae"].append(mae)
-        self._metrics["rmse"].append(rmse)
-
-        # Store prediction for next update
-        self._last_prediction = predicted_adj.copy()
-
-    def get_metrics(self) -> dict:
+    def get_state(self) -> Dict[str, Any]:
         """
-        Get current performance metrics.
+        Get the current state of the predictor.
 
         Returns
         -------
-        dict
-            Dictionary containing MAE and RMSE histories
+        Dict[str, Any]
+            Dictionary containing current predictor state and metrics
         """
         return {
-            "mae": np.array(self._metrics["mae"]),
-            "rmse": np.array(self._metrics["rmse"]),
-            "current_beta": self.beta,
-            "mean_mae": np.mean(self._metrics["mae"]) if self._metrics["mae"] else None,
-            "mean_rmse": (
-                np.mean(self._metrics["rmse"]) if self._metrics["rmse"] else None
-            ),
+            "metrics": {
+                "mae": np.array(self._metrics["mae"]),
+                "rmse": np.array(self._metrics["rmse"]),
+            },
+            "parameters": {
+                "current_beta": self.beta,
+                "current_gamma": self.gamma,
+            },
+            "statistics": {
+                "mean_mae": (
+                    np.mean(self._metrics["mae"]) if self._metrics["mae"] else None
+                ),
+                "mean_rmse": (
+                    np.mean(self._metrics["rmse"]) if self._metrics["rmse"] else None
+                ),
+                "density_history": list(self._density_history),
+            },
         }
 
-    def reset_metrics(self) -> None:
-        """Reset performance metrics tracking."""
-        self._metrics = {"mae": [], "rmse": []}
+    def reset(self) -> None:
+        """Reset the predictor to its initial state."""
         self._prev_mses.clear()
+        self._metrics = {"mae": [], "rmse": []}
+        self._density_history.clear()
+        self._prediction_history.clear()
+        self._last_prediction = None
+        self.beta = 0.5  # Reset to initial value
+        self.gamma = 0.1  # Reset to initial value
 
     # --------------------------------------------------------------------------
     # PRIVATE HELPER METHODS
@@ -333,3 +346,39 @@ class GraphPredictor:
         self.beta = 0.7 * self.beta + 0.3 * target_beta  # Smooth beta changes
 
         return self.beta * A_t_T + (1.0 - self.beta) * A_t_S
+
+    def _update_beta(self, actual_adj: np.ndarray, predicted_adj: np.ndarray) -> None:
+        """
+        Enhanced beta adaptation based on prediction errors and density changes.
+        """
+        # Compute current error
+        diff = actual_adj - predicted_adj
+        mse = np.mean(diff**2)
+        self._prev_mses.append(mse)
+
+        # Track density change
+        actual_density = np.mean(actual_adj)
+        pred_density = np.mean(predicted_adj)
+        density_error = abs(actual_density - pred_density)
+
+        # Compute weighted error combining MSE and density error
+        if len(self._prev_mses) > 1:
+            # Weight recent errors more heavily
+            weights = np.exp(np.arange(len(self._prev_mses)))
+            weights = weights / np.sum(weights)
+            weighted_mse = np.sum(weights * np.array(self._prev_mses))
+
+            # Equal weight to MSE and density error
+            delta = 0.5 * weighted_mse + 0.5 * density_error
+
+            # More aggressive beta adaptation
+            self.beta = 1.0 / (1.0 + np.exp(delta * 8))
+            logger.debug(
+                f"Updated beta to {self.beta:.3f} (MSE: {mse:.3f}, density error: {density_error:.3f})"
+            )
+
+        # Store metrics
+        mae = np.mean(np.abs(diff))
+        rmse = np.sqrt(mse)
+        self._metrics["mae"].append(mae)
+        self._metrics["rmse"].append(rmse)

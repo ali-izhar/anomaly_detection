@@ -32,7 +32,7 @@ if project_root not in sys.path:
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.visualizer import NetworkVisualizer
-from src.predictor.predictor import GraphPredictor
+from src.predictor.adaptive import GraphPredictor
 from src.configs.loader import get_config
 from src.algorithm import (
     extract_numeric_features,

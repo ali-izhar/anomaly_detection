@@ -25,7 +25,7 @@ from typing import List, Dict, Any
 from collections import deque
 import logging
 
-from .predictor.predictor import GraphPredictor
+from .predictor.adaptive import GraphPredictor
 from .graph.features import NetworkFeatureExtractor
 from .changepoint.detector import ChangePointDetector
 

@@ -1,14 +1,22 @@
-import numpy as np
+# src/predictor/combined.py
+
+from typing import List, Dict, Any
 from collections import deque
+
+import logging
+import numpy as np
 import networkx as nx
+
 from sklearn.cluster import SpectralClustering
 from scipy.stats import wasserstein_distance
-import logging
+
+from .base import BasePredictor
+
 
 logger = logging.getLogger(__name__)
 
 
-class AutoChangepointPredictor:
+class AutoChangepointPredictor(BasePredictor):
     """Predictor with automatic changepoint detection using feature distribution monitoring."""
 
     def __init__(self, alpha: float = 0.85, min_phase_length: int = 40):
@@ -26,6 +34,115 @@ class AutoChangepointPredictor:
         self.structural_params = {}
         self.history = []
         self.feature_history = deque(maxlen=100)
+        self.network_type = None
+        self._history_size = min_phase_length  # Set history size to match phase length
+        self._initialize_feature_tracking()
+
+    def predict(
+        self, history: List[Dict[str, Any]], horizon: int = 1
+    ) -> List[np.ndarray]:
+        """
+        Predict future network states with changepoint awareness.
+
+        Parameters
+        ----------
+        history : List[Dict[str, Any]]
+            List of historical network states, each containing an 'adjacency' key
+        horizon : int, optional
+            Number of steps to predict ahead, by default 1
+
+        Returns
+        -------
+        List[np.ndarray]
+            List of predicted adjacency matrices
+        """
+        if not history:
+            raise ValueError("Need at least one historical state")
+
+        # Extract current adjacency and update feature tracking
+        current_adj = history[-1]["adjacency"]
+        features = self._compute_features(current_adj)
+        for k in self.feature_buffers:
+            self.feature_buffers[k].append(features[k])
+
+        # Detect changepoint
+        t = len(history) - 1  # Current timestep
+        if self._detect_changepoint(features):
+            logger.info(f"Changepoint detected at t={t}")
+            self.current_phase_start = t
+            self.history = [current_adj.copy()]
+            self._update_structural_params(current_adj)
+        else:
+            self.history.append(current_adj.copy())
+
+        # Maintain phase history
+        self.history = self.history[-self.min_phase_length :]
+
+        predictions = []
+        for _ in range(horizon):
+            temp_pred = self._temporal_prediction()
+            struct_pred = self._apply_structural_correction(temp_pred)
+            binary_pred = self._threshold_matrix(struct_pred)
+            predictions.append(binary_pred)
+            self.history.append(binary_pred.copy())
+
+        # Keep history length in check after predictions
+        self.history = self.history[-self.min_phase_length :]
+
+        return predictions
+
+    def update_state(self, actual_state: Dict[str, Any]) -> None:
+        """
+        Update predictor's internal state with new observation.
+
+        Parameters
+        ----------
+        actual_state : Dict[str, Any]
+            The actual observed network state containing 'adjacency' matrix
+        """
+        actual_adj = actual_state["adjacency"]
+        features = self._compute_features(actual_adj)
+
+        # Update feature tracking
+        for k in self.feature_buffers:
+            self.feature_buffers[k].append(features[k])
+
+        # Update network type if needed
+        new_type = self._detect_network_type(features)
+        if new_type != self.network_type:
+            self.network_type = new_type
+            self._update_structural_params(actual_adj)
+
+        # Update history
+        self.history.append(actual_adj.copy())
+        self.history = self.history[-self.min_phase_length :]  # Maintain length
+
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the predictor.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing current predictor state and metrics
+        """
+        return {
+            "parameters": {
+                "alpha": self.alpha,
+                "network_type": self.network_type,
+                "current_phase_start": self.current_phase_start,
+            },
+            "features": {k: list(v) for k, v in self.feature_buffers.items()},
+            "structural_params": self.structural_params,
+            "history_length": len(self.history),
+        }
+
+    def reset(self) -> None:
+        """Reset the predictor to its initial state."""
+        self.current_phase_start = 0
+        self.structural_params = {}
+        self.history = []
+        self.feature_history.clear()
         self.network_type = None
         self._initialize_feature_tracking()
 
@@ -174,31 +291,3 @@ class AutoChangepointPredictor:
         binary = (pred >= threshold).astype(float)
         np.fill_diagonal(binary, 0)
         return np.maximum(binary, binary.T)
-
-    def forecast(self, current_adj: np.ndarray, t: int, h: int = 1) -> list:
-        # Update feature tracking
-        features = self._compute_features(current_adj)
-        for k in self.feature_buffers:
-            self.feature_buffers[k].append(features[k])
-
-        # Detect changepoint
-        if self._detect_changepoint(features):
-            logger.info(f"Changepoint detected at t={t}")
-            self.current_phase_start = t
-            self.history = [current_adj.copy()]
-            self._update_structural_params(current_adj)
-        else:
-            self.history.append(current_adj.copy())
-
-        # Maintain phase history
-        self.history = self.history[-self.min_phase_length :]
-
-        predictions = []
-        for _ in range(h):
-            temp_pred = self._temporal_prediction()
-            struct_pred = self._apply_structural_correction(temp_pred)
-            binary_pred = self._threshold_matrix(struct_pred)
-            predictions.append(binary_pred)
-            self.history.append(binary_pred.copy())
-
-        return predictions[:h]
