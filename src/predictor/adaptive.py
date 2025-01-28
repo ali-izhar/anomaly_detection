@@ -83,7 +83,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
         self.n_history = n_history
         self._history_size = n_history  # Set history size property
 
-        # Default weights with a slight bias toward the most recent states
+        # Default weighting scheme (exponential decay) if no custom weights are provided
         if weights is None:
             # take n_history and compute exponentially decaying weights for each state
             weights = np.exp(-np.arange(n_history) / n_history)
@@ -422,6 +422,87 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
         return np.clip(pred_new, 0, 1)
 
+    # -------------------------------------------------------------------------
+    #           Triadic Closure Reinforcement for Higher Clustering
+    # -------------------------------------------------------------------------
+    def _reinforce_triadic_closure(
+        self, pred: np.ndarray, factor: float = 0.05
+    ) -> np.ndarray:
+        """
+        Gently boosts the probability of missing edges in existing triads
+        to improve local clustering without drastically altering the graph.
+
+        factor : float
+            Small increment factor for each potential missing edge in a triad.
+        """
+        # Work on a copy so we can adjust without interfering mid-iteration
+        new_pred = pred.copy()
+        G = nx.from_numpy_array(pred)
+
+        for node in range(pred.shape[0]):
+            neighbors = list(G.neighbors(node))
+            # For each pair of neighbors, try to close the triangle
+            for i in range(len(neighbors)):
+                for j in range(i + 1, len(neighbors)):
+                    n1, n2 = neighbors[i], neighbors[j]
+                    if new_pred[n1, n2] < 1.0:
+                        # Increase by a small fraction
+                        increment = factor * (pred[node, n1] + pred[node, n2]) / 2.0
+                        new_val = new_pred[n1, n2] + increment
+                        new_pred[n1, n2] = new_pred[n2, n1] = min(1.0, new_val)
+
+        return np.clip(new_pred, 0, 1)
+
+    # -------------------------------------------------------------------------
+    #    Slight Path-Length Shaping for Better Closeness Approximation
+    # -------------------------------------------------------------------------
+    def _reduce_path_length(
+        self, pred: np.ndarray, last_adj: np.ndarray, alpha: float = 0.02
+    ) -> np.ndarray:
+        """
+        If the newly predicted graph has a higher average path length than the
+        last observed adjacency, lightly add bridging edges among the pairs
+        that are currently far apart.
+
+        alpha : float
+            Probability or fraction for bridging edges among the most distant pairs.
+        """
+        G_pred = nx.from_numpy_array(pred)
+        G_last = nx.from_numpy_array(last_adj)
+
+        try:
+            apl_pred = nx.average_shortest_path_length(G_pred)
+            apl_last = nx.average_shortest_path_length(G_last)
+        except:
+            # If the graph is disconnected, skip
+            return pred
+
+        # Only if new graph has significantly higher path length, add a few bridging edges
+        if apl_pred > apl_last * 1.05:  # 5% tolerance
+            new_pred = pred.copy()
+            # Identify largest connected component to avoid bridging everything
+            components = sorted(nx.connected_components(G_pred), key=len, reverse=True)
+            main_comp = components[0] if components else set()
+            # We'll add edges from the largest component to smaller ones or far pairs
+            # to reduce distance. We'll randomly pick some pairs to link.
+
+            # For each smaller component, pick a random bridging node
+            for comp in components[1:]:
+                comp = list(comp)
+                main_comp_list = list(main_comp)
+                # Random bridging
+                if comp and main_comp_list:
+                    c_node = np.random.choice(comp)
+                    m_node = np.random.choice(main_comp_list)
+                    # With probability alpha, turn on that edge strongly
+                    if np.random.rand() < alpha:
+                        new_pred[c_node, m_node] = 1.0
+                        new_pred[m_node, c_node] = 1.0
+
+            return np.clip(new_pred, 0, 1)
+        else:
+            return pred
+
     # =========================================================================
     #            FEATURE-BASED ADAPTATION & MODEL TYPE DETECTION
     # =========================================================================
@@ -738,7 +819,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 f"Not enough history. Need {self.n_history}, got {len(history)}."
             )
 
-        # Convert input states to a working list
+        # (Unchanged) gather current_history
         current_history = []
         for state in history:
             adj = state["adjacency"]
@@ -749,13 +830,12 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 }
             )
 
-        # Update distribution tracking with the most recent adjacency
+        # Update distribution tracking
         self._update_distribution_history(current_history[-1]["adjacency"])
 
-        # Check for phase transitions (significant structural changes)
+        # Check for phase transition
         if self._detect_phase_transition(current_history):
             self.phase_start = len(current_history)
-            # Reset weights to the default distribution
             self.weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])
             self.weights = np.maximum(self.weights, self.min_weight)
             self.weights = self.weights / self.weights.sum()
@@ -763,7 +843,6 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
         predictions = []
         for _ in range(horizon):
-            # Fetch last n_history states
             last_states = current_history[-self.n_history :]
             last_adjs = [st["adjacency"] for st in last_states]
 
@@ -782,20 +861,25 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 for w, adj in zip(self.weights, last_adjs):
                     pred += w * adj
 
-            # Keep a copy of the original weighted sum
             orig_pred = pred.copy()
 
-            # Step 1: distribution-based adjustments
+            # 1) Distribution-based adjustments
             pred = self._preserve_distribution_properties(pred, last_adjs[-1])
 
-            # Step 2: spectral regularization
+            # 2) Spectral regularization
             target_vals, target_vecs = self._compute_spectral_features(last_adjs[-1])
             pred = self._spectral_regularization(pred, target_vals, target_vecs)
 
-            # Step 3: community preservation if we detect high modularity
+            # 3) Community preservation if high modularity
             comm_labels, modularity = self._detect_communities(last_adjs[-1])
             if modularity > 0.3:
                 pred = self._preserve_communities(pred, comm_labels, modularity)
+
+            # 3.1) **New**: Light triadic closure reinforcement
+            pred = self._reinforce_triadic_closure(pred, factor=0.02)
+
+            # 3.2) **New**: Slightly reduce path length if too large
+            pred = self._reduce_path_length(pred, last_adjs[-1], alpha=0.02)
 
             # Ensure valid probabilities
             pred = np.clip(pred, 0, 1)
@@ -806,13 +890,11 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 n = pred.shape[0]
                 target_edges = int(np.floor(target_density * n * (n - 1) / 2))
 
-                # Sort upper-triangular edges by probability
                 triu = np.triu_indices(n, k=1)
                 probs = pred[triu]
                 edges = list(zip(probs, triu[0], triu[1]))
                 edges.sort(key=lambda x: x[0], reverse=True)
 
-                # Create a binary matrix with the top target_edges
                 pred_binary = np.zeros_like(pred)
                 for _, i, j in edges[:target_edges]:
                     pred_binary[i, j] = pred_binary[j, i] = 1.0
@@ -825,7 +907,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
             predictions.append(pred)
 
-            # Update the “history” so subsequent predictions see their own output
+            # Update history and distribution tracking
             current_history.append(
                 {
                     "adjacency": pred,
@@ -834,7 +916,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             )
             self._update_distribution_history(pred)
 
-            # Adapt weights only if enough time since last phase change
+            # Adaptive weight updates if enough time since phase change
             time_since_change = len(current_history) - self.phase_start
             if self.adaptive and time_since_change > self.temporal_window:
                 new_weights = self._feature_based_adaptation(last_adjs, pred)
