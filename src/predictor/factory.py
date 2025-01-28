@@ -4,11 +4,9 @@
 
 from typing import Dict, Any, Optional, Type
 from .base import BasePredictor
-from .adaptive import AdaptivePredictor
+from .adaptive import AdaptiveDistributionAwarePredictor
 from .auto import AutoChangepointPredictor
-from .weighted import EnhancedWeightedPredictor
 from .statistical import StatisticalAdaptivePredictor
-from .aware import ChangepointAwarePredictor
 
 
 class PredictorFactory:
@@ -21,24 +19,14 @@ class PredictorFactory:
 
     # Registry of available predictor types
     PREDICTOR_TYPES = {
-        "adaptive": AdaptivePredictor,
+        "adaptive": AdaptiveDistributionAwarePredictor,
         "auto": AutoChangepointPredictor,
-        "weighted": EnhancedWeightedPredictor,
         "statistical": StatisticalAdaptivePredictor,
-        "aware": ChangepointAwarePredictor,
     }
 
     # Default configurations for each predictor type
     DEFAULT_CONFIGS = {
         "adaptive": {
-            "k": 10,
-            "alpha": 0.8,
-            "initial_gamma": 0.1,
-            "initial_beta": 0.5,
-            "error_window": 5,
-        },
-        "auto": {"alpha": 0.85, "min_phase_length": 40},
-        "weighted": {
             "n_history": 5,
             "adaptive": True,
             "enforce_connectivity": True,
@@ -49,16 +37,12 @@ class PredictorFactory:
             "temporal_window": 10,
             "distribution_reg": 0.3,
         },
+        "auto": {"alpha": 0.85, "min_phase_length": 40},
         "statistical": {
             "alpha": 0.8,
             "change_threshold": 5,
             "min_phase_length": 40,
             "history_size": 40,
-        },
-        "aware": {
-            "n_nodes": 50,
-            "alpha": 0.99,
-            "min_phase": 40,
         },
     }
 
@@ -98,9 +82,7 @@ class PredictorFactory:
             Type of predictor to create. Must be one of:
             - "adaptive": Adaptive predictor with changepoint detection
             - "auto": Auto-changepoint predictor with temporal memory
-            - "weighted": Enhanced weighted predictor with distribution awareness
-            - "adaptive_rnn": Graph Adaptive RNN Predictor
-            - "hbtgn": Hierarchical Bayesian Temporal Graph Network Predictor
+            - "statistical": Statistical predictor with adaptive changepoint detection
         config : Optional[Dict[str, Any]]
             Configuration overrides for the predictor.
             If None, uses default configuration.

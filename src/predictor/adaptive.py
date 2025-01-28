@@ -1,384 +1,914 @@
 # src/predictor/adaptive.py
 
-"""
-Implements the predictive (preemptive) forecasting logic described in:
-Faster Structural Change Detection in Dynamic Networks via Statistical Forecasting.
+"""Adaptive distribution-aware predictor with multi-constraint structural preservation."""
 
- - Input: current graph adjacency, history of adjacency matrices, horizon h, etc.
- - Output: list of predicted adjacency matrices [hat{A}_{t+1}, ..., hat{A}_{t+h}].
- 
-Then feed these predicted adjacencies into the martingale pipeline to
-compute horizon martingales, etc.
-"""
+from typing import List, Dict, Any, Optional, Tuple
 
-from collections import deque
-from typing import List, Dict, Any
-
+import warnings
+import networkx as nx
 import numpy as np
-import logging
+
+from scipy import sparse, stats
+from scipy.sparse.linalg import eigsh
+from sklearn.cluster import SpectralClustering
+
 from .base import BasePredictor
 
-logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
-class AdaptivePredictor(BasePredictor):
-    """A predictor that replicates the paper's approach:
-    1) Weighted average (temporal memory) with adaptive decay.
-    2) Structural role preservation with adaptive gamma.
-    3) Adaptive mixing parameter.
-    """
+class AdaptiveDistributionAwarePredictor(BasePredictor):
+    """Adaptive distribution-aware predictor with multi-constraint structural preservation."""
 
     def __init__(
         self,
-        k: int = 10,
-        alpha: float = 0.8,
-        initial_gamma: float = 0.1,
-        initial_beta: float = 0.5,
-        error_window: int = 5,
+        n_history: int = 5,
+        weights: Optional[np.ndarray] = None,
+        adaptive: bool = True,
+        enforce_connectivity: bool = True,
+        binary: bool = True,
+        spectral_reg: float = 0.4,
+        community_reg: float = 0.4,
+        n_communities: int = 2,
+        temporal_window: int = 10,
+        min_edges_per_component: int = 4,
+        degree_reg: float = 0.3,
+        change_threshold: float = 0.25,
+        smoothing_window: int = 3,
+        min_weight: float = 0.1,
+        distribution_memory: int = 20,
+        phase_length: int = 40,
+        distribution_reg: float = 0.3,
     ):
         """
+        Initialize the adaptive predictor.
+
         Parameters
         ----------
-        k : int
-            Size of the historical window to look back for temporal predictions.
-        alpha : float
-            Base decay factor for weighted averaging of adjacency matrices, in (0,1).
-        initial_gamma : float
-            Initial coefficient for structural constraints, will adapt over time.
-        initial_beta : float
-            Starting value for the adaptive mixing parameter beta_t.
-        error_window : int
-            Number of recent prediction errors to track for adaptation.
+        n_history : int
+            Number of past states to incorporate in the weighted average.
+        weights : Optional[np.ndarray]
+            Custom weights to multiply recent adjacency matrices.
+        adaptive : bool
+            Whether to adapt weights over time based on feature differences.
+        enforce_connectivity : bool
+            Whether to enforce connectivity on the final graph prediction.
+        binary : bool
+            Whether to binarize the adjacency matrix in the final prediction.
+        spectral_reg : float
+            Regularization weight for preserving eigenvalues/eigenvectors.
+        community_reg : float
+            Regularization weight for preserving community structure.
+        n_communities : int
+            Number of communities to detect/preserve in spectral clustering.
+        temporal_window : int
+            Window size for temporal pattern detection.
+        min_edges_per_component : int
+            Minimum number of edges to add when connecting components.
+        degree_reg : float
+            Regularization weight for preserving the degree distribution.
+        change_threshold : float
+            Threshold for detecting structural changes (e.g., density/clustering).
+        smoothing_window : int
+            Number of predicted adjacency matrices to include in smoothing.
+        min_weight : float
+            Minimum allowed weight for any historical adjacency matrix.
+        distribution_memory : int
+            How many past states to store for distribution-based computations.
+        phase_length : int
+            Minimum length of a “phase” before we can detect a possible transition.
+        distribution_reg : float
+            Strength of distribution-based adjustments (e.g., density alignment).
         """
-        self.k = k
-        self._history_size = k  # Set history size property
-        self.alpha = alpha
-        self.gamma = initial_gamma
-        self.beta = initial_beta
-        self._error_window = error_window
-        self._prev_mses = deque(maxlen=error_window)
-        self._metrics = {"mae": [], "rmse": []}
-        self._density_history = deque(maxlen=k)
-        self._prediction_history = deque(maxlen=k)  # Track recent predictions
-        self._last_prediction = None
+        self.n_history = n_history
+        self._history_size = n_history  # Set history size property
+
+        # Default weights with a slight bias toward the most recent states
+        if weights is None:
+            # take n_history and compute exponentially decaying weights for each state
+            weights = np.exp(-np.arange(n_history) / n_history)
+
+        # Ensure no weight is below min_weight, then normalize
+        weights = np.maximum(np.array(weights, dtype=float), min_weight)
+        self.weights = weights / weights.sum()
+
+        # Key parameters for controlling the model
+        self.adaptive = adaptive
+        self.enforce_connectivity = enforce_connectivity
+        self.binary = binary
+        self.spectral_reg = spectral_reg
+        self.community_reg = community_reg
+        self.n_communities = n_communities
+        self.temporal_window = temporal_window
+        self.min_edges_per_component = min_edges_per_component
+        self.degree_reg = degree_reg
+        self.change_threshold = change_threshold
+        self.smoothing_window = smoothing_window
+        self.min_weight = min_weight
+        self.distribution_memory = distribution_memory
+        self.phase_length = phase_length
+        self.distribution_reg = distribution_reg
+
+        # Internal state tracking
+        self.pattern_history = []
+        self.feature_history = []
+        self.change_points = []
+        self.distribution_history = {
+            "degree": [],
+            "clustering": [],
+            "path_length": [],
+            "betweenness": [],
+        }
+        self.phase_start = 0
+        self.current_phase = "unknown"
+        self.ema_features = {}
+
+    # =========================================================================
+    #                    DISTRIBUTION & SPECTRAL COMPUTATIONS
+    # =========================================================================
+
+    def _compute_degree_distribution(self, adj: np.ndarray) -> np.ndarray:
+        """Compute normalized degree distribution for a given adjacency matrix."""
+        degrees = adj.sum(axis=1)
+        dist = np.zeros(int(max(degrees)) + 1)
+        for d in degrees:
+            dist[int(d)] += 1
+        return dist / len(degrees)
+
+    def _compute_spectral_features(
+        self, adj: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute the leading eigenvalues and eigenvectors with enhanced stability.
+        Uses either eigsh (for sparse matrices) or np.linalg.eigh as a fallback."""
+        # Add small diagonal term for numerical stability
+        adj_reg = adj + np.eye(adj.shape[0]) * 1e-6
+        adj_sparse = sparse.csr_matrix(adj_reg)
+        k = min(6, adj.shape[0] - 1)
+
+        try:
+            eigenvals, eigenvecs = eigsh(
+                adj_sparse, k=k, which="LM", tol=1e-5, maxiter=1000
+            )
+            idx = np.argsort(np.abs(eigenvals))[::-1]
+            return eigenvals[idx], eigenvecs[:, idx]
+        except:
+            eigenvals, eigenvecs = np.linalg.eigh(adj_reg)
+            idx = np.argsort(np.abs(eigenvals))[::-1]
+            return eigenvals[idx][:k], eigenvecs[:, idx][:, :k]
+
+    def _detect_communities(self, adj: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Detect communities using spectral clustering and compute modularity.
+
+        Returns
+        -------
+        labels : np.ndarray
+            Community labels for each node.
+        modularity : float
+            The network modularity for the detected partition.
+        """
+        adj_nn = np.abs(adj)
+        np.fill_diagonal(adj_nn, 0)
+
+        try:
+            clustering = SpectralClustering(
+                n_clusters=self.n_communities,
+                affinity="precomputed",
+                random_state=42,
+                n_init=10,  # Multiple initializations for better stability
+            )
+            labels = clustering.fit_predict(adj_nn)
+
+            # Compute modularity via networkx
+            G = nx.from_numpy_array(adj_nn)
+            modularity = nx.community.modularity(
+                G, [set(np.where(labels == i)[0]) for i in range(self.n_communities)]
+            )
+
+            return labels, modularity
+        except:
+            n = adj.shape[0]
+            return np.array([i % self.n_communities for i in range(n)]), 0.0
+
+    # =========================================================================
+    #                       NETWORK FEATURE UTILITIES
+    # =========================================================================
+
+    def _compute_network_features(self, adj: np.ndarray) -> Dict[str, float]:
+        """Compute key network features (density, clustering, average degree, etc.)
+        for adaptation or detecting structural changes."""
+        G = nx.from_numpy_array(adj)
+
+        features = {
+            "density": nx.density(G),
+            "avg_clustering": nx.average_clustering(G),
+            "avg_degree": float(np.mean(list(dict(G.degree()).values()))),
+        }
+
+        try:
+            features["avg_path_length"] = nx.average_shortest_path_length(G)
+        except:
+            features["avg_path_length"] = 0.0
+
+        return features
+
+    # =========================================================================
+    #                        TEMPORAL PATTERN DETECTION
+    # =========================================================================
+
+    def _detect_temporal_patterns(
+        self, history: List[Dict[str, Any]]
+    ) -> Dict[str, float]:
+        """Enhanced temporal pattern detection using exponential moving averages
+        across a window of past adjacency matrices."""
+        if len(history) < self.temporal_window:
+            return {
+                "trend": 0.0,
+                "periodicity": 0.0,
+                "volatility": 0.0,
+                "change_detected": False,
+            }
+
+        recent = [h["adjacency"] for h in history[-self.temporal_window :]]
+
+        # Compute EMAs for multiple features
+        alpha = 0.3  # Smoothing factor
+        current_density = np.mean(recent[-1])
+        current_clustering = nx.average_clustering(nx.from_numpy_array(recent[-1]))
+        current_degree = float(
+            np.mean([d for _, d in nx.from_numpy_array(recent[-1]).degree()])
+        )
+
+        # Initialize or update EMAs
+        if self.ema_features is None:
+            self.ema_features = {
+                "density": current_density,
+                "clustering": current_clustering,
+                "degree": current_degree,
+            }
+        else:
+            for key in self.ema_features:
+                # NOTE: Keeping the code as-is, even though it references 'recent[-1][key]'
+                self.ema_features[key] = (
+                    alpha * recent[-1][key] + (1 - alpha) * self.ema_features[key]
+                )
+
+        # Multi-feature change detection
+        density_change = abs(current_density - self.ema_features["density"]) / max(
+            self.ema_features["density"], 0.1
+        )
+        clustering_change = abs(
+            current_clustering - self.ema_features["clustering"]
+        ) / max(self.ema_features["clustering"], 0.1)
+        degree_change = abs(current_degree - self.ema_features["degree"]) / max(
+            self.ema_features["degree"], 1.0
+        )
+
+        change_detected = (
+            density_change > self.change_threshold
+            or clustering_change > self.change_threshold
+            or degree_change > self.change_threshold
+        )
+
+        # Compute simple linear trend on densities
+        densities = [np.mean(adj) for adj in recent]
+        x = np.arange(len(densities))
+        trend = np.polyfit(x, densities, 1)[0]
+
+        # Estimate periodicity from autocorrelation peaks
+        if len(densities) > 4:
+            ac = np.correlate(densities, densities, mode="full")
+            ac = ac[len(ac) // 2 :]
+            peaks = [
+                i
+                for i in range(1, len(ac) - 1)
+                if ac[i] > ac[i - 1] and ac[i] > ac[i + 1]
+            ]
+            periodicity = max([ac[p] / ac[0] for p in peaks]) if peaks else 0
+        else:
+            periodicity = 0
+
+        volatility = np.std(densities)
+
+        return {
+            "trend": trend,
+            "periodicity": periodicity,
+            "volatility": volatility,
+            "change_detected": change_detected,
+        }
+
+    # =========================================================================
+    #                       STRUCTURAL PRESERVATION METHODS
+    # =========================================================================
+
+    def _spectral_regularization(
+        self, pred: np.ndarray, target_vals: np.ndarray, target_vecs: np.ndarray
+    ) -> np.ndarray:
+        """Apply spectral regularization to preserve eigenvalue/eigenvector structure
+        from the last observed adjacency matrix."""
+        curr_vals, _ = self._compute_spectral_features(pred)
+
+        # Construct a correction matrix based on differences
+        reg_mat = np.zeros_like(pred)
+        for i in range(min(len(target_vals), len(curr_vals))):
+            v_target = target_vecs[:, i : i + 1]
+            reg = (target_vals[i] - curr_vals[i]) * (v_target @ v_target.T)
+            reg_mat += reg
+
+        # Blend the predicted adjacency with the regularization matrix
+        alpha = self.spectral_reg
+        pred_reg = (1 - alpha) * pred + alpha * reg_mat
+
+        return pred_reg
+
+    def _preserve_communities(
+        self,
+        pred: np.ndarray,
+        comm_labels: np.ndarray,
+        modularity: float,
+        strength_factor: float = 1.0,
+    ) -> np.ndarray:
+        """Enhance or preserve intra-community edges and reduce inter-community edges,
+        scaled by the detected modularity."""
+        n = pred.shape[0]
+        modifier = np.zeros((n, n))
+
+        # Intra-community edges get strengthened, inter-community edges weakened
+        intra_weight = 0.15 * (1 + modularity) * strength_factor
+        inter_weight = -0.1 * (1 + modularity) * strength_factor
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if comm_labels[i] == comm_labels[j]:
+                    modifier[i, j] = modifier[j, i] = intra_weight
+                else:
+                    modifier[i, j] = modifier[j, i] = inter_weight
+
+        alpha = self.community_reg * (1 + modularity)
+        pred_comm = pred + alpha * modifier
+
+        return np.clip(pred_comm, 0, 1)
+
+    def _enforce_connectivity_enhanced(
+        self, pred: np.ndarray, orig_pred: np.ndarray
+    ) -> np.ndarray:
+        """Ensure the graph is connected by linking isolated components with MST-like logic,
+        drawing on the original predicted weights for guidance."""
+        G = nx.from_numpy_array(pred)
+        components = list(nx.connected_components(G))
+
+        if len(components) > 1:
+            # Sort components by descending size
+            components.sort(key=len, reverse=True)
+            main_comp = components[0]
+
+            # Connect each smaller component to the main component
+            for comp in components[1:]:
+                best_edges = []
+                for i in main_comp:
+                    for j in comp:
+                        best_edges.append((orig_pred[i, j], i, j))
+
+                # Sort potential edges by descending weight
+                best_edges.sort(reverse=True)
+
+                # Take top k edges to connect the component
+                for _, i, j in best_edges[: self.min_edges_per_component]:
+                    pred[i, j] = pred[j, i] = 1.0
+
+        return pred
+
+    def _preserve_degree_distribution(
+        self, pred: np.ndarray, target_dist: np.ndarray
+    ) -> np.ndarray:
+        """Attempt to preserve a target degree distribution via a smoothed gradient
+        approach that adjusts edges based on distribution mismatches."""
+        curr_dist = self._compute_degree_distribution(pred)
+
+        # Avoid zero divisions by adding tiny eps
+        eps = 1e-8
+
+        # Extend distributions to a common length
+        max_len = max(len(target_dist), len(curr_dist))
+        target_ext = np.ones(max_len) * eps
+        curr_ext = np.ones(max_len) * eps
+        target_ext[: len(target_dist)] += target_dist
+        curr_ext[: len(curr_dist)] += curr_dist
+
+        # Re-normalize
+        target_ext = target_ext / target_ext.sum()
+        curr_ext = curr_ext / curr_ext.sum()
+
+        # Compute a gradient based on ratio differences
+        grad = np.zeros_like(pred)
+        degrees = pred.sum(axis=1)
+
+        for i in range(pred.shape[0]):
+            d = int(degrees[i])
+            if d < max_len - 1:
+                ratio_curr = max(eps, curr_ext[d])
+                ratio_next = max(eps, curr_ext[d + 1])
+                target_ratio = max(eps, target_ext[d + 1]) / max(eps, target_ext[d])
+                grad_effect = np.clip(
+                    np.log(target_ratio * ratio_curr / ratio_next), -1.0, 1.0
+                )
+                grad[i, :] = grad_effect
+                grad[:, i] = grad_effect
+
+        grad = grad * pred
+
+        # Apply gradient with adaptive step size
+        step_size = self.degree_reg / (1.0 + np.std(degrees))
+        pred_new = pred + step_size * grad
+
+        return np.clip(pred_new, 0, 1)
+
+    # =========================================================================
+    #            FEATURE-BASED ADAPTATION & MODEL TYPE DETECTION
+    # =========================================================================
+
+    def _feature_based_adaptation(
+        self, old_adjs: List[np.ndarray], new_adj: np.ndarray
+    ) -> np.ndarray:
+        """Adapt the historical weights based on how well the new adjacency matrix
+        preserves key network features from each old adjacency."""
+        feature_diffs = []
+
+        for old_adj in old_adjs:
+            old_feats = self._compute_network_features(old_adj)
+            new_feats = self._compute_network_features(new_adj)
+            diffs = []
+            for k in old_feats:
+                if old_feats[k] != 0:
+                    diff = abs(old_feats[k] - new_feats[k]) / abs(old_feats[k])
+                else:
+                    diff = abs(new_feats[k])
+                diffs.append(diff)
+
+            feature_diffs.append(np.mean(diffs))
+
+        raw_weights = 1.0 / (1.0 + np.array(feature_diffs))
+        new_weights = raw_weights / raw_weights.sum()
+
+        return new_weights
+
+    def _detect_model_type(self, adj: np.ndarray) -> str:
+        """Heuristic detection of the likely random graph model (SBM, BA, WS, or ER)
+        based on network features (modularity, power-law degrees, clustering, etc.)."""
+        G = nx.from_numpy_array(adj)
+        n = G.number_of_nodes()
+        density = nx.density(G)
+        clustering = nx.average_clustering(G)
+        degrees = [d for _, d in G.degree()]
+        degree_std = np.std(degrees)
+
+        # Check for SBM-like (high modularity)
+        if self.n_communities > 1:
+            _, modularity = self._detect_communities(adj)
+            if modularity > 0.3:
+                return "sbm"
+
+        # Check for BA-like (power law / hub-dominated)
+        if degree_std > 2.0 and max(degrees) > 3 * np.mean(degrees):
+            return "ba"
+
+        # Check for WS-like (reasonable clustering, moderate density)
+        if clustering > 0.2 and density < 0.3:
+            return "ws"
+
+        # Default to ER
+        return "er"
+
+    def _preserve_model_structure(
+        self, pred: np.ndarray, model_type: str, last_adj: np.ndarray
+    ) -> np.ndarray:
+        """Model-specific structural refinements based on the detected model type
+        (SBM, BA, WS)."""
+        if model_type == "sbm":
+            # Strengthen community structure
+            comm_labels, modularity = self._detect_communities(last_adj)
+            pred = self._preserve_communities(
+                pred, comm_labels, modularity, strength_factor=1.5
+            )
+
+        elif model_type == "ba":
+            # Enhance hub connections for BA-like networks
+            hub_nodes = np.argsort(np.sum(last_adj, axis=0))[
+                -int(0.1 * len(last_adj)) :
+            ]
+            for hub in hub_nodes:
+                hub_weights = last_adj[hub] * 1.5
+                pred[hub] = (pred[hub] * (1 - self.spectral_reg)) + (
+                    hub_weights * self.spectral_reg
+                )
+                pred[:, hub] = pred[hub]  # Maintain symmetry
+
+        elif model_type == "ws":
+            # Preserve local clustering (Watts–Strogatz style)
+            G_last = nx.from_numpy_array(last_adj)
+            clustering_coef = nx.clustering(G_last)
+            for node, clust in clustering_coef.items():
+                if clust > 0.5:
+                    neighbors = list(G_last.neighbors(node))
+                    for n1 in neighbors:
+                        for n2 in neighbors:
+                            if n1 < n2:
+                                pred[n1, n2] = pred[n2, n1] = max(
+                                    pred[n1, n2], 0.8 * last_adj[n1, n2]
+                                )
+
+        return np.clip(pred, 0, 1)
+
+    # =========================================================================
+    #            DISTRIBUTION HISTORY & PHASE TRANSITION DETECTION
+    # =========================================================================
+
+    def _update_distribution_history(self, adj: np.ndarray):
+        """Track distribution statistics (degree, clustering, path length, betweenness)
+        in a rolling window to detect changes over time."""
+        G = nx.from_numpy_array(adj)
+
+        # Degree & clustering distribution
+        degrees = [d for _, d in G.degree()]
+        clustering = list(nx.clustering(G).values())
+
+        # Approximate path-length distribution by sampling
+        try:
+            n = len(G)
+            sample_size = min(10, n)
+            sampled_nodes = np.random.choice(n, sample_size, replace=False)
+            path_lengths = []
+            for u in sampled_nodes:
+                lengths = nx.single_source_shortest_path_length(G, u)
+                path_lengths.extend(lengths.values())
+        except:
+            path_lengths = []
+
+        # Approximate betweenness for efficiency
+        try:
+            between = list(nx.betweenness_centrality(G, k=min(10, n - 1)).values())
+        except:
+            between = []
+
+        # Append to history and maintain a fixed memory window
+        self.distribution_history["degree"].append(degrees)
+        self.distribution_history["clustering"].append(clustering)
+        self.distribution_history["path_length"].append(path_lengths)
+        self.distribution_history["betweenness"].append(between)
+
+        for key in self.distribution_history:
+            if len(self.distribution_history[key]) > self.distribution_memory:
+                self.distribution_history[key].pop(0)
+
+    def _detect_distribution_type(self) -> Dict[str, str]:
+        """Inspect the recent distribution samples (e.g., degrees) to guess
+        whether they fit a power law, Poisson, or remain unknown."""
+        if not self.distribution_history["degree"]:
+            return {}
+
+        # Analyze the most recent sets of degrees
+        recent_degrees = np.concatenate(self.distribution_history["degree"][-5:])
+        types = {}
+
+        # Check degree distribution for power-law
+        if len(recent_degrees) > 10:
+            degree_counts = np.bincount(recent_degrees.astype(int))[1:]
+            log_degrees = np.log1p(np.arange(1, len(degree_counts) + 1))
+            log_counts = np.log1p(degree_counts)
+            valid_points = (degree_counts > 0) & np.isfinite(log_counts)
+
+            if np.sum(valid_points) > 3:
+                slope, _, r_value, _, _ = stats.linregress(
+                    log_degrees[valid_points], log_counts[valid_points]
+                )
+                if r_value**2 > 0.8 and slope < -1:
+                    types["degree"] = "power_law"
+                elif np.std(recent_degrees) < 0.5 * np.mean(recent_degrees):
+                    types["degree"] = "poisson"
+                else:
+                    types["degree"] = "unknown"
+
+        return types
+
+    def _estimate_phase_parameters(self) -> Dict[str, float]:
+        """Estimate relevant phase parameters (e.g., average degree, clustering)
+        from the most recent distribution snapshots."""
+        if not self.distribution_history["degree"]:
+            return {}
+
+        recent_degrees = self.distribution_history["degree"][-1]
+        recent_clustering = self.distribution_history["clustering"][-1]
+
+        params = {
+            "avg_degree": float(np.mean(recent_degrees)),
+            "degree_std": float(np.std(recent_degrees)),
+            "clustering_coef": float(np.mean(recent_clustering)),
+            "density": float(np.mean(recent_degrees)) / (len(recent_degrees) - 1),
+        }
+
+        dist_types = self._detect_distribution_type()
+        if dist_types.get("degree") == "power_law":
+            # Estimate the BA-like parameter m from average degree
+            params["m"] = max(1, int(round(params["avg_degree"] / 2)))
+
+        return params
+
+    def _detect_phase_transition(self, history: List[Dict[str, Any]]) -> bool:
+        """Detect phase transitions based on exponential moving averages of
+        structural features over a temporal window, combined with the
+        minimal phase length constraint."""
+        if len(history) < self.temporal_window:
+            return False
+
+        features = []
+        for state in history[-self.temporal_window :]:
+            adj = state["adjacency"]
+            G = nx.from_numpy_array(adj)
+            feat = {
+                "density": nx.density(G),
+                "clustering": nx.average_clustering(G),
+                "degree_std": float(np.std([d for _, d in G.degree()])),
+            }
+            features.append(feat)
+
+        # Initialize or update EMAs
+        if not self.ema_features:
+            self.ema_features = features[-1].copy()
+        else:
+            alpha = 0.3
+            for key in features[-1]:
+                current = features[-1][key]
+                self.ema_features[key] = (
+                    alpha * current + (1 - alpha) * self.ema_features[key]
+                )
+
+        # Check for significant relative changes
+        changes = []
+        for key in features[-1]:
+            current = features[-1][key]
+            ema = self.ema_features[key]
+            if ema > 0:
+                change = abs(current - ema) / ema
+                changes.append(change > self.change_threshold)
+
+        # Consider how long we've been in the current phase
+        time_since_change = len(history) - self.phase_start
+        phase_maturity = time_since_change >= self.phase_length
+
+        return any(changes) and phase_maturity
+
+    # =========================================================================
+    #                  DISTRIBUTION PRESERVATION & PREDICTION
+    # =========================================================================
+
+    def _preserve_distribution_properties(
+        self, pred: np.ndarray, last_adj: np.ndarray
+    ) -> np.ndarray:
+        """Apply distribution-based heuristics, e.g., power-law boosting,
+        high-clustering reinforcement, or density alignment."""
+        dist_types = self._detect_distribution_type()
+        params = self._estimate_phase_parameters()
+
+        # Power-law strengthening (BA-like)
+        if dist_types.get("degree") == "power_law":
+            degrees = np.sum(last_adj, axis=0)
+            hub_threshold = np.percentile(degrees, 80)
+            hub_mask = degrees > hub_threshold
+
+            for i in np.where(hub_mask)[0]:
+                neighbors = np.where(last_adj[i] > 0)[0]
+                if len(neighbors) > 0:
+                    # Strengthen existing hub connections
+                    pred[i, neighbors] = pred[neighbors, i] = np.maximum(
+                        pred[i, neighbors], 0.8 * last_adj[i, neighbors]
+                    )
+
+                    # Preferential attachment effect
+                    neighbor_degrees = degrees[neighbors]
+                    attach_probs = neighbor_degrees / neighbor_degrees.sum()
+                    for j in range(pred.shape[0]):
+                        if j not in neighbors:
+                            influence = np.sum(attach_probs * (pred[j, neighbors] > 0))
+                            pred[i, j] = pred[j, i] = max(pred[i, j], 0.3 * influence)
+
+        # If clustering is relatively high, preserve local triangles
+        elif params.get("clustering_coef", 0) > 0.2:
+            G_last = nx.from_numpy_array(last_adj)
+            clustering = nx.clustering(G_last)
+
+            for node, clust in clustering.items():
+                if clust > 0.3:
+                    neighbors = list(G_last.neighbors(node))
+                    for i, n1 in enumerate(neighbors):
+                        for n2 in neighbors[i + 1 :]:
+                            pred[n1, n2] = pred[n2, n1] = max(
+                                pred[n1, n2],
+                                0.7 * min(last_adj[n1, node], last_adj[n2, node]),
+                            )
+
+        # Adjust density toward the current estimate
+        if "density" in params:
+            target_density = params["density"]
+            current_density = np.mean(pred)
+            if abs(current_density - target_density) > 0.1:
+                adjustment = (target_density - current_density) * self.distribution_reg
+                pred += adjustment
+
+        return np.clip(pred, 0, 1)
 
     def predict(
         self, history: List[Dict[str, Any]], horizon: int = 1
     ) -> List[np.ndarray]:
         """
-        Predict future adjacency matrices with consistent smoothing.
+        Predict future network states with distribution awareness.
 
         Parameters
         ----------
         history : List[Dict[str, Any]]
-            List of historical network states, each containing an 'adjacency' key
-        horizon : int, optional
-            Number of steps to predict ahead, by default 1
+            Past states, each containing an 'adjacency' key with np.ndarray.
+        horizon : int
+            Number of steps to predict ahead.
 
         Returns
         -------
         List[np.ndarray]
-            List of predicted adjacency matrices
+            List of predicted adjacency matrices for the specified horizon.
         """
-        # Extract adjacency matrices from history
-        history_adjs = [state["adjacency"] for state in history]
-        if len(history_adjs) < 1:
-            raise ValueError("Need at least one historical state")
+        if len(history) < self.n_history:
+            raise ValueError(
+                f"Not enough history. Need {self.n_history}, got {len(history)}."
+            )
 
-        current_adj = history_adjs[-1]
-        extended_history = history_adjs[:-1]
+        # Convert input states to a working list
+        current_history = []
+        for state in history:
+            adj = state["adjacency"]
+            current_history.append(
+                {
+                    "adjacency": adj,
+                    "graph": nx.from_numpy_array(adj) if self.binary else None,
+                }
+            )
+
+        # Update distribution tracking with the most recent adjacency
+        self._update_distribution_history(current_history[-1]["adjacency"])
+
+        # Check for phase transitions (significant structural changes)
+        if self._detect_phase_transition(current_history):
+            self.phase_start = len(current_history)
+            # Reset weights to the default distribution
+            self.weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])
+            self.weights = np.maximum(self.weights, self.min_weight)
+            self.weights = self.weights / self.weights.sum()
+            self.change_points.append(len(current_history))
 
         predictions = []
-        n = current_adj.shape[0]
+        for _ in range(horizon):
+            # Fetch last n_history states
+            last_states = current_history[-self.n_history :]
+            last_adjs = [st["adjacency"] for st in last_states]
 
-        # Compute smoothed density statistics using full history
-        densities = [np.mean(adj) for adj in extended_history + [current_adj]]
-        self._density_history.extend(densities)
+            # Combine them into a preliminary prediction
+            if len(predictions) >= self.smoothing_window:
+                smoothed_history = last_adjs + predictions[-self.smoothing_window :]
+                weights = np.concatenate(
+                    [self.weights, np.ones(self.smoothing_window) * 0.1]
+                )
+                weights = weights / weights.sum()
+                pred = np.zeros_like(last_adjs[0], dtype=float)
+                for w, adj in zip(weights, smoothed_history):
+                    pred += w * adj
+            else:
+                pred = np.zeros_like(last_adjs[0], dtype=float)
+                for w, adj in zip(self.weights, last_adjs):
+                    pred += w * adj
 
-        # Use exponential moving average for smoother trend detection
-        if len(self._density_history) > 2:
-            weights = np.exp(np.linspace(-2, 0, len(self._density_history)))
-            weights /= np.sum(weights)
-            smooth_densities = np.array(list(self._density_history))
-            weighted_densities = np.convolve(weights, smooth_densities, mode="valid")[
-                -3:
-            ]
-            trend = (
-                np.mean(np.diff(weighted_densities))
-                if len(weighted_densities) > 1
-                else 0
+            # Keep a copy of the original weighted sum
+            orig_pred = pred.copy()
+
+            # Step 1: distribution-based adjustments
+            pred = self._preserve_distribution_properties(pred, last_adjs[-1])
+
+            # Step 2: spectral regularization
+            target_vals, target_vecs = self._compute_spectral_features(last_adjs[-1])
+            pred = self._spectral_regularization(pred, target_vals, target_vecs)
+
+            # Step 3: community preservation if we detect high modularity
+            comm_labels, modularity = self._detect_communities(last_adjs[-1])
+            if modularity > 0.3:
+                pred = self._preserve_communities(pred, comm_labels, modularity)
+
+            # Ensure valid probabilities
+            pred = np.clip(pred, 0, 1)
+
+            # If binary mode is on, threshold edges by target density
+            if self.binary:
+                target_density = np.mean(last_adjs[-1])
+                n = pred.shape[0]
+                target_edges = int(np.floor(target_density * n * (n - 1) / 2))
+
+                # Sort upper-triangular edges by probability
+                triu = np.triu_indices(n, k=1)
+                probs = pred[triu]
+                edges = list(zip(probs, triu[0], triu[1]))
+                edges.sort(key=lambda x: x[0], reverse=True)
+
+                # Create a binary matrix with the top target_edges
+                pred_binary = np.zeros_like(pred)
+                for _, i, j in edges[:target_edges]:
+                    pred_binary[i, j] = pred_binary[j, i] = 1.0
+
+                pred = pred_binary
+
+                # Enforce connectivity if desired
+                if self.enforce_connectivity:
+                    pred = self._enforce_connectivity_enhanced(pred, orig_pred)
+
+            predictions.append(pred)
+
+            # Update the “history” so subsequent predictions see their own output
+            current_history.append(
+                {
+                    "adjacency": pred,
+                    "graph": nx.from_numpy_array(pred) if self.binary else None,
+                }
             )
-            volatility = (
-                np.std(weighted_densities) if len(weighted_densities) > 1 else 0
-            )
-        else:
-            trend = 0
-            volatility = 0
+            self._update_distribution_history(pred)
 
-        # Unified stability measure (combines trend and volatility)
-        stability_score = 1.0 - min(1.0, (abs(trend) / 0.02 + volatility / 0.03))
-
-        # Base prediction with temporal patterns
-        base_pred = self._temporal_prediction(extended_history + [current_adj])
-
-        # Structural preservation with adaptive gamma
-        struct_pred = self._structural_preservation(
-            base_pred, current_adj, stability_score
-        )
-
-        # Initial prediction
-        pred = self._adaptive_integration(base_pred, struct_pred, stability_score)
-
-        # Apply consistent thresholding
-        threshold = 0.5  # Fixed base threshold
-        if self._last_prediction is not None:
-            # Adjust threshold based on previous prediction's density
-            target_density = np.mean(self._last_prediction) + trend
-            current_density = np.mean(pred)
-            if abs(current_density - target_density) > 0.05:
-                # Use quantile-based threshold
-                sorted_vals = np.sort(pred.flatten())
-                k = int((1 - target_density) * n * n)
-                k = max(0, min(k, len(sorted_vals) - 1))  # Ensure k is valid
-                threshold = sorted_vals[k] if k > 0 else 0.5
-
-        # Single thresholding step with stability-based smoothing
-        binary_pred = (pred > threshold).astype(float)
-        smooth_factor = stability_score * 0.2  # Max 20% smoothing
-        pred = (1 - smooth_factor) * binary_pred + smooth_factor * pred
-
-        predictions.append(pred)
-        self._prediction_history.append(pred)
-        prev_pred = pred
-
-        # Make dependent predictions for horizon > 1
-        for step in range(1, horizon):
-            # Use stability score to determine mixing weights
-            temporal_weight = 0.6 + 0.3 * (1 - stability_score)  # 0.6-0.9 range
-
-            # Temporal prediction using both history and recent predictions
-            temp_history = extended_history + [current_adj] + predictions
-            temp_pred = self._temporal_prediction(temp_history)
-
-            # Mix with previous prediction
-            mixed_pred = temporal_weight * temp_pred + (1 - temporal_weight) * prev_pred
-
-            # Structural preservation
-            struct_pred = self._structural_preservation(
-                mixed_pred, prev_pred, stability_score
-            )
-
-            # Final integration
-            next_pred = self._adaptive_integration(
-                mixed_pred, struct_pred, stability_score
-            )
-
-            # Consistent thresholding
-            binary_next = (next_pred > threshold).astype(float)
-            next_pred = (1 - smooth_factor) * binary_next + smooth_factor * next_pred
-
-            predictions.append(next_pred)
-            prev_pred = next_pred
+            # Adapt weights only if enough time since last phase change
+            time_since_change = len(current_history) - self.phase_start
+            if self.adaptive and time_since_change > self.temporal_window:
+                new_weights = self._feature_based_adaptation(last_adjs, pred)
+                self.weights = np.maximum(new_weights, self.min_weight)
+                self.weights = self.weights / self.weights.sum()
 
         return predictions
 
-    def update_state(self, actual_state: Dict[str, Any]) -> None:
-        """
-        Update predictor's internal state with new observation.
+    # =========================================================================
+    #                     EXTERNAL STATE UPDATES & QUERIES
+    # =========================================================================
 
-        Parameters
-        ----------
-        actual_state : Dict[str, Any]
-            The actual observed network state containing 'adjacency' matrix
-        """
+    def update_state(self, actual_state: Dict[str, Any]) -> None:
+        """Update the predictor's internal state with a new observed adjacency.
+        This should be called after receiving a real “future” state that
+        either confirms or contradicts the predictions."""
         actual_adj = actual_state["adjacency"]
-        if self._last_prediction is not None:
-            self._update_beta(actual_adj, self._last_prediction)
-        self._last_prediction = actual_adj.copy()
+
+        # Update the distribution histories
+        self._update_distribution_history(actual_adj)
+
+        # Update feature history
+        features = self._compute_network_features(actual_adj)
+        self.feature_history.append(features)
+
+        # Detect if a new phase has begun
+        if len(self.feature_history) >= self.temporal_window:
+            recent_history = [{"adjacency": actual_adj, "features": features}]
+            if self._detect_phase_transition(recent_history):
+                self.phase_start = len(self.pattern_history)
+                self.current_phase = self._detect_model_type(actual_adj)
+
+        # Track overall pattern evolution
+        self.pattern_history.append(
+            {"adjacency": actual_adj, "features": features, "phase": self.current_phase}
+        )
 
     def get_state(self) -> Dict[str, Any]:
-        """
-        Get the current state of the predictor.
-
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary containing current predictor state and metrics
-        """
+        """Return a dictionary representing the current internal state,
+        including weights, distribution history, detected change points,
+        and current/EMA features."""
         return {
-            "metrics": {
-                "mae": np.array(self._metrics["mae"]),
-                "rmse": np.array(self._metrics["rmse"]),
-            },
             "parameters": {
-                "current_beta": self.beta,
-                "current_gamma": self.gamma,
+                "weights": self.weights.tolist(),
+                "current_phase": self.current_phase,
+                "phase_start": self.phase_start,
             },
-            "statistics": {
-                "mean_mae": (
-                    np.mean(self._metrics["mae"]) if self._metrics["mae"] else None
-                ),
-                "mean_rmse": (
-                    np.mean(self._metrics["rmse"]) if self._metrics["rmse"] else None
-                ),
-                "density_history": list(self._density_history),
+            "distribution_history": {
+                k: list(v) for k, v in self.distribution_history.items()
+            },
+            "change_points": self.change_points,
+            "features": {
+                "current": self.feature_history[-1] if self.feature_history else None,
+                "ema": self.ema_features,
             },
         }
 
     def reset(self) -> None:
-        """Reset the predictor to its initial state."""
-        self._prev_mses.clear()
-        self._metrics = {"mae": [], "rmse": []}
-        self._density_history.clear()
-        self._prediction_history.clear()
-        self._last_prediction = None
-        self.beta = 0.5  # Reset to initial value
-        self.gamma = 0.1  # Reset to initial value
+        """Reset the predictor to its initial state: clears all histories,
+        reinitializes weights, and starts a new “unknown” phase."""
+        self.weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])
+        self.weights = np.maximum(self.weights, self.min_weight)
+        self.weights = self.weights / self.weights.sum()
 
-    # --------------------------------------------------------------------------
-    # PRIVATE HELPER METHODS
+        self.pattern_history = []
+        self.feature_history = []
+        self.change_points = []
+        self.distribution_history = {
+            "degree": [],
+            "clustering": [],
+            "path_length": [],
+            "betweenness": [],
+        }
 
-    def _temporal_prediction(self, extended_history: list) -> np.ndarray:
-        """Temporal prediction with consistent smoothing."""
-        use_history = (
-            extended_history[-self.k :]
-            if len(extended_history) >= self.k
-            else extended_history
-        )
-        m = len(use_history)
-
-        if m == 0:
-            return np.zeros_like(extended_history[-1])
-
-        # Compute exponential weights
-        weights = np.exp(np.linspace(-2, 0, m))  # Consistent exp decay
-        weights = weights / np.sum(weights)
-
-        # Weighted combination
-        N = use_history[-1].shape[0]
-        A_T = np.zeros((N, N))
-        for idx, mat in enumerate(use_history):
-            A_T += weights[idx] * mat
-
-        return A_T
-
-    def _structural_preservation(
-        self, A_t_T: np.ndarray, current_adj: np.ndarray, stability_score: float
-    ) -> np.ndarray:
-        """Structural preservation with stability-based adaptation."""
-        # Adapt gamma based on stability
-        if len(self._prev_mses) > 0:
-            mean_error = np.mean(list(self._prev_mses))
-            # More stable gamma adaptation
-            self.gamma = self.gamma * np.exp(-mean_error * 2)
-            self.gamma = max(0.01, min(0.3, self.gamma))
-
-            # Reduce gamma more during instability
-            self.gamma *= stability_score
-
-        return self._optimize_structure(A_t_T, current_adj)
-
-    def _optimize_structure(self, A_t_T: np.ndarray, A_init: np.ndarray) -> np.ndarray:
-        """
-        Optimize the adjacency matrix with stability controls.
-        """
-        N = A_t_T.shape[0]
-
-        # Start with more aggressive threshold for high confidence edges
-        A_opt = (A_t_T > 0.55).astype(float)  # Lower threshold from 0.6
-
-        # Count how many more edges we need
-        target_density = np.mean(A_t_T)
-        target_edges = int(target_density * N * (N - 1))
-        current_edges = int(np.sum(A_opt))
-        remaining_edges = max(0, target_edges - current_edges)
-
-        if remaining_edges > 0:
-            mask = ~np.eye(N, dtype=bool) & (A_opt == 0)
-            probs = A_t_T[mask]
-
-            if len(probs) > remaining_edges:
-                # Enhanced community structure bonus
-                community_bonus = self._get_community_bonus(A_t_T)
-                community_weight = 0.3  # Increased from 0.2
-                probs = probs + community_weight * community_bonus[mask]
-
-                # Use soft thresholding for remaining edges
-                sorted_probs = np.sort(probs)
-                k = min(remaining_edges, len(sorted_probs) - 1)  # Ensure k is valid
-                threshold = sorted_probs[-k] if k > 0 else 0.5
-                confidence_factor = np.minimum(1.0, (probs - threshold + 0.1) / 0.1)
-                A_opt[mask] = confidence_factor * (probs >= threshold)
-
-        # Ensure symmetry and zero diagonal
-        A_opt = np.maximum(A_opt, A_opt.T)
-        np.fill_diagonal(A_opt, 0)
-
-        return A_opt
-
-    def _get_community_bonus(self, A: np.ndarray) -> np.ndarray:
-        """
-        Compute bonus scores for edges that maintain community structure.
-        Uses simple block structure detection based on density patterns.
-        """
-        N = A.shape[0]
-        bonus = np.zeros((N, N))
-
-        # Detect potential communities using density patterns
-        for i in range(N):
-            for j in range(N):
-                if i != j:
-                    # Check if nodes i and j share many neighbors
-                    common_neighbors = np.sum(A[i, :] * A[j, :])
-                    total_neighbors = np.sum(A[i, :] + A[j, :])
-                    if total_neighbors > 0:
-                        similarity = common_neighbors / total_neighbors
-                        bonus[i, j] = similarity
-
-        return bonus
-
-    def _adaptive_integration(
-        self, A_t_T: np.ndarray, A_t_S: np.ndarray, stability_score: float
-    ) -> np.ndarray:
-        """Integration with stability-based mixing."""
-        # Adjust beta based on stability
-        target_beta = 0.5 + 0.3 * (1 - stability_score)  # 0.5-0.8 range
-        self.beta = 0.7 * self.beta + 0.3 * target_beta  # Smooth beta changes
-
-        return self.beta * A_t_T + (1.0 - self.beta) * A_t_S
-
-    def _update_beta(self, actual_adj: np.ndarray, predicted_adj: np.ndarray) -> None:
-        """
-        Enhanced beta adaptation based on prediction errors and density changes.
-        """
-        # Compute current error
-        diff = actual_adj - predicted_adj
-        mse = np.mean(diff**2)
-        self._prev_mses.append(mse)
-
-        # Track density change
-        actual_density = np.mean(actual_adj)
-        pred_density = np.mean(predicted_adj)
-        density_error = abs(actual_density - pred_density)
-
-        # Compute weighted error combining MSE and density error
-        if len(self._prev_mses) > 1:
-            # Weight recent errors more heavily
-            weights = np.exp(np.arange(len(self._prev_mses)))
-            weights = weights / np.sum(weights)
-            weighted_mse = np.sum(weights * np.array(self._prev_mses))
-
-            # Equal weight to MSE and density error
-            delta = 0.5 * weighted_mse + 0.5 * density_error
-
-            # More aggressive beta adaptation
-            self.beta = 1.0 / (1.0 + np.exp(delta * 8))
-            logger.debug(
-                f"Updated beta to {self.beta:.3f} (MSE: {mse:.3f}, density error: {density_error:.3f})"
-            )
-
-        # Store metrics
-        mae = np.mean(np.abs(diff))
-        rmse = np.sqrt(mse)
-        self._metrics["mae"].append(mae)
-        self._metrics["rmse"].append(rmse)
+        self.phase_start = 0
+        self.current_phase = "unknown"
+        self.ema_features = {}
