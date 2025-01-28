@@ -19,26 +19,19 @@ Key steps (line numbers reference Algorithm 1 in paper):
    f) Update history and parameters [Lines 9-10]
 """
 
+from collections import deque
+from typing import List, Dict, Any, Optional
+
+import logging
 import numpy as np
 import networkx as nx
-from typing import List, Dict, Any, Optional
-from collections import deque
-import logging
 
+from .changepoint.detector import ChangePointDetector
+from .graph.features import NetworkFeatureExtractor
 from .predictor.factory import PredictorFactory
 from .predictor.base import BasePredictor
-from .graph.features import NetworkFeatureExtractor
-from .changepoint.detector import ChangePointDetector
 
 logger = logging.getLogger(__name__)
-
-# Default parameters
-DEFAULT_PARAMS = {
-    "horizon": 5,  # Number of future steps to predict (h in Algorithm 1)
-    "threshold": 60.0,  # Detection threshold λ (from empirical study)
-    "epsilon": 0.7,  # Power martingale sensitivity (optimal from experiments)
-    "window_size": 10,  # Rolling window size k for feature history
-}
 
 
 def extract_numeric_features(feature_dict: dict) -> np.ndarray:
@@ -92,10 +85,10 @@ def extract_numeric_features(feature_dict: dict) -> np.ndarray:
 
 def run_forecast_martingale_detection(
     graph_sequence: List[nx.Graph],
-    horizon: int = DEFAULT_PARAMS["horizon"],
-    threshold: float = DEFAULT_PARAMS["threshold"],
-    epsilon: float = DEFAULT_PARAMS["epsilon"],
-    window_size: int = DEFAULT_PARAMS["window_size"],
+    horizon: int,
+    threshold: float,
+    epsilon: float,
+    window_size: int,
     predictor: Optional[BasePredictor] = None,
     predictor_type: str = "adaptive",
     predictor_config: Optional[Dict[str, Any]] = None,
@@ -115,7 +108,6 @@ def run_forecast_martingale_detection(
         [Line 7] Update Mhat_t using predicted features
         [Line 8] If M_t > λ or Mhat_t > λ: record change
         [Line 9] Update history window
-        [Line 10] Adapt parameters (beta, gamma)
 
     Parameters
     ----------

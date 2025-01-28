@@ -23,16 +23,26 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from src.algorithm import run_forecast_martingale_detection
+from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
-from src.configs.loader import get_config
-from src.algorithm import run_forecast_martingale_detection, DEFAULT_PARAMS
+
 
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+# Default parameters
+DEFAULT_PARAMS = {
+    "horizon": 5,
+    "threshold": 60.0,
+    "epsilon": 0.7,
+    "window_size": 10,
+    "predictor_type": "adaptive",
+}
 
 
 def get_full_model_name(alias: str) -> str:
@@ -44,6 +54,78 @@ def get_full_model_name(alias: str) -> str:
         "sbm": "stochastic_block_model",
     }
     return REVERSE_ALIASES.get(alias, alias)
+
+
+def run_detection(model_alias: str, output_dir: str = "results"):
+    """Run the forecast-based martingale detection algorithm on a network sequence."""
+    # 1. Setup
+    model_name = get_full_model_name(model_alias)
+    logger.info(f"Running detection on {model_name} network sequence...")
+
+    # 2. Generate Network Sequence
+    generator = GraphGenerator(model_alias)
+    config = get_config(model_name)
+    params = config["params"].__dict__
+
+    # test: minimize params
+    params.update(
+        {
+            "n": 30,
+            "seq_len": 50,
+            "min_changes": 1,
+            "max_changes": 1,
+            "min_segment": 20,
+        }
+    )
+
+    result = generator.generate_sequence(params)
+    graphs = result["graphs"]
+    true_change_points = result["change_points"]
+
+    # 3. Run Detection Algorithm
+    logger.info("Running forecast-based martingale detection...")
+    pbar = tqdm(total=len(graphs), desc="Running detection", unit="step")
+
+    detection_results = run_forecast_martingale_detection(
+        graph_sequence=[nx.from_numpy_array(g) for g in graphs],
+        horizon=DEFAULT_PARAMS["horizon"],
+        threshold=DEFAULT_PARAMS["threshold"],
+        epsilon=DEFAULT_PARAMS["epsilon"],
+        window_size=DEFAULT_PARAMS["window_size"],
+        predictor_type=DEFAULT_PARAMS["predictor_type"],
+        random_state=42,
+        progress_callback=lambda t: pbar.update(1),
+    )
+
+    pbar.close()
+
+    # 4. Analyze Results
+    detected_points = detection_results["change_points"]
+    logger.info(f"\nResults Summary:")
+    logger.info(f"True change points: {true_change_points}")
+    logger.info(f"Detected change points: {detected_points}")
+
+    if true_change_points and detected_points:
+        errors = []
+        for true_cp in true_change_points:
+            closest_detected = min(detected_points, key=lambda x: abs(x - true_cp))
+            error = abs(closest_detected - true_cp)
+            errors.append(error)
+        avg_error = np.mean(errors)
+        logger.info(f"Average detection delay: {avg_error:.2f} time steps")
+
+    # 5. Visualize Results
+    logger.info("Creating visualizations...")
+    visualize_results(
+        model_name=model_name,
+        graphs=graphs,
+        true_change_points=true_change_points,
+        detected_change_points=detected_points,
+        martingale_results=detection_results,
+        output_dir=output_dir,
+    )
+
+    logger.info(f"Results saved to {output_dir}/")
 
 
 def visualize_results(
@@ -292,66 +374,6 @@ def visualize_results(
             dpi=300,
         )
         plt.close()
-
-
-def run_detection(model_alias: str, output_dir: str = "results"):
-    """Run the forecast-based martingale detection algorithm on a network sequence."""
-    # 1. Setup
-    model_name = get_full_model_name(model_alias)
-    logger.info(f"Running detection on {model_name} network sequence...")
-
-    # 2. Generate Network Sequence
-    generator = GraphGenerator(model_alias)
-    config = get_config(model_name)
-    params = config["params"].__dict__
-    result = generator.generate_sequence(params)
-    graphs = result["graphs"]
-    true_change_points = result["change_points"]
-
-    # 3. Run Detection Algorithm
-    logger.info("Running forecast-based martingale detection...")
-    pbar = tqdm(total=len(graphs), desc="Running detection", unit="step")
-
-    detection_results = run_forecast_martingale_detection(
-        graph_sequence=[nx.from_numpy_array(g) for g in graphs],
-        horizon=DEFAULT_PARAMS["horizon"],
-        threshold=DEFAULT_PARAMS["threshold"],
-        epsilon=DEFAULT_PARAMS["epsilon"],
-        window_size=DEFAULT_PARAMS["window_size"],
-        predictor_type="adaptive",
-        random_state=42,
-        progress_callback=lambda t: pbar.update(1),
-    )
-
-    pbar.close()
-
-    # 4. Analyze Results
-    detected_points = detection_results["change_points"]
-    logger.info(f"\nResults Summary:")
-    logger.info(f"True change points: {true_change_points}")
-    logger.info(f"Detected change points: {detected_points}")
-
-    if true_change_points and detected_points:
-        errors = []
-        for true_cp in true_change_points:
-            closest_detected = min(detected_points, key=lambda x: abs(x - true_cp))
-            error = abs(closest_detected - true_cp)
-            errors.append(error)
-        avg_error = np.mean(errors)
-        logger.info(f"Average detection delay: {avg_error:.2f} time steps")
-
-    # 5. Visualize Results
-    logger.info("Creating visualizations...")
-    visualize_results(
-        model_name=model_name,
-        graphs=graphs,
-        true_change_points=true_change_points,
-        detected_change_points=detected_points,
-        martingale_results=detection_results,
-        output_dir=output_dir,
-    )
-
-    logger.info(f"Results saved to {output_dir}/")
 
 
 def main():
