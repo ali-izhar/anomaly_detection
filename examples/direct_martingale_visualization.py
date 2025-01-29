@@ -1,11 +1,11 @@
-# examples/martingale_visualization.py
+# examples/direct_martingale_visualization.py
 
 """Visualize martingale-based change detection on network sequences.
 Usage:
-    python examples/martingale_visualization.py ba
-    python examples/martingale_visualization.py ws
-    python examples/martingale_visualization.py er
-    python examples/martingale_visualization.py sbm
+    python examples/direct_martingale_visualization.py ba
+    python examples/direct_martingale_visualization.py ws
+    python examples/direct_martingale_visualization.py er
+    python examples/direct_martingale_visualization.py sbm
 """
 
 from pathlib import Path
@@ -188,18 +188,6 @@ def visualize_results(
     sns.set_style("whitegrid", {"grid.linestyle": ":"})
     sns.set_context("paper", font_scale=1.0)
 
-    # Consistent colors for features
-    feature_colors = {
-        "degree": "#1f77b4",  # Blue
-        "clustering": "#ff7f0e",  # Orange
-        "betweenness": "#2ca02c",  # Green
-        "closeness": "#d62728",  # Red
-        "eigenvector": "#9467bd",  # Purple
-        "density": "#8c564b",  # Brown
-        "singular_value": "#e377c2",  # Pink
-        "laplacian": "#7f7f7f",  # Gray
-    }
-
     # Special colors for indicators
     line_colors = {
         "actual": "#1f77b4",  # Blue
@@ -286,35 +274,21 @@ def visualize_results(
                 linewidth=0.8,
             )
 
-        # Add feature-specific detected change points
-        feature_mapping = {
-            "degrees": "degree",
-            "density": "density",
-            "clustering": "clustering",
-            "betweenness": "betweenness",
-            "eigenvector": "eigenvector",
-            "closeness": "closeness",
-            "singular_values": "singular_value",
-            "laplacian_eigenvalues": "laplacian",
-        }
-
-        feature_key = feature_mapping.get(feature_name)
-        if feature_key and feature_key in feature_results:
-            feature_cps = feature_results[feature_key]["change_points"]
-            for cp in feature_cps:
-                if isinstance(features_raw[0][feature_name], list):
-                    y_val = mean_values[cp]
-                else:
-                    y_val = features_raw[cp][feature_name]
-                ax.plot(
-                    cp,
-                    y_val,
-                    "o",
-                    color=line_colors["predicted"],
-                    markersize=6,
-                    alpha=0.8,
-                    markeredgewidth=1,
-                )
+        # Add detected change points
+        for cp in detected_change_points:
+            if isinstance(features_raw[0][feature_name], list):
+                y_val = mean_values[cp]
+            else:
+                y_val = features_raw[cp][feature_name]
+            ax.plot(
+                cp,
+                y_val,
+                "o",
+                color=line_colors["predicted"],
+                markersize=6,
+                alpha=0.8,
+                markeredgewidth=1,
+            )
 
         # Set title and labels
         ax.set_title(
@@ -333,7 +307,7 @@ def visualize_results(
 
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
-        + "True Change Points (Red), Feature-Specific Detected Change Points (Orange)",
+        + "True Change Points (Red), Detected Change Points (Orange)",
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
@@ -349,7 +323,7 @@ def visualize_results(
     plt.close()
 
 
-def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float = 0.7):
+def run_visualization(model_alias: str, threshold: float = 20.0, epsilon: float = 0.7):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
     model_name = get_full_model_name(model_alias)
@@ -382,7 +356,43 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     data = np.array(features_numeric)
     logger.info(f"Extracted feature matrix of shape {data.shape}")
 
-    # Define feature names
+    # 4. Create a ChangePointDetector instance
+    cpd = ChangePointDetector()
+
+    # 5. Run the detector using direct martingale test
+    logger.info(
+        "Running direct martingale change detection with threshold=%f, epsilon=%f",
+        threshold,
+        epsilon,
+    )
+
+    # Run detector on the sequence
+    result = cpd.detect_changes(
+        data=data,
+        threshold=threshold,
+        epsilon=epsilon,
+        reset=True,
+        max_window=None,
+        random_state=42,
+    )
+
+    # Get detected change points
+    detected_change_points = result["change_points"]
+
+    # Calculate individual feature martingales
+    individual_results = []
+    for i in range(data.shape[1]):  # For each feature dimension
+        feature_result = cpd.detect_changes(
+            data=data[:, i : i + 1],  # Single feature
+            threshold=threshold,
+            epsilon=epsilon,
+            reset=True,
+            max_window=None,
+            random_state=42,
+        )
+        individual_results.append(feature_result)
+
+    # Define feature names for individual features
     feature_names = [
         "degree",
         "density",
@@ -394,45 +404,31 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
         "laplacian",
     ]
 
-    # 4. Create a ChangePointDetector instance
-    cpd = ChangePointDetector()
-
-    # 5. Run the detector using multiview martingale test
-    logger.info(
-        "Running multiview change detection with threshold=%f, epsilon=%f",
-        threshold,
-        epsilon,
-    )
-
-    # Run detector on all features together
-    multiview_result = cpd.detect_changes_multiview(
-        data=[
-            data[:, i : i + 1] for i in range(data.shape[1])
-        ],  # Split features into separate views
-        threshold=threshold,  # Threshold only for combined evidence
-        epsilon=epsilon,
-        max_window=None,
-        random_state=42,
-    )
-
-    # Store results for visualization
+    # Prepare feature results for visualization
     feature_results = {}
 
-    # Use individual martingales from multiview result
+    # Create individual feature entries with their own martingales
     for i, feature_name in enumerate(feature_names):
         feature_results[feature_name] = {
-            "change_points": multiview_result["change_points"],
-            "martingales": multiview_result["individual_martingales"][i],
-            "p_values": multiview_result["p_values"][i],
-            "strangeness": multiview_result["strangeness"][i],
+            "change_points": individual_results[i]["change_points"],
+            "martingales": individual_results[i]["martingales"],
+            "p_values": individual_results[i]["p_values"],
+            "strangeness": individual_results[i]["strangeness"],
         }
 
-    # Combined change points are the same as multiview result
-    combined_change_points = multiview_result["change_points"]
+    # Add combined martingales as a special feature
+    feature_results["combined"] = {
+        "martingales": result["martingales"],
+        "p_values": result["p_values"],
+        "strangeness": result["strangeness"],
+        "martingale_sum": result["martingales"],  # For compatibility with visualizer
+        "martingale_avg": result["martingales"]
+        / len(feature_names),  # Average over features
+    }
 
     # 6. Print results and compare with true change points
     print(
-        f"\n==== Multiview Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+        f"\n==== Direct Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
     print(f"Network parameters: {params}")
     print(f"\nFeatures used for detection:")
@@ -446,30 +442,20 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     print("- Smallest non-zero Laplacian eigenvalue")
 
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points: {combined_change_points}")
+    print(f"Detected change points: {detected_change_points}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
-    print(
-        f"- Final sum martingale value: {multiview_result['martingales_sum'][-1]:.2f}"
-    )
-    print(
-        f"- Final average martingale value: {multiview_result['martingales_avg'][-1]:.2f}"
-    )
-    print(
-        f"- Maximum sum martingale value: {np.max(multiview_result['martingales_sum']):.2f}"
-    )
-    print(
-        f"- Maximum average martingale value: {np.max(multiview_result['martingales_avg']):.2f}"
-    )
+    print(f"- Final martingale value: {result['martingales'][-1]:.2f}")
+    print(f"- Maximum martingale value: {np.max(result['martingales']):.2f}")
 
     # Calculate detection accuracy
-    if true_change_points and combined_change_points:
+    if true_change_points and detected_change_points:
         # Simple metric: for each true change point, find the closest detected point
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
-                combined_change_points, key=lambda x: abs(x - true_cp)
+                detected_change_points, key=lambda x: abs(x - true_cp)
             )
             error = abs(closest_detected - true_cp)
             errors.append(error)
@@ -489,33 +475,14 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
         graphs=graphs,
         features_raw=features_raw,
         true_change_points=true_change_points,
-        detected_change_points=combined_change_points,
+        detected_change_points=detected_change_points,
         feature_results=feature_results,
         output_dir=output_dir,
     )
 
-    # Prepare feature martingales for visualization
-    feature_martingales = {
-        name: {
-            "martingales": results["martingales"],
-            "p_values": results["p_values"],
-            "strangeness": results["strangeness"],
-        }
-        for name, results in feature_results.items()
-    }
-
-    # Add combined martingales as a special feature
-    feature_martingales["combined"] = {
-        "martingales": multiview_result["martingales_sum"],
-        "p_values": [1.0] * len(multiview_result["martingales_sum"]),
-        "strangeness": [0.0] * len(multiview_result["martingales_sum"]),
-        "martingale_sum": multiview_result["martingales_sum"],
-        "martingale_avg": multiview_result["martingales_avg"],
-    }
-
-    # Visualize martingale analysis
+    # Use MartingaleVisualizer for martingale visualization
     martingale_viz = MartingaleVisualizer(
-        martingales=feature_martingales,
+        martingales=feature_results,
         change_points=true_change_points,
         threshold=threshold,
         epsilon=epsilon,
@@ -540,8 +507,8 @@ def main():
     parser.add_argument(
         "--threshold",
         type=float,
-        default=60.0,
-        help="Detection threshold for martingale (default: 60.0)",
+        default=20.0,
+        help="Detection threshold for martingale (default: 20.0)",
     )
     parser.add_argument(
         "--epsilon",

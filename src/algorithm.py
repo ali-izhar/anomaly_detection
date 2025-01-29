@@ -20,7 +20,7 @@ Key steps (line numbers reference Algorithm 1 in paper):
 """
 
 from collections import deque
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 
 import logging
 import numpy as np
@@ -35,260 +35,563 @@ from .predictor.base import BasePredictor
 logger = logging.getLogger(__name__)
 
 
-def extract_numeric_features(feature_dict: dict) -> np.ndarray:
-    """
-    Extract numeric features from feature dictionary in a consistent order.
-    These features correspond to f(G_t) in Algorithm 1, Line 3.
+class TraditionalMartingale:
+    """Handles traditional martingale (M_t) computation on current graph features."""
 
-    Features are defined in Section 4 of the paper:
-    1) Local Connectivity (degree, density, clustering)
-    2) Information Flow (betweenness, eigenvector, closeness)
-    3) Global Structure (singular values, laplacian)
-    """
-    # Extract basic metrics
-    degrees = feature_dict.get("degrees", [])
-    avg_degree = np.mean(degrees) if degrees else 0.0
-    density = feature_dict.get("density", 0.0)
-    clustering = feature_dict.get("clustering", [])
-    avg_clustering = np.mean(clustering) if clustering else 0.0
+    def __init__(
+        self,
+        threshold: float,
+        epsilon: float,
+        window_size: int = 10,
+        random_state: Optional[int] = None,
+    ):
+        """Initialize the traditional martingale detector.
 
-    # Extract centrality metrics
-    betweenness = feature_dict.get("betweenness", [])
-    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
-    eigenvector = feature_dict.get("eigenvector", [])
-    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
-    closeness = feature_dict.get("closeness", [])
-    avg_closeness = np.mean(closeness) if closeness else 0.0
+        Args:
+            threshold: Detection threshold for martingale (default: 60.0)
+            epsilon: Sensitivity parameter for martingale (default: 0.7)
+            window_size: Size of sliding window for history (default: 10)
+            random_state: Random seed for reproducibility
+        """
+        self.threshold = threshold
+        self.epsilon = epsilon
+        self.window_size = window_size
+        self.random_state = random_state
+        self.feature_extractor = NetworkFeatureExtractor()
 
-    # Extract spectral metrics
-    singular_values = feature_dict.get("singular_values", [])
-    largest_sv = max(singular_values) if singular_values else 0.0
-    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
-    smallest_nonzero_le = (
-        min(x for x in laplacian_eigenvalues if x > 1e-10)
-        if laplacian_eigenvalues
-        else 0.0
-    )
+        # Store detection results
+        self.change_points = []
+        self.feature_results = {}
+        self.combined_martingales = None
 
-    return np.array(
-        [
-            avg_degree,
-            density,
-            avg_clustering,
-            avg_betweenness,
-            avg_eigenvector,
-            avg_closeness,
-            largest_sv,
-            smallest_nonzero_le,
+        # Initialize history
+        self.history = []
+
+        # Initialize martingales for each feature
+        self.feature_names = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
         ]
-    )
+        self.M = {feature: 1.0 for feature in self.feature_names}  # M_0^(i) = 1
+
+    def extract_numeric_features(self, feature_dict: dict) -> np.ndarray:
+        """Extract numeric features from feature dictionary in a consistent order."""
+        # Extract basic metrics
+        degrees = feature_dict.get("degrees", [])
+        avg_degree = np.mean(degrees) if degrees else 0.0
+        density = feature_dict.get("density", 0.0)
+        clustering = feature_dict.get("clustering", [])
+        avg_clustering = np.mean(clustering) if clustering else 0.0
+
+        # Extract centrality metrics
+        betweenness = feature_dict.get("betweenness", [])
+        avg_betweenness = np.mean(betweenness) if betweenness else 0.0
+        eigenvector = feature_dict.get("eigenvector", [])
+        avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
+        closeness = feature_dict.get("closeness", [])
+        avg_closeness = np.mean(closeness) if closeness else 0.0
+
+        # Extract spectral metrics
+        singular_values = feature_dict.get("singular_values", [])
+        largest_sv = max(singular_values) if singular_values else 0.0
+        laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
+        smallest_nonzero_le = (
+            min(x for x in laplacian_eigenvalues if x > 1e-10)
+            if laplacian_eigenvalues
+            else 0.0
+        )
+
+        return np.array(
+            [
+                avg_degree,
+                density,
+                avg_clustering,
+                avg_betweenness,
+                avg_eigenvector,
+                avg_closeness,
+                largest_sv,
+                smallest_nonzero_le,
+            ]
+        )
+
+    def detect_changes(self, graphs: List[np.ndarray]) -> Dict[str, Any]:
+        """Detect changes in a sequence of graphs using sequential martingale detection.
+
+        Implements equation 14 from the paper:
+        M_t^(i) = M_{t-1}^(i) × ε(p_t^(i))^(ε-1)
+        """
+        # Storage for results
+        observed_martingales = {
+            feature: [1.0] for feature in self.feature_names
+        }  # Include M_0
+        change_points = []
+
+        # Process each timestep
+        for t, adj_matrix in enumerate(graphs):
+            # Extract features from current graph
+            graph = nx.from_numpy_array(adj_matrix)
+            feature_dict = self.feature_extractor.get_features(graph)
+            current_features = self.extract_numeric_features(feature_dict)
+
+            # Update history
+            self.history.append({"adjacency": adj_matrix, "features": current_features})
+            if len(self.history) > self.window_size:
+                self.history = self.history[-self.window_size :]
+
+            # For each feature
+            detected_at_t = False
+            for i, feature_name in enumerate(self.feature_names):
+                # Get feature value and history
+                feature_value = current_features[i]
+                feature_history = [
+                    h["features"][i] for h in self.history[:-1]
+                ]  # Exclude current point
+
+                # Compute p-value using conformal score
+                if feature_history:
+                    p_t = get_pvalue(
+                        [*feature_history, feature_value],
+                        random_state=self.random_state,
+                    )
+                else:
+                    p_t = 1.0  # No history yet
+
+                # Update martingale using equation 14
+                self.M[feature_name] *= self.epsilon * (p_t ** (self.epsilon - 1))
+                observed_martingales[feature_name].append(self.M[feature_name])
+
+                # Check for change point
+                if self.M[feature_name] >= self.threshold:
+                    detected_at_t = True
+
+            # Record change point if detected by any feature
+            if detected_at_t:
+                change_points.append(t)
+
+        # Store results
+        self.feature_results = {
+            feature: {
+                "martingales": observed_martingales[feature][1:],  # Exclude M_0
+                "change_points": change_points,
+            }
+            for feature in self.feature_names
+        }
+
+        # Store combined results
+        martingale_sum = [
+            sum(m) for m in zip(*[v[1:] for v in observed_martingales.values()])
+        ]
+        martingale_avg = [
+            sum(m) / len(self.feature_names)
+            for m in zip(*[v[1:] for v in observed_martingales.values()])
+        ]
+
+        self.combined_martingales = {
+            "martingales": martingale_sum,
+            "martingale_sum": martingale_sum,
+            "martingale_avg": martingale_avg,
+        }
+
+        self.change_points = change_points
+
+        return {
+            "change_points": self.change_points,
+            "feature_results": self.feature_results,
+            "combined_martingales": self.combined_martingales,
+        }
+
+    def get_statistics(self) -> Dict[str, float]:
+        """Get detection statistics after running detection.
+
+        Returns:
+            Dictionary containing martingale statistics
+        """
+        if self.combined_martingales is None:
+            raise RuntimeError("Must run detect_changes() before getting statistics")
+
+        return {
+            "final_sum_martingale": self.combined_martingales["martingale_sum"][-1],
+            "final_avg_martingale": self.combined_martingales["martingale_avg"][-1],
+            "max_sum_martingale": np.max(self.combined_martingales["martingale_sum"]),
+            "max_avg_martingale": np.max(self.combined_martingales["martingale_avg"]),
+        }
+
+
+class HorizonMartingale:
+    """Handles horizon martingale (Mhat_t) computation on predicted future graph features.
+
+    This implements Algorithm 1 from the paper, maintaining two parallel martingale streams:
+    1) M_t (observed): computed on current graph features (equation 14)
+    2) Mhat_t (horizon): computed on predicted future graphs (equation 15)
+    """
+
+    def __init__(
+        self,
+        threshold: float,
+        epsilon: float,
+        horizon: int = 5,
+        predictor_type: str = "adaptive",
+        predictor_config: Optional[Dict[str, Any]] = None,
+        random_state: Optional[int] = None,
+    ):
+        """Initialize the horizon martingale detector.
+
+        Args:
+            threshold: Detection threshold for martingale
+            epsilon: Sensitivity parameter for martingale
+            horizon: Number of future steps to predict
+            predictor_type: Type of predictor to use ("adaptive", "auto", "statistical")
+            predictor_config: Optional configuration for the predictor
+            random_state: Random seed for reproducibility
+        """
+        self.threshold = threshold
+        self.epsilon = epsilon
+        self.horizon = horizon
+        self.random_state = random_state
+
+        # Initialize detectors and feature extractors
+        self.detector = ChangePointDetector()
+        self.feature_extractor = NetworkFeatureExtractor()
+
+        # Initialize predictor using factory
+        self.predictor = PredictorFactory.create(predictor_type, predictor_config)
+
+        # Store detection results
+        self.change_points = []
+        self.feature_results = {}
+        self.observed_martingales = None
+        self.horizon_martingales = None
+
+        # Store history for prediction
+        self.history = []
+
+        # Initialize traditional martingale for M_{t-1} values
+        self.traditional = TraditionalMartingale(
+            threshold=threshold,
+            epsilon=epsilon,
+            window_size=10,  # Same as predictor history size
+            random_state=random_state,
+        )
+
+    def extract_numeric_features(self, feature_dict: dict) -> np.ndarray:
+        """Extract numeric features from feature dictionary in a consistent order."""
+        # Extract basic metrics
+        degrees = feature_dict.get("degrees", [])
+        avg_degree = np.mean(degrees) if degrees else 0.0
+        density = feature_dict.get("density", 0.0)
+        clustering = feature_dict.get("clustering", [])
+        avg_clustering = np.mean(clustering) if clustering else 0.0
+
+        # Extract centrality metrics
+        betweenness = feature_dict.get("betweenness", [])
+        avg_betweenness = np.mean(betweenness) if betweenness else 0.0
+        eigenvector = feature_dict.get("eigenvector", [])
+        avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
+        closeness = feature_dict.get("closeness", [])
+        avg_closeness = np.mean(closeness) if closeness else 0.0
+
+        # Extract spectral metrics
+        singular_values = feature_dict.get("singular_values", [])
+        largest_sv = max(singular_values) if singular_values else 0.0
+        laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
+        smallest_nonzero_le = (
+            min(x for x in laplacian_eigenvalues if x > 1e-10)
+            if laplacian_eigenvalues
+            else 0.0
+        )
+
+        return np.array(
+            [
+                avg_degree,
+                density,
+                avg_clustering,
+                avg_betweenness,
+                avg_eigenvector,
+                avg_closeness,
+                largest_sv,
+                smallest_nonzero_le,
+            ]
+        )
+
+    def detect_changes(self, graphs: List[np.ndarray]) -> Dict[str, Any]:
+        """Detect changes using both observed and horizon martingales.
+
+        Implements equations 14 and 15 from the paper:
+        M_t^(i) = M_{t-1}^(i) × ε(p_t^(i))^(ε-1)           [eq. 14]
+        Mhat_t^(i) = M_{t-1}^(i) × ∏(j=1 to h) ε(phat_{t+j}^(i))^(ε-1)  [eq. 15]
+        where M_{t-1}^(i) comes from the traditional martingale
+        """
+        # Initialize feature names
+        feature_names = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
+        ]
+
+        # Storage for results
+        observed_martingales = {feature: [] for feature in feature_names}
+        horizon_martingales = {feature: [] for feature in feature_names}
+        change_points = []
+
+        # Process each timestep
+        for t, adj_matrix in enumerate(graphs):
+            # Extract features from current graph
+            graph = nx.from_numpy_array(adj_matrix)
+            feature_dict = self.feature_extractor.get_features(graph)
+            current_features = self.extract_numeric_features(feature_dict)
+
+            # Update history for prediction
+            self.history.append({"adjacency": adj_matrix})
+            if len(self.history) > self.predictor.history_size:
+                self.history = self.history[-self.predictor.history_size :]
+
+            # For each feature
+            detected_at_t = False
+            for i, feature_name in enumerate(feature_names):
+                # 1. Update traditional martingale to get M_{t-1}^(i)
+                M_t = self.traditional.M[feature_name]  # Get M_{t-1} before updating
+
+                # Update traditional martingale for current point
+                obs_result = self.detector.detect_changes(
+                    data=np.array([current_features[i]]).reshape(-1, 1),
+                    threshold=self.threshold,
+                    epsilon=self.epsilon,
+                    reset=False,
+                    max_window=None,
+                    random_state=self.random_state,
+                )
+
+                # Store observed martingale value
+                M_t_new = obs_result["martingales"][-1]
+                observed_martingales[feature_name].append(M_t_new)
+                self.traditional.M[feature_name] = M_t_new  # Update for next iteration
+
+                # 2. Update horizon martingale if we have enough history
+                if len(self.history) == self.predictor.history_size:
+                    # Predict future states
+                    future_graphs = self.predictor.predict(
+                        self.history, horizon=self.horizon
+                    )
+
+                    # Extract features from predicted graphs
+                    future_features = []
+                    for future_adj in future_graphs:
+                        future_graph = nx.from_numpy_array(future_adj)
+                        future_dict = self.feature_extractor.get_features(future_graph)
+                        future_numeric = self.extract_numeric_features(future_dict)
+                        future_features.append(future_numeric[i])
+
+                    # Get p-values for predicted features using detector
+                    horizon_result = self.detector.detect_changes(
+                        data=np.array(future_features).reshape(-1, 1),
+                        threshold=self.threshold,
+                        epsilon=self.epsilon,
+                        reset=False,
+                        max_window=None,
+                        random_state=self.random_state,
+                    )
+
+                    # Use M_{t-1} as base and multiply by product of predicted p-values
+                    Mhat_t = M_t * np.prod(
+                        [
+                            self.epsilon * (p ** (self.epsilon - 1))
+                            for p in horizon_result["p_values"]
+                        ]
+                    )
+                    horizon_martingales[feature_name].append(Mhat_t)
+
+                    # Check for change point
+                    if M_t_new >= self.threshold or Mhat_t >= self.threshold:
+                        detected_at_t = True
+                else:
+                    # When no prediction possible, use observed martingale
+                    horizon_martingales[feature_name].append(M_t_new)
+
+            # Record change point if detected by any feature
+            if detected_at_t:
+                change_points.append(t)
+
+            # Update predictor state
+            if len(self.history) == self.predictor.history_size:
+                self.predictor.update_state(self.history[-1])
+
+        # Store results
+        self.feature_results = {
+            feature: {
+                "observed_martingales": observed_martingales[feature],
+                "horizon_martingales": horizon_martingales[feature],
+                "change_points": change_points,
+            }
+            for feature in feature_names
+        }
+
+        # Store combined results
+        self.observed_martingales = {
+            "martingale_sum": [sum(m) for m in zip(*observed_martingales.values())],
+            "martingale_avg": [
+                sum(m) / len(feature_names) for m in zip(*observed_martingales.values())
+            ],
+        }
+
+        self.horizon_martingales = {
+            "martingale_sum": [sum(m) for m in zip(*horizon_martingales.values())],
+            "martingale_avg": [
+                sum(m) / len(feature_names) for m in zip(*horizon_martingales.values())
+            ],
+        }
+
+        self.change_points = change_points
+
+        return {
+            "change_points": self.change_points,
+            "feature_results": self.feature_results,
+            "observed_martingales": self.observed_martingales,
+            "horizon_martingales": self.horizon_martingales,
+        }
+
+    def get_statistics(self) -> Dict[str, float]:
+        """Get detection statistics after running detection.
+
+        Returns:
+            Dictionary containing martingale statistics for both streams
+        """
+        if self.observed_martingales is None or self.horizon_martingales is None:
+            raise RuntimeError("Must run detect_changes() before getting statistics")
+
+        return {
+            # Observed martingale statistics
+            "final_sum_martingale": self.observed_martingales["martingale_sum"][-1],
+            "final_avg_martingale": self.observed_martingales["martingale_avg"][-1],
+            "max_sum_martingale": np.max(self.observed_martingales["martingale_sum"]),
+            "max_avg_martingale": np.max(self.observed_martingales["martingale_avg"]),
+            # Horizon martingale statistics
+            "final_sum_horizon": self.horizon_martingales["martingale_sum"][-1],
+            "final_avg_horizon": self.horizon_martingales["martingale_avg"][-1],
+            "max_sum_horizon": np.max(self.horizon_martingales["martingale_sum"]),
+            "max_avg_horizon": np.max(self.horizon_martingales["martingale_avg"]),
+        }
 
 
 def run_forecast_martingale_detection(
     graph_sequence: List[nx.Graph],
-    horizon: int,
-    threshold: float,
-    epsilon: float,
-    window_size: int,
-    predictor: Optional[BasePredictor] = None,
+    horizon: int = 5,
+    threshold: float = 60.0,
+    epsilon: float = 0.7,
+    window_size: int = 10,
     predictor_type: str = "adaptive",
     predictor_config: Optional[Dict[str, Any]] = None,
-    random_state: int = None,
-    progress_callback=None,
+    random_state: Optional[int] = None,
+    progress_callback: Optional[Callable[[int], None]] = None,
 ) -> Dict[str, Any]:
-    """Implementation of Algorithm 1 from Section 5 of the paper."""
-    # [Line 1] Initialize
-    if predictor is None:
-        predictor = PredictorFactory.create(predictor_type, predictor_config)
+    """Run the forecast-based martingale detection algorithm using dual streams.
 
-    n = len(graph_sequence)
-    logger.info(f"Starting detection on sequence of length {n}")
+    This implements Algorithm 1 from the paper, running both traditional and horizon
+    martingales in parallel for faster change detection.
 
-    # Track change points from both streams separately
-    traditional_changes = []
-    horizon_changes = []
-    change_points = []  # Combined changes for backward compatibility
+    Args:
+        graph_sequence: List of networkx graphs to analyze
+        horizon: Number of future steps to predict
+        threshold: Detection threshold for martingales
+        epsilon: Sensitivity parameter for martingales
+        window_size: Size of sliding window for prediction
+        predictor_type: Type of predictor to use ("adaptive", "auto", "statistical")
+        predictor_config: Optional configuration for the predictor
+        random_state: Random seed for reproducibility
+        progress_callback: Optional callback function to report progress
 
-    detector = ChangePointDetector()
-    feature_extractor = NetworkFeatureExtractor()
+    Returns:
+        Dictionary containing:
+        - change_points: Combined list of detected change points
+        - traditional_changes: Change points from traditional martingale
+        - horizon_changes: Change points from horizon martingale
+        - M_observed: Traditional martingale values
+        - M_predicted: Horizon martingale values
+        - individual_martingales_obs: Feature-specific traditional martingales
+        - individual_martingales_pred: Feature-specific horizon martingales
+    """
+    # Convert graphs to adjacency matrices
+    adj_matrices = [nx.to_numpy_array(g) for g in graph_sequence]
 
-    # History tracking
-    adjacency_history = deque(maxlen=window_size)  # Only for predictor
-    features_history = []  # Full feature history for martingales
+    # Initialize both martingale detectors
+    traditional = TraditionalMartingale(
+        threshold=threshold,
+        epsilon=epsilon,
+        window_size=window_size,
+        random_state=random_state,
+    )
 
-    # Track martingale values (M_t and Mhat_t from paper)
-    M_obs_sums = []  # Traditional martingales sum
-    M_pred_sums = []  # Horizon martingales sum
-    individual_marts_obs = [[] for _ in range(8)]  # Individual traditional martingales
-    individual_marts_pred = [[] for _ in range(8)]  # Individual horizon martingales
+    horizon = HorizonMartingale(
+        threshold=threshold,
+        epsilon=epsilon,
+        horizon=horizon,
+        predictor_type=predictor_type,
+        predictor_config=predictor_config,
+        random_state=random_state,
+    )
 
-    # Keep track of previous traditional martingale values (M_{t-1})
-    prev_traditional_marts = [1.0] * 8  # Initialize M_{t-1} for each feature
+    # Run both detectors
+    trad_results = traditional.detect_changes(adj_matrices)
+    horizon_results = horizon.detect_changes(adj_matrices)
 
-    # Detectors for both streams
-    traditional_detector = ChangePointDetector()  # For M_t (equation 14)
-    horizon_detector = ChangePointDetector()  # For Mhat_t (equation 15)
+    # Get statistics from both detectors
+    trad_stats = traditional.get_statistics()
+    horizon_stats = horizon.get_statistics()
 
-    # [Line 2] Main detection loop
-    for t in range(n):
-        logger.debug(f"Processing time step {t}/{n-1}")
+    # Combine change points from both streams
+    all_change_points = sorted(
+        list(set(trad_results["change_points"] + horizon_results["change_points"]))
+    )
 
-        # [Line 3] Current graph processing
-        current_graph = graph_sequence[t]
-        current_adj = nx.to_numpy_array(current_graph)
-        adjacency_history.append(current_adj)  # For predictor only
+    # Extract feature-specific martingales
+    individual_martingales_obs = []
+    individual_martingales_pred = []
 
-        # Extract current features f(G_t)
-        current_features = extract_numeric_features(
-            feature_extractor.get_features(current_graph)
-        )
-        features_history.append(current_features)  # Full history for both streams
+    feature_names = [
+        "degree",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_value",
+        "laplacian",
+    ]
 
-        # [Line 6] Update traditional martingale (equation 14)
-        # Use all historical features for proper conformal scores
-        features_since_start = np.array(features_history)
-
-        # Ensure features are 2D array (samples x features)
-        if len(features_since_start.shape) == 1:
-            features_since_start = features_since_start.reshape(1, -1)
-
-        # Split features into separate views for multiview detection
-        feature_views = [features_since_start[:, i : i + 1] for i in range(8)]
-
-        # Use multiview_martingale_test for traditional martingale
-        obs_result = traditional_detector.detect_changes_multiview(
-            data=feature_views,
-            threshold=threshold,
-            epsilon=epsilon,
-            max_window=None,  # Use all history
-            random_state=random_state,
-        )
-
-        # Store traditional martingale values and update M_{t-1}
-        M_obs_sums.append(obs_result["martingales_sum"][-1])
-        for i, marts in enumerate(obs_result["individual_martingales"]):
-            mart_value = marts[-1]
-            individual_marts_obs[i].append(mart_value)
-            prev_traditional_marts[i] = mart_value  # Update M_{t-1} for next iteration
-
-        # [Line 7] Update horizon martingale (equation 15)
-        M_pred_sum = 0
-        pred_martingales = []
-
-        # Only compute horizon martingale if we have enough data for prediction
-        if t >= window_size:
-            # [Line 4] Generate h-step ahead predictions
-            predicted_graphs = predictor.predict(
-                history=[{"adjacency": adj} for adj in list(adjacency_history)],
-                horizon=horizon,
+    for feature in feature_names:
+        # Traditional martingales for each feature
+        if feature in trad_results["feature_results"]:
+            individual_martingales_obs.append(
+                trad_results["feature_results"][feature]["martingales"]
             )
 
-            # [Line 5] Extract features from predicted graphs
-            predicted_features = []
-            for pred_adj in predicted_graphs:
-                pred_graph = nx.from_numpy_array(pred_adj)
-                pred_features = extract_numeric_features(
-                    feature_extractor.get_features(pred_graph)
-                )
-                predicted_features.append(pred_features)
-
-            # For each feature i
-            feature_views_pred = []
-            for i in range(8):  # 8 features
-                # Start with M_{t-1} from traditional martingale
-                horizon_mart = prev_traditional_marts[i]
-
-                # Get all historical data for this feature
-                history_vals = features_since_start[:, i : i + 1]
-
-                # Get predicted values for this feature
-                feature_preds = np.array([pred[i] for pred in predicted_features])
-                feature_preds = feature_preds.reshape(-1, 1)  # Make 2D for strangeness
-
-                # Compute strangeness for all predictions together
-                try:
-                    all_points = np.vstack([history_vals, feature_preds])
-                    strangeness_vals = strangeness_point(
-                        all_points, random_state=random_state
-                    )
-
-                    # Get p-values for each prediction and multiply into horizon martingale
-                    for j in range(len(feature_preds)):
-                        # For each prediction, compute its p-value using all previous points
-                        current_strange = strangeness_vals[-(horizon - j)]
-                        prev_strange = list(strangeness_vals[: -(horizon - j)])
-                        prev_strange.append(current_strange)
-
-                        # Get p-value using proper function from strangeness.py
-                        p_val = get_pvalue(prev_strange, random_state=random_state)
-
-                        # Multiply into horizon martingale (equation 15)
-                        # Mhat_t = M_{t-1} * ∏[ε(p_j)^(ε-1)]
-                        horizon_mart *= epsilon * (p_val ** (epsilon - 1))
-
-                except ValueError as e:
-                    # On error, keep M_{t-1}
-                    horizon_mart = prev_traditional_marts[i]
-
-                pred_martingales.append(horizon_mart)
-                feature_views_pred.append(feature_preds)
-
-            # Use multiview_martingale_test for horizon martingale
-            pred_result = horizon_detector.detect_changes_multiview(
-                data=feature_views_pred,
-                threshold=threshold,
-                epsilon=epsilon,
-                max_window=None,  # Use all history
-                random_state=random_state,
-            )
-            M_pred_sum = pred_result["martingales_sum"][-1]
-        else:
-            # If not enough history, use M_{t-1} values
-            pred_martingales = prev_traditional_marts.copy()
-            M_pred_sum = sum(pred_martingales)
-
-        # [Line 8] Check for change point using both streams independently
-        # Traditional martingale detection (equation 14)
-        if obs_result["martingales_sum"][-1] > threshold:
-            traditional_changes.append(t)
-            logger.info(
-                f"Traditional martingale detection at t={t} (M_t = {obs_result['martingales_sum'][-1]:.4f})"
+        # Horizon martingales for each feature
+        if feature in horizon_results["feature_results"]:
+            individual_martingales_pred.append(
+                horizon_results["feature_results"][feature]["horizon_martingales"]
             )
 
-        # Horizon martingale detection (equation 15)
-        if M_pred_sum > threshold:
-            horizon_changes.append(t)
-            logger.info(
-                f"Horizon martingale detection at t={t} (Mhat_t = {M_pred_sum:.4f})"
-            )
-
-        # Track combined changes for backward compatibility
-        if t in traditional_changes or t in horizon_changes:
-            change_points.append(t)
-
-        # Store horizon martingale values
-        M_pred_sums.append(M_pred_sum)
-        for i, mart in enumerate(pred_martingales):
-            individual_marts_pred[i].append(mart)
-
-        # [Line 9-10] Update predictor state
-        predictor.update_state({"adjacency": current_adj})
-
-        # Update progress if callback provided
-        if progress_callback is not None:
-            progress_callback(t)
-
-    logger.info(f"Detection completed.")
-    logger.info(f"Traditional martingale detected changes at: {traditional_changes}")
-    logger.info(f"Horizon martingale detected changes at: {horizon_changes}")
-    logger.info(f"Combined change points: {change_points}")
+    # Call progress callback if provided
+    if progress_callback:
+        progress_callback(len(graph_sequence))
 
     return {
-        "change_points": change_points,
-        "traditional_changes": traditional_changes,
-        "horizon_changes": horizon_changes,
-        "M_observed": np.array(M_obs_sums),
-        "M_predicted": np.array(M_pred_sums),
-        "individual_martingales_obs": [np.array(m) for m in individual_marts_obs],
-        "individual_martingales_pred": [np.array(m) for m in individual_marts_pred],
+        "change_points": all_change_points,
+        "traditional_changes": trad_results["change_points"],
+        "horizon_changes": horizon_results["change_points"],
+        "M_observed": trad_results["combined_martingales"]["martingale_sum"],
+        "M_predicted": horizon_results["horizon_martingales"]["martingale_sum"],
+        "individual_martingales_obs": individual_martingales_obs,
+        "individual_martingales_pred": individual_martingales_pred,
+        "statistics": {"traditional": trad_stats, "horizon": horizon_stats},
     }
