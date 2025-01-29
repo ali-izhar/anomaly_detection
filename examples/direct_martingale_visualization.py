@@ -442,16 +442,28 @@ def run_visualization(model_alias: str, threshold: float = 20.0, epsilon: float 
     print("- Smallest non-zero Laplacian eigenvalue")
 
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points: {detected_change_points}")
+    print("\nDetected change points by feature:")
+    for i, feature_name in enumerate(feature_names):
+        print(f"- {feature_name}: {individual_results[i]['change_points']}")
+    print(f"\nCombined martingale change points: {detected_change_points}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
-    print(f"- Final martingale value: {result['martingales'][-1]:.2f}")
-    print(f"- Maximum martingale value: {np.max(result['martingales']):.2f}")
+    print("Individual feature martingales:")
+    for i, feature_name in enumerate(feature_names):
+        max_martingale = np.max(individual_results[i]["martingales"])
+        final_martingale = individual_results[i]["martingales"][-1]
+        print(f"- {feature_name}:")
+        print(f"  - Final value: {final_martingale:.2f}")
+        print(f"  - Maximum value: {max_martingale:.2f}")
 
-    # Calculate detection accuracy
+    print("\nCombined martingale:")
+    print(f"- Final value: {result['martingales'][-1]:.2f}")
+    print(f"- Maximum value: {np.max(result['martingales']):.2f}")
+
+    # Calculate detection accuracy based on sum martingale
     if true_change_points and detected_change_points:
-        # Simple metric: for each true change point, find the closest detected point
+        # For each true change point, find the closest detected point from sum martingale
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
@@ -461,7 +473,7 @@ def run_visualization(model_alias: str, threshold: float = 20.0, epsilon: float 
             errors.append(error)
 
         avg_error = np.mean(errors)
-        print(f"\nDetection Performance:")
+        print(f"\nDetection Performance (based on combined martingale):")
         print(f"Average detection delay: {avg_error:.2f} time steps")
 
     # 7. Create visualizations
