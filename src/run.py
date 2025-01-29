@@ -156,52 +156,107 @@ def run_detection(model_alias: str, output_dir: str = "results"):
                         f"Both martingales detected change at t={true_cp} simultaneously"
                     )
 
-    # # 5. Visualize Results
-    # logger.info("Creating visualizations...")
+    # 5. Visualize Results
+    logger.info("Creating visualizations...")
 
-    # # Prepare feature martingales for visualization
-    # feature_names = [
-    #     "degree",
-    #     "density",
-    #     "clustering",
-    #     "betweenness",
-    #     "eigenvector",
-    #     "closeness",
-    #     "singular_value",
-    #     "laplacian",
-    # ]
+    # Prepare feature martingales for visualization
+    feature_names = [
+        "degree",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_value",
+        "laplacian",
+    ]
 
-    # # Create martingales dictionary for visualization
-    # feature_martingales = {}
-    # for i, feature in enumerate(feature_names):
-    #     feature_martingales[feature] = {
-    #         "martingales": detection_results["individual_martingales_obs"][i],
-    #         "p_values": [1.0]
-    #         * len(detection_results["individual_martingales_obs"][i]),  # Placeholder
-    #         "strangeness": [0.0]
-    #         * len(detection_results["individual_martingales_obs"][i]),  # Placeholder
-    #     }
+    # Create martingales dictionary for visualization
+    feature_martingales = {}
+    for i, feature in enumerate(feature_names):
+        feature_martingales[feature] = {
+            "martingales": detection_results["individual_martingales_obs"][i],
+            "p_values": detection_results["feature_results"][feature]["p_values"],
+            "strangeness": detection_results["feature_results"][feature]["strangeness"],
+        }
 
-    # # Add combined martingales
-    # feature_martingales["combined"] = {
-    #     "martingales": detection_results["M_observed"],
-    #     "p_values": [1.0] * len(detection_results["M_observed"]),  # Placeholder
-    #     "strangeness": [0.0] * len(detection_results["M_observed"]),  # Placeholder
-    #     "martingale_sum": detection_results["M_observed"],
-    #     "martingale_avg": detection_results["M_predicted"],
-    # }
+    # Add combined martingales
+    feature_martingales["combined"] = {
+        "martingales": detection_results["M_observed"],
+        "p_values": (
+            detection_results["feature_results"]["combined"]["p_values"]
+            if "combined" in detection_results["feature_results"]
+            else [1.0] * len(detection_results["M_observed"])
+        ),
+        "strangeness": (
+            detection_results["feature_results"]["combined"]["strangeness"]
+            if "combined" in detection_results["feature_results"]
+            else [0.0] * len(detection_results["M_observed"])
+        ),
+        "martingale_sum": detection_results[
+            "M_observed"
+        ],  # Sum of all feature martingales
+        "martingale_avg": [
+            m / len(feature_names) for m in detection_results["M_observed"]
+        ],  # Average of feature martingales
+    }
 
-    # # Create visualizations using MartingaleVisualizer
-    # martingale_viz = MartingaleVisualizer(
-    #     martingales=feature_martingales,
-    #     change_points=true_change_points,
-    #     threshold=DEFAULT_PARAMS["threshold"],
-    #     epsilon=DEFAULT_PARAMS["epsilon"],
-    #     output_dir=output_dir,
-    # )
-    # martingale_viz.create_visualization()
+    # Create visualizations using MartingaleVisualizer
+    martingale_viz = MartingaleVisualizer(
+        martingales=feature_martingales,
+        change_points=true_change_points,
+        threshold=DEFAULT_PARAMS["threshold"],
+        epsilon=DEFAULT_PARAMS["epsilon"],
+        output_dir=output_dir,
+        prefix="traditional_",  # Add prefix for traditional martingales
+    )
+    martingale_viz.create_visualization()
 
-    # logger.info(f"Results saved to {output_dir}/")
+    # Create a second visualization for horizon martingales if they exist
+    if "M_predicted" in detection_results:
+        horizon_martingales = {}
+        for i, feature in enumerate(feature_names):
+            horizon_martingales[feature] = {
+                "martingales": detection_results["individual_martingales_pred"][i],
+                "p_values": detection_results["feature_results"][feature]["p_values"],
+                "strangeness": detection_results["feature_results"][feature][
+                    "strangeness"
+                ],
+            }
+
+        # Add combined horizon martingales
+        horizon_martingales["combined"] = {
+            "martingales": detection_results["M_predicted"],
+            "p_values": (
+                detection_results["feature_results"]["combined"]["p_values"]
+                if "combined" in detection_results["feature_results"]
+                else [1.0] * len(detection_results["M_predicted"])
+            ),
+            "strangeness": (
+                detection_results["feature_results"]["combined"]["strangeness"]
+                if "combined" in detection_results["feature_results"]
+                else [0.0] * len(detection_results["M_predicted"])
+            ),
+            "martingale_sum": detection_results[
+                "M_predicted"
+            ],  # Sum of all feature martingales
+            "martingale_avg": [
+                m / len(feature_names) for m in detection_results["M_predicted"]
+            ],  # Average of feature martingales
+        }
+
+        # Create horizon martingale visualization
+        horizon_viz = MartingaleVisualizer(
+            martingales=horizon_martingales,
+            change_points=true_change_points,
+            threshold=DEFAULT_PARAMS["threshold"],
+            epsilon=DEFAULT_PARAMS["epsilon"],
+            output_dir=output_dir,
+            prefix="horizon_",  # Add prefix for horizon martingales
+        )
+        horizon_viz.create_visualization()
+
+    logger.info(f"Results saved to {output_dir}/")
 
 
 def main():

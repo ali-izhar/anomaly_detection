@@ -62,18 +62,28 @@ class MartingaleVisualizer:
         self,
         martingales: Dict[str, Dict[str, Any]],
         change_points: List[int],
-        threshold: float = 30,
-        epsilon: float = 0.8,
-        output_dir: str = "martingale_outputs",
-        vis_config: VisualizationConfig = None,
+        threshold: float,
+        epsilon: float,
+        output_dir: str = "results",
+        prefix: str = "",
     ):
-        """Initialize visualizer with analysis results."""
+        """Initialize the visualizer.
+
+        Args:
+            martingales: Dictionary of martingale results for each feature
+            change_points: List of true change points
+            threshold: Detection threshold
+            epsilon: Sensitivity parameter
+            output_dir: Directory to save visualizations
+            prefix: Prefix for output filenames (e.g., "horizon_" for horizon martingales)
+        """
         self.martingales = martingales
         self.change_points = change_points
         self.threshold = threshold
         self.epsilon = epsilon
         self.output_dir = Path(output_dir)
-        self.vis_config = vis_config or VisualizationConfig()
+        self.prefix = prefix
+        self.vis_config = VisualizationConfig()
 
         # Compute SHAP values
         sequence_length = len(next(iter(martingales.values()))["martingales"])
@@ -422,8 +432,9 @@ class MartingaleVisualizer:
     def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        final_filename = f"{self.prefix}{filename}" if self.prefix else filename
         plt.savefig(
-            self.output_dir / filename,
+            self.output_dir / final_filename,
             dpi=300,
             bbox_inches="tight",
             pad_inches=0.02,
