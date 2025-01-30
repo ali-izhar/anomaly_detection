@@ -28,7 +28,7 @@ class MartingalePipeline:
         self,
         martingale_method: str = "multiview",
         # distance_metric: str = "euclidean",
-        # bidding_metric: str = "bidding",
+        # bidding_metric: str = "exponential",
         threshold: float = 60.0,
         epsilon: float = 0.7,
         random_state: Optional[int] = 42,

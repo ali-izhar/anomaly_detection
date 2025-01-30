@@ -13,10 +13,10 @@ import sys
 import argparse
 import logging
 import numpy as np
-import networkx as nx
 from pathlib import Path
 from tqdm import tqdm
 from typing import List, Dict, Any
+import os
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
@@ -24,12 +24,8 @@ if project_root not in sys.path:
 
 from src.algorithm import ObservedStream
 from src.configs.loader import get_config
-from src.graph.features import NetworkFeatureExtractor
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.graph.generator import GraphGenerator
-
-# from src.graph.visualizer import NetworkVisualizer
-
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -59,137 +55,94 @@ FEATURE_NAMES = [
 ]
 
 
-def extract_numeric_features(feature_dict: dict) -> Dict[str, float]:
-    """Extract numeric features from feature dictionary in a consistent order.
-
-    Args:
-        feature_dict: Dictionary containing raw feature values
-
-    Returns:
-        Dictionary mapping feature names to scalar values
-    """
-    # Extract basic metrics
-    degrees = feature_dict.get("degrees", [])
-    avg_degree = np.mean(degrees) if degrees else 0.0
-    density = feature_dict.get("density", 0.0)
-    clustering = feature_dict.get("clustering", [])
-    avg_clustering = np.mean(clustering) if clustering else 0.0
-
-    # Extract centrality metrics
-    betweenness = feature_dict.get("betweenness", [])
-    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
-    eigenvector = feature_dict.get("eigenvector", [])
-    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
-    closeness = feature_dict.get("closeness", [])
-    avg_closeness = np.mean(closeness) if closeness else 0.0
-
-    # Extract spectral metrics
-    singular_values = feature_dict.get("singular_values", [])
-    largest_sv = max(singular_values) if singular_values else 0.0
-    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
-    smallest_nonzero_le = (
-        min(x for x in laplacian_eigenvalues if x > 1e-10)
-        if laplacian_eigenvalues
-        else 0.0
-    )
-
-    return {
-        "degree": avg_degree,
-        "density": density,
-        "clustering": avg_clustering,
-        "betweenness": avg_betweenness,
-        "eigenvector": avg_eigenvector,
-        "closeness": avg_closeness,
-        "singular_value": largest_sv,
-        "laplacian": smallest_nonzero_le,
-    }
-
-
 def test_observed_stream(
-    graphs: List[nx.Graph], true_change_points: List[int], params: dict
+    graphs: List[np.ndarray], true_change_points: List[int], params: dict
 ) -> Dict[str, Any]:
     """Test the ObservedStream class on a sequence of graphs.
 
     Args:
-        graphs: List of networkx graphs
+        graphs: List of adjacency matrices
         true_change_points: List of true change point indices
         params: Dictionary of parameters
 
     Returns:
         Dictionary containing detection results
     """
-    # Initialize feature extractor and observed stream
-    feature_extractor = NetworkFeatureExtractor()
+    # Initialize observed stream with parameters
     observed_stream = ObservedStream(
         window_size=params["window_size"],
         threshold=params["threshold"],
         epsilon=params["epsilon"],
+        martingale_method="multiview",  # Use multiview for better detection
+        feature_set="all",  # Use all available features
+        batch_size=1000,  # Add batch size for multiview
+        max_martingale=None,  # Optional early stopping
+        reset=True,  # Reset after detection
+        random_state=42,
     )
 
     # Process each graph
-    results = []
-    detected_changes = set()
-    feature_values = []
-
+    detected_changes = []
     logger.info("Processing graph sequence through ObservedStream...")
     pbar = tqdm(total=len(graphs), desc="Processing graphs", unit="graph")
 
-    # Extract features for all graphs first
-    features_raw = []
-    for graph in graphs:
-        # Extract all features at once
-        features = feature_extractor.get_features(graph)
-        features_raw.append(features)
+    for t, adj_matrix in enumerate(graphs):
+        # Update stream with new adjacency matrix
+        result = observed_stream.update(adj_matrix, data_type="adjacency")
 
-    # Convert features to format expected by ObservedStream
-    for t, raw_features in enumerate(features_raw):
-        # Convert raw features to scalar values
-        feature_dict = extract_numeric_features(raw_features)
-        feature_values.append(feature_dict)
+        # Check for change point
+        if result["is_change"]:
+            detected_changes.append(t)
+            logger.info(f"Change detected at t={t}")
 
-        # Update martingales
-        result = observed_stream.update(feature_dict)
-        results.append(result)
-
-        # Track detected changes
-        if result["changes"]:
-            for feature, change_time in result["changes"].items():
-                detected_changes.add(change_time)
-                logger.info(f"Change detected at t={change_time} in feature {feature}")
+            # Print martingale values at change point
+            if result.get("martingale_sum") is not None:
+                logger.info(f"  Sum martingale: {result['martingale_sum']:.2f}")
+                logger.info(f"  Avg martingale: {result['martingale_avg']:.2f}")
+            else:
+                logger.info(f"  Martingale: {result['martingale']:.2f}")
 
         pbar.update(1)
 
     pbar.close()
 
-    # Compile results
-    detection_results = {
-        "feature_values": feature_values,
-        "martingale_results": results,
-        "detected_changes": sorted(list(detected_changes)),
-        "true_changes": true_change_points,
-        "feature_martingales": {
-            feature: [r["martingales"].get(feature, 1.0) for r in results]
-            for feature in FEATURE_NAMES
-        },
-    }
+    # Get final state
+    final_state = observed_stream.get_state()
 
     # Analyze detection performance
-    if true_change_points:
+    if true_change_points and detected_changes:
         delays = []
         for true_cp in true_change_points:
-            if detected_changes:
-                closest_detection = min(
-                    detected_changes, key=lambda x: abs(x - true_cp)
-                )
-                delay = closest_detection - true_cp
-                delays.append(delay)
-                logger.info(
-                    f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
-                )
+            closest_detection = min(detected_changes, key=lambda x: abs(x - true_cp))
+            delay = closest_detection - true_cp
+            delays.append(delay)
+            logger.info(
+                f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
+            )
 
         if delays:
             avg_delay = np.mean(delays)
             logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
+
+    # Compile results
+    detection_results = {
+        "feature_values": final_state["features_raw"],
+        "martingale_values": final_state["martingale_values"],
+        "detected_changes": detected_changes,
+        "true_changes": true_change_points,
+        "p_values": final_state["p_values"],
+        "strangeness_values": final_state["strangeness_values"],
+    }
+
+    # Add multiview specific results if available
+    if final_state["is_multiview"]:
+        detection_results.update(
+            {
+                "martingales_sum": final_state["martingales_sum"],
+                "martingales_avg": final_state["martingales_avg"],
+                "individual_martingales": final_state["individual_martingales"],
+            }
+        )
 
     return detection_results
 
@@ -215,20 +168,19 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     generator = GraphGenerator(model_alias)
     config = get_config(model_name)
     params = config["params"].__dict__
-
-    # test: minimize params
     params.update(
         {
-            "n": 30,
-            "seq_len": 50,
+            "seq_len": 100,
+            "n": 50,
             "min_changes": 1,
             "max_changes": 1,
-            "min_segment": 20,
+            "min_segment": 40,
         }
     )
 
+    # Generate sequence
     result = generator.generate_sequence(params)
-    graphs = [nx.from_numpy_array(g) for g in result["graphs"]]
+    graphs = result["graphs"]  # Already adjacency matrices
     true_change_points = result["change_points"]
 
     # 3. Run ObservedStream Detection
@@ -239,24 +191,58 @@ def run_detection(model_alias: str, output_dir: str = "results"):
 
     # 4. Visualize Results
     logger.info("Creating visualizations...")
+    output_dir = f"results/{model_name}"
+    os.makedirs(output_dir, exist_ok=True)
 
     # Create martingales dictionary for visualization
-    feature_martingales = {}
-    for feature, martingale_values in detection_results["feature_martingales"].items():
-        feature_martingales[feature] = {
-            "martingales": martingale_values,
-            "p_values": [1.0] * len(martingale_values),  # Placeholder
-            "strangeness": [0.0] * len(martingale_values),  # Placeholder
+    martingales_dict = {
+        "combined": {
+            "martingales": detection_results["martingale_values"],
+            "p_values": detection_results["p_values"],
+            "strangeness": detection_results["strangeness_values"],
         }
+    }
+
+    # Add multiview specific results if available
+    if "martingales_sum" in detection_results:
+        martingales_dict["combined"].update(
+            {
+                "martingale_sum": detection_results["martingales_sum"],
+                "martingale_avg": detection_results["martingales_avg"],
+            }
+        )
+
+        # Add individual feature martingales if available
+        if detection_results.get("individual_martingales"):
+            feature_names = [
+                "degree",
+                "density",
+                "clustering",
+                "betweenness",
+                "eigenvector",
+                "closeness",
+                "singular_value",
+                "laplacian",
+            ]
+            for i, feature in enumerate(feature_names):
+                martingales_dict[feature] = {
+                    "martingales": [
+                        m[i] for m in detection_results["individual_martingales"]
+                    ],
+                    "p_values": [1.0]
+                    * len(detection_results["individual_martingales"]),  # Placeholder
+                    "strangeness": [0.0]
+                    * len(detection_results["individual_martingales"]),  # Placeholder
+                }
 
     # Create visualizations using MartingaleVisualizer
     martingale_viz = MartingaleVisualizer(
-        martingales=feature_martingales,
+        martingales=martingales_dict,
         change_points=true_change_points,
         threshold=DEFAULT_PARAMS["threshold"],
         epsilon=DEFAULT_PARAMS["epsilon"],
         output_dir=output_dir,
-        prefix="observed_",
+        prefix=f"{model_name}_",
     )
     martingale_viz.create_visualization()
 

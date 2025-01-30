@@ -10,13 +10,14 @@ The algorithm maintains two parallel martingale streams:
 """
 
 from collections import deque
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Union
 
 import logging
 import numpy as np
 import networkx as nx
 
 from .changepoint.detector import ChangePointDetector
+from .changepoint.pipeline import MartingalePipeline
 from .changepoint.strangeness import strangeness_point, get_pvalue
 from .graph.features import NetworkFeatureExtractor
 from .predictor.factory import PredictorFactory
@@ -30,172 +31,192 @@ class Algorithm:
 
 
 class ObservedStream:
-    """Handles the observed martingale stream for each feature.
+    """Handles the observed martingale stream for change detection.
 
-    This class maintains and updates martingales for each network feature
-    based on observed graph states, following equation 14 from the paper:
-    M_t^(i) = M_{t-1}^(i) × ε(p_t^(i))^(ε-1)
-    """
+    This class processes the observed network data and maintains a martingale sequence
+    for detecting changes in the observed stream. It uses the MartingalePipeline for
+    feature extraction and change detection."""
 
     def __init__(
         self,
         window_size: int = 50,
-        threshold: float = 20.0,
+        threshold: float = 60.0,
         epsilon: float = 0.7,
-        reset_after_change: bool = True,
+        martingale_method: str = "multiview",
+        feature_set: str = "all",
+        batch_size: int = 1000,
+        max_martingale: Optional[float] = None,
+        reset: bool = True,
+        max_window: Optional[int] = None,
+        random_state: Optional[int] = 42,
     ):
-        """Initialize the observed martingale stream.
-
-        Args:
-            window_size: Size of rolling window for strangeness computation
-            threshold: Detection threshold for martingale values
-            epsilon: Sensitivity parameter for martingale updates (0 < ε < 1)
-            reset_after_change: Whether to reset martingales after detecting change
-        """
+        """Initialize the observed stream."""
         self.window_size = window_size
-        self.threshold = threshold
-        self.epsilon = epsilon
-        self.reset_after_change = reset_after_change
-
-        # Initialize detector
-        self.detector = ChangePointDetector()
-
-        # Initialize feature buffers and results
-        self.feature_buffers: Dict[str, List[float]] = {}
-        self.feature_results: Dict[str, Dict[str, Any]] = {}
-        self.detected_changes: Dict[str, List[int]] = {}
-
-        # Track current timestep
         self.current_time = 0
 
-    def initialize_feature(self, feature_name: str):
-        """Initialize tracking for a new feature."""
-        if feature_name not in self.feature_buffers:
-            self.feature_buffers[feature_name] = []
-            self.feature_results[feature_name] = {
-                "martingales": [],
-                "p_values": [],
-                "strangeness": [],
-                "change_points": [],
-            }
-            self.detected_changes[feature_name] = []
+        # Initialize pipeline
+        self.pipeline = MartingalePipeline(
+            martingale_method=martingale_method,
+            threshold=threshold,
+            epsilon=epsilon,
+            random_state=random_state,
+            feature_set=feature_set,
+            batch_size=batch_size,
+            max_martingale=max_martingale,
+            reset=reset,
+            max_window=max_window,
+        )
 
-    def update(self, features: Dict[str, float]) -> Dict[str, Any]:
-        """Update martingales with new feature observations.
+        # Initialize buffers
+        self.data_buffer = deque(maxlen=window_size)
+        self.feature_buffer = deque(maxlen=window_size)
+
+        # Initialize results storage
+        self.martingale_values = []
+        self.change_points = []
+        self.p_values = []
+        self.strangeness_values = []
+        self.features_raw = []
+        self.features_numeric = []
+
+        # For multiview specific results
+        self.martingales_sum = []
+        self.martingales_avg = []
+        self.individual_martingales = []
+
+        # Store parameters
+        self.is_multiview = martingale_method == "multiview"
+        self.threshold = threshold
+
+    def update(
+        self, data: Union[np.ndarray, nx.Graph], data_type: str = "adjacency"
+    ) -> Dict[str, Any]:
+        """Update the stream with new network data.
 
         Args:
-            features: Dictionary mapping feature names to their current values
+            data: New network data (adjacency matrix or networkx graph).
+            data_type: Type of input data ('adjacency' or 'graph').
 
         Returns:
-            Dict containing updated martingales and any detected changes
+            Dict containing detection results including:
+                - is_change: Whether a change was detected
+                - martingale: Current martingale value
+                - p_value: Current p-value
+                - change_points: List of all detected change points
+                - features: Extracted features
         """
+        # Add data to buffer
+        self.data_buffer.append(data)
         self.current_time += 1
-        changes_detected = {}
 
-        for feature_name, value in features.items():
-            # Initialize tracking for new features
-            self.initialize_feature(feature_name)
+        # Only start detection once we have enough data
+        if len(self.data_buffer) < self.window_size:
+            return self._create_result(is_change=False)
 
-            # Add new value to buffer
-            self.feature_buffers[feature_name].append(value)
+        # Run pipeline on current window
+        pipeline_result = self.pipeline.run(
+            data=list(self.data_buffer), data_type=data_type
+        )
 
-            # Convert buffer to numpy array for detector
-            data = np.array(self.feature_buffers[feature_name]).reshape(-1, 1)
+        # Store results
+        if self.is_multiview:
+            self.martingale_values.append(pipeline_result["martingales_sum"][-1])
+            self.martingales_sum.append(pipeline_result["martingales_sum"][-1])
+            self.martingales_avg.append(pipeline_result["martingales_avg"][-1])
+            if pipeline_result["individual_martingales"]:
+                self.individual_martingales.append(
+                    [m[-1] for m in pipeline_result["individual_martingales"]]
+                )
+        else:
+            self.martingale_values.append(pipeline_result["martingales"][-1])
 
-            # Run detector on the sequence
-            result = self.detector.detect_changes(
-                data=data,
-                threshold=self.threshold,
-                epsilon=self.epsilon,
-                reset=self.reset_after_change,
-                max_window=self.window_size,
-                random_state=42,
-            )
+        self.p_values.append(pipeline_result["p_values"][-1])
+        self.strangeness_values.append(pipeline_result["strangeness"][-1])
 
-            # Update feature results - convert numpy arrays to lists if needed
-            self.feature_results[feature_name] = {
-                "martingales": (
-                    result["martingales"].tolist()
-                    if isinstance(result["martingales"], np.ndarray)
-                    else result["martingales"]
-                ),
-                "p_values": (
-                    result["p_values"].tolist()
-                    if isinstance(result["p_values"], np.ndarray)
-                    else result["p_values"]
-                ),
-                "strangeness": (
-                    result["strangeness"].tolist()
-                    if isinstance(result["strangeness"], np.ndarray)
-                    else result["strangeness"]
-                ),
-                "change_points": result["change_points"],
-            }
+        # Store features if available
+        if "features_raw" in pipeline_result:
+            self.features_raw.append(pipeline_result["features_raw"][-1])
+        if "features_numeric" in pipeline_result:
+            self.features_numeric.append(pipeline_result["features_numeric"][-1])
 
-            # Check for new change points
-            if result["change_points"]:
-                latest_change = result["change_points"][-1]
-                if latest_change == len(data) - 1:  # Change detected at current time
-                    self.detected_changes[feature_name].append(self.current_time)
-                    changes_detected[feature_name] = self.current_time
+        # Check for change point
+        is_change = False
+        current_mart = self.martingale_values[-1]
 
-        # Get current martingale values
-        current_martingales = {
-            feature: results["martingales"][-1] if results["martingales"] else 1.0
-            for feature, results in self.feature_results.items()
+        if current_mart > self.threshold:
+            self.change_points.append(self.current_time)
+            is_change = True
+
+        return self._create_result(is_change)
+
+    def _create_result(self, is_change: bool) -> Dict[str, Any]:
+        """Create result dictionary with current state.
+
+        Args:
+            is_change: Whether a change was detected.
+
+        Returns:
+            Dict containing current state and detection results.
+        """
+        result = {
+            "is_change": is_change,
+            "current_time": self.current_time,
+            "change_points": self.change_points,
         }
 
-        # Calculate combined martingales
-        all_martingales = []
-        for feature, results in self.feature_results.items():
-            if results["martingales"]:
-                padded_martingales = [1.0] * (
-                    self.current_time - len(results["martingales"])
-                ) + results["martingales"]
-                all_martingales.append(padded_martingales)
+        # Add latest values if available
+        if self.martingale_values:
+            result["martingale"] = self.martingale_values[-1]
+            result["p_value"] = self.p_values[-1]
+            result["strangeness"] = self.strangeness_values[-1]
 
-        if all_martingales:
-            all_martingales = np.array(all_martingales)
-            sum_martingales = np.sum(all_martingales, axis=0).tolist()
-            avg_martingales = (np.sum(all_martingales, axis=0) / len(features)).tolist()
+            if self.is_multiview:
+                result["martingale_sum"] = self.martingales_sum[-1]
+                result["martingale_avg"] = self.martingales_avg[-1]
+                if self.individual_martingales:
+                    result["individual_martingales"] = self.individual_martingales[-1]
 
-            # Add combined results
-            self.feature_results["combined"] = {
-                "martingales": sum_martingales,
-                "martingale_sum": sum_martingales,
-                "martingale_avg": avg_martingales,
-                "p_values": [],  # Not used for combined
-                "strangeness": [],  # Not used for combined
-                "change_points": [],  # Will be populated based on threshold crossings
-            }
+        # Add latest features if available
+        if self.features_raw:
+            result["features_raw"] = self.features_raw[-1]
+        if self.features_numeric:
+            result["features_numeric"] = self.features_numeric[-1]
 
-            # Check for changes in combined martingale
-            if sum_martingales[-1] > self.threshold:
-                self.detected_changes["combined"] = self.detected_changes.get(
-                    "combined", []
-                ) + [self.current_time]
-                changes_detected["combined"] = self.current_time
-
-        return {
-            "time": self.current_time,
-            "martingales": current_martingales,
-            "changes": changes_detected,
-            "all_changes": self.detected_changes.copy(),
-            "feature_results": self.feature_results,
-        }
+        return result
 
     def get_state(self) -> Dict[str, Any]:
-        """Get current state of all martingales and detected changes."""
-        current_martingales = {
-            feature: results["martingales"][-1] if results["martingales"] else 1.0
-            for feature, results in self.feature_results.items()
+        """Get the current state of the stream.
+
+        Returns:
+            Dict containing the complete state of the stream including:
+                - All martingale sequences
+                - All feature sequences
+                - All change points
+                - Current parameters
+        """
+        state = {
+            "current_time": self.current_time,
+            "change_points": self.change_points,
+            "martingale_values": self.martingale_values,
+            "p_values": self.p_values,
+            "strangeness_values": self.strangeness_values,
+            "features_raw": self.features_raw,
+            "features_numeric": self.features_numeric,
+            "window_size": self.window_size,
+            "threshold": self.threshold,
+            "is_multiview": self.is_multiview,
         }
-        return {
-            "time": self.current_time,
-            "martingales": current_martingales,
-            "all_changes": self.detected_changes.copy(),
-            "feature_results": self.feature_results,
-        }
+
+        if self.is_multiview:
+            state.update(
+                {
+                    "martingales_sum": self.martingales_sum,
+                    "martingales_avg": self.martingales_avg,
+                    "individual_martingales": self.individual_martingales,
+                }
+            )
+
+        return state
 
 
 class HorizonStream:
