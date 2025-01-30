@@ -323,7 +323,7 @@ def visualize_results(
     plt.close()
 
 
-def run_visualization(model_alias: str, threshold: float = 20.0, epsilon: float = 0.7):
+def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float = 0.7):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
     model_name = get_full_model_name(model_alias)
@@ -519,8 +519,8 @@ def main():
     parser.add_argument(
         "--threshold",
         type=float,
-        default=20.0,
-        help="Detection threshold for martingale (default: 20.0)",
+        default=60.0,
+        help="Detection threshold for martingale (default: 10.0)",
     )
     parser.add_argument(
         "--epsilon",

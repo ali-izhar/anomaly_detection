@@ -8,6 +8,8 @@ import random
 from typing import List, Optional, Union, Any
 from sklearn.cluster import KMeans, MiniBatchKMeans
 
+from .distance import compute_cluster_distances
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,15 +18,17 @@ def strangeness_point(
     n_clusters: int = 1,
     random_state: Optional[int] = None,
     batch_size: Optional[int] = None,
+    distance_measure: str = "euclidean",
 ) -> np.ndarray:
     """
-    Computes the 'strangeness' for each point in `data` as the
-    minimum distance to any cluster center. One row per point.
+    Computes the 'strangeness' for each point in `data` as the minimum distance
+    to any cluster center. One row per point.
 
     :param data: 2D or 3D data (N x d) or (N x something x d).
     :param n_clusters: Number of clusters to fit.
     :param random_state: Optional seed.
     :param batch_size: If provided and data is large, use MiniBatchKMeans.
+    :param distance_measure: Distance metric to use: "euclidean" or "mahalanobis".
     :return: 1D array of shape (N,) containing the minimum distance (strangeness) for each point.
     """
     if data is None or len(data) == 0:
@@ -41,9 +45,8 @@ def strangeness_point(
         logger.error("Data array has zero size after np.array conversion")
         raise ValueError("Empty data sequence")
 
-    # Flatten last dimension if data is 3D
-    # (e.g., if shape is (N, something, d)), so final shape is (N*, d).
-    # Adjust as needed based on how your data is structured.
+    # Flatten last dimension if data is 3D (e.g., shape (N, something, d))
+    # so final shape is (N*, d).
     if data_array.ndim == 3:
         data_array = data_array.reshape(-1, data_array.shape[-1])
 
@@ -56,10 +59,12 @@ def strangeness_point(
         model = KMeans(n_clusters=n_clusters, n_init="auto", random_state=random_state)
 
     logger.debug(f"Fitting KMeans with n_clusters={n_clusters}")
-    distances = model.fit_transform(data_array)  # shape: (N, n_clusters)
+    model.fit(data_array)
+
+    # Compute distances based on the chosen measure
+    distances = compute_cluster_distances(data_array, model, distance_measure)
 
     # The strangeness is the min distance to any cluster center.
-    # shape => (N,)
     strangeness_scores = distances.min(axis=1)
 
     return strangeness_scores
@@ -86,7 +91,6 @@ def get_pvalue(strangeness: List[float], random_state: Optional[int] = None) -> 
             logger.error("Empty list provided for strangeness computation")
             raise ValueError("Strangeness sequence cannot be empty")
 
-    # Optional seed
     if random_state is not None:
         np.random.seed(random_state)
         random.seed(random_state)

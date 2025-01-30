@@ -111,9 +111,10 @@ class MartingaleVisualizer:
         )
 
     def create_visualization(self) -> None:
-        """Generate separate visualizations for features and combined analysis."""
+        """Create all visualizations."""
         self._plot_feature_martingales()
         self._plot_combined_martingales()
+        self._plot_overlaid_martingales()
         self._plot_shap_values()
 
     def _plot_feature_martingales(self) -> None:
@@ -344,6 +345,144 @@ class MartingaleVisualizer:
 
         plt.tight_layout(pad=0.3)
         self._save_figure("combined_martingales.png")
+
+    def _plot_overlaid_martingales(self) -> None:
+        """Create plot overlaying individual feature martingales with combined martingale."""
+        fig = plt.figure(
+            figsize=(self.vis_config.double_column_width, self.vis_config.grid_height)
+        )
+        ax = fig.add_subplot(111)
+
+        # Plot individual feature martingales and calculate true sum
+        feature_names = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
+        ]
+
+        # Use a different color for each feature
+        colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
+
+        # Initialize sum martingale array
+        sum_martingale = None
+
+        # First plot individual martingales and calculate true sum
+        for i, feature in enumerate(feature_names):
+            if feature in self.martingales:
+                feature_mart = np.array(self.martingales[feature]["martingales"])
+
+                # Initialize or add to sum_martingale
+                if sum_martingale is None:
+                    sum_martingale = feature_mart
+                else:
+                    sum_martingale += feature_mart
+
+                # Plot individual feature
+                ax.plot(
+                    feature_mart,
+                    color=colors[i],
+                    label=f"{feature.replace('_', ' ').title()}",
+                    linewidth=1.0,
+                    alpha=0.3,  # Reduced alpha for better visibility of combined
+                )
+
+        # Plot the true sum martingale
+        ax.plot(
+            sum_martingale,
+            color="blue",
+            linestyle="--",
+            label="Combined (Sum)",
+            linewidth=1.5,
+            alpha=0.8,
+            zorder=10,
+        )
+
+        # Add threshold line - only relevant for combined martingale
+        ax.axhline(
+            y=self.threshold,
+            color=self.vis_config.colors["threshold"],
+            linestyle="--",
+            alpha=0.7,
+            linewidth=self.vis_config.line_width,
+            label="Threshold (Combined)",
+            zorder=7,
+        )
+
+        # Add true change points
+        for cp in self.change_points:
+            ax.axvline(
+                x=cp,
+                color=self.vis_config.colors["change_point"],
+                linestyle="--",
+                alpha=0.5,
+                linewidth=self.vis_config.grid_width,
+                zorder=6,
+            )
+
+            detection_idx = next(
+                (
+                    i
+                    for i in range(cp, len(sum_martingale))
+                    if sum_martingale[i] > self.threshold
+                ),
+                None,
+            )
+            if detection_idx:
+                delay = detection_idx - cp
+                ax.annotate(
+                    f"d:{delay}",
+                    xy=(detection_idx, self.threshold),
+                    xytext=(cp - 10, self.threshold * 1.1),
+                    color=self.vis_config.colors["actual"],
+                    fontsize=self.vis_config.annotation_size,
+                    arrowprops=dict(
+                        arrowstyle="->",
+                        color=self.vis_config.colors["actual"],
+                        alpha=0.8,
+                        linewidth=1.0,
+                        connectionstyle="arc3,rad=-0.2",
+                    ),
+                )
+
+        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
+        ax.grid(
+            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
+        )
+        ax.set_xticks(np.arange(0, 201, 50))
+        ax.set_xlim(0, 200)
+
+        # Set y-axis limits based on the true sum martingale
+        max_mart = np.max(sum_martingale)
+        y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
+        ax.set_ylim(-5, y_max)
+        ax.yaxis.set_major_locator(plt.MultipleLocator(50))
+        ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
+
+        # Create two-column legend with slightly smaller font
+        ax.legend(
+            ncol=2,
+            loc="upper right",
+            bbox_to_anchor=(1.0, 1.02),
+            fontsize=self.vis_config.legend_size * 0.8,
+            frameon=True,
+            handlelength=1.5,
+            handletextpad=0.5,
+            columnspacing=1.0,
+        )
+
+        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
+        ax.set_ylabel(
+            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
+        )
+        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
+
+        plt.tight_layout(pad=0.3)
+        self._save_figure("overlaid_martingales.png")
 
     def _plot_shap_values(self) -> None:
         """Create plot for SHAP values."""
