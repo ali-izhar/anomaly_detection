@@ -16,14 +16,15 @@ import numpy as np
 import networkx as nx
 from pathlib import Path
 from tqdm import tqdm
+from typing import List, Dict, Any
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.algorithm import run_forecast_martingale_detection
+from src.algorithm import ObservedStream
 from src.configs.loader import get_config
-
+from src.graph.features import NetworkFeatureExtractor
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.graph.generator import GraphGenerator
 
@@ -44,6 +45,153 @@ DEFAULT_PARAMS = {
     "window_size": 10,
     "predictor_type": "adaptive",
 }
+
+# Feature names used for detection
+FEATURE_NAMES = [
+    "degree",
+    "density",
+    "clustering",
+    "betweenness",
+    "eigenvector",
+    "closeness",
+    "singular_value",
+    "laplacian",
+]
+
+
+def extract_numeric_features(feature_dict: dict) -> Dict[str, float]:
+    """Extract numeric features from feature dictionary in a consistent order.
+
+    Args:
+        feature_dict: Dictionary containing raw feature values
+
+    Returns:
+        Dictionary mapping feature names to scalar values
+    """
+    # Extract basic metrics
+    degrees = feature_dict.get("degrees", [])
+    avg_degree = np.mean(degrees) if degrees else 0.0
+    density = feature_dict.get("density", 0.0)
+    clustering = feature_dict.get("clustering", [])
+    avg_clustering = np.mean(clustering) if clustering else 0.0
+
+    # Extract centrality metrics
+    betweenness = feature_dict.get("betweenness", [])
+    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
+    eigenvector = feature_dict.get("eigenvector", [])
+    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
+    closeness = feature_dict.get("closeness", [])
+    avg_closeness = np.mean(closeness) if closeness else 0.0
+
+    # Extract spectral metrics
+    singular_values = feature_dict.get("singular_values", [])
+    largest_sv = max(singular_values) if singular_values else 0.0
+    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
+    smallest_nonzero_le = (
+        min(x for x in laplacian_eigenvalues if x > 1e-10)
+        if laplacian_eigenvalues
+        else 0.0
+    )
+
+    return {
+        "degree": avg_degree,
+        "density": density,
+        "clustering": avg_clustering,
+        "betweenness": avg_betweenness,
+        "eigenvector": avg_eigenvector,
+        "closeness": avg_closeness,
+        "singular_value": largest_sv,
+        "laplacian": smallest_nonzero_le,
+    }
+
+
+def test_observed_stream(
+    graphs: List[nx.Graph], true_change_points: List[int], params: dict
+) -> Dict[str, Any]:
+    """Test the ObservedStream class on a sequence of graphs.
+
+    Args:
+        graphs: List of networkx graphs
+        true_change_points: List of true change point indices
+        params: Dictionary of parameters
+
+    Returns:
+        Dictionary containing detection results
+    """
+    # Initialize feature extractor and observed stream
+    feature_extractor = NetworkFeatureExtractor()
+    observed_stream = ObservedStream(
+        window_size=params["window_size"],
+        threshold=params["threshold"],
+        epsilon=params["epsilon"],
+    )
+
+    # Process each graph
+    results = []
+    detected_changes = set()
+    feature_values = []
+
+    logger.info("Processing graph sequence through ObservedStream...")
+    pbar = tqdm(total=len(graphs), desc="Processing graphs", unit="graph")
+
+    # Extract features for all graphs first
+    features_raw = []
+    for graph in graphs:
+        # Extract all features at once
+        features = feature_extractor.get_features(graph)
+        features_raw.append(features)
+
+    # Convert features to format expected by ObservedStream
+    for t, raw_features in enumerate(features_raw):
+        # Convert raw features to scalar values
+        feature_dict = extract_numeric_features(raw_features)
+        feature_values.append(feature_dict)
+
+        # Update martingales
+        result = observed_stream.update(feature_dict)
+        results.append(result)
+
+        # Track detected changes
+        if result["changes"]:
+            for feature, change_time in result["changes"].items():
+                detected_changes.add(change_time)
+                logger.info(f"Change detected at t={change_time} in feature {feature}")
+
+        pbar.update(1)
+
+    pbar.close()
+
+    # Compile results
+    detection_results = {
+        "feature_values": feature_values,
+        "martingale_results": results,
+        "detected_changes": sorted(list(detected_changes)),
+        "true_changes": true_change_points,
+        "feature_martingales": {
+            feature: [r["martingales"].get(feature, 1.0) for r in results]
+            for feature in FEATURE_NAMES
+        },
+    }
+
+    # Analyze detection performance
+    if true_change_points:
+        delays = []
+        for true_cp in true_change_points:
+            if detected_changes:
+                closest_detection = min(
+                    detected_changes, key=lambda x: abs(x - true_cp)
+                )
+                delay = closest_detection - true_cp
+                delays.append(delay)
+                logger.info(
+                    f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
+                )
+
+        if delays:
+            avg_delay = np.mean(delays)
+            logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
+
+    return detection_results
 
 
 def get_full_model_name(alias: str) -> str:
@@ -80,126 +228,26 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     )
 
     result = generator.generate_sequence(params)
-    graphs = result["graphs"]
+    graphs = [nx.from_numpy_array(g) for g in result["graphs"]]
     true_change_points = result["change_points"]
 
-    # 3. Run Detection Algorithm
-    logger.info("Running forecast-based martingale detection...")
-    pbar = tqdm(total=len(graphs), desc="Running detection", unit="step")
-
-    detection_results = run_forecast_martingale_detection(
-        graph_sequence=[nx.from_numpy_array(g) for g in graphs],
-        horizon=DEFAULT_PARAMS["horizon"],
-        threshold=DEFAULT_PARAMS["threshold"],
-        epsilon=DEFAULT_PARAMS["epsilon"],
-        window_size=DEFAULT_PARAMS["window_size"],
-        predictor_type=DEFAULT_PARAMS["predictor_type"],
-        random_state=42,
-        progress_callback=lambda t: pbar.update(1),
+    # 3. Run ObservedStream Detection
+    logger.info("Running ObservedStream detection...")
+    detection_results = test_observed_stream(
+        graphs=graphs, true_change_points=true_change_points, params=DEFAULT_PARAMS
     )
 
-    pbar.close()
-
-    # 4. Analyze Results
-    traditional_changes = detection_results["traditional_changes"]
-    horizon_changes = detection_results["horizon_changes"]
-    detected_points = detection_results["change_points"]
-
-    logger.info(f"\nResults Summary:")
-    logger.info(f"True change points: {true_change_points}")
-    logger.info(f"Traditional martingale detections: {traditional_changes}")
-    logger.info(f"Horizon martingale detections: {horizon_changes}")
-    logger.info(f"Combined detected points: {detected_points}")
-
-    if true_change_points:
-        # Analyze traditional martingale performance
-        if traditional_changes:
-            trad_errors = []
-            for true_cp in true_change_points:
-                closest_trad = min(traditional_changes, key=lambda x: abs(x - true_cp))
-                error = abs(closest_trad - true_cp)
-                trad_errors.append(error)
-            avg_trad_error = np.mean(trad_errors)
-            logger.info(
-                f"Traditional martingale average detection delay: {avg_trad_error:.2f} time steps"
-            )
-
-        # Analyze horizon martingale performance
-        if horizon_changes:
-            horizon_errors = []
-            for true_cp in true_change_points:
-                closest_horizon = min(horizon_changes, key=lambda x: abs(x - true_cp))
-                error = abs(closest_horizon - true_cp)
-                horizon_errors.append(error)
-            avg_horizon_error = np.mean(horizon_errors)
-            logger.info(
-                f"Horizon martingale average detection delay: {avg_horizon_error:.2f} time steps"
-            )
-
-        # Compare detection speeds
-        if traditional_changes and horizon_changes:
-            for true_cp in true_change_points:
-                closest_trad = min(traditional_changes, key=lambda x: abs(x - true_cp))
-                closest_horizon = min(horizon_changes, key=lambda x: abs(x - true_cp))
-                if closest_horizon < closest_trad:
-                    speedup = closest_trad - closest_horizon
-                    logger.info(
-                        f"Horizon martingale detected change at t={true_cp} faster by {speedup} steps"
-                    )
-                elif closest_horizon > closest_trad:
-                    delay = closest_horizon - closest_trad
-                    logger.info(
-                        f"Traditional martingale was faster at t={true_cp} by {delay} steps"
-                    )
-                else:
-                    logger.info(
-                        f"Both martingales detected change at t={true_cp} simultaneously"
-                    )
-
-    # 5. Visualize Results
+    # 4. Visualize Results
     logger.info("Creating visualizations...")
-
-    # Prepare feature martingales for visualization
-    feature_names = [
-        "degree",
-        "density",
-        "clustering",
-        "betweenness",
-        "eigenvector",
-        "closeness",
-        "singular_value",
-        "laplacian",
-    ]
 
     # Create martingales dictionary for visualization
     feature_martingales = {}
-    for i, feature in enumerate(feature_names):
+    for feature, martingale_values in detection_results["feature_martingales"].items():
         feature_martingales[feature] = {
-            "martingales": detection_results["individual_martingales_obs"][i],
-            "p_values": detection_results["feature_results"][feature]["p_values"],
-            "strangeness": detection_results["feature_results"][feature]["strangeness"],
+            "martingales": martingale_values,
+            "p_values": [1.0] * len(martingale_values),  # Placeholder
+            "strangeness": [0.0] * len(martingale_values),  # Placeholder
         }
-
-    # Add combined martingales
-    feature_martingales["combined"] = {
-        "martingales": detection_results["M_observed"],
-        "p_values": (
-            detection_results["feature_results"]["combined"]["p_values"]
-            if "combined" in detection_results["feature_results"]
-            else [1.0] * len(detection_results["M_observed"])
-        ),
-        "strangeness": (
-            detection_results["feature_results"]["combined"]["strangeness"]
-            if "combined" in detection_results["feature_results"]
-            else [0.0] * len(detection_results["M_observed"])
-        ),
-        "martingale_sum": detection_results[
-            "M_observed"
-        ],  # Sum of all feature martingales
-        "martingale_avg": [
-            m / len(feature_names) for m in detection_results["M_observed"]
-        ],  # Average of feature martingales
-    }
 
     # Create visualizations using MartingaleVisualizer
     martingale_viz = MartingaleVisualizer(
@@ -208,53 +256,9 @@ def run_detection(model_alias: str, output_dir: str = "results"):
         threshold=DEFAULT_PARAMS["threshold"],
         epsilon=DEFAULT_PARAMS["epsilon"],
         output_dir=output_dir,
-        prefix="traditional_",  # Add prefix for traditional martingales
+        prefix="observed_",
     )
     martingale_viz.create_visualization()
-
-    # Create a second visualization for horizon martingales if they exist
-    if "M_predicted" in detection_results:
-        horizon_martingales = {}
-        for i, feature in enumerate(feature_names):
-            horizon_martingales[feature] = {
-                "martingales": detection_results["individual_martingales_pred"][i],
-                "p_values": detection_results["feature_results"][feature]["p_values"],
-                "strangeness": detection_results["feature_results"][feature][
-                    "strangeness"
-                ],
-            }
-
-        # Add combined horizon martingales
-        horizon_martingales["combined"] = {
-            "martingales": detection_results["M_predicted"],
-            "p_values": (
-                detection_results["feature_results"]["combined"]["p_values"]
-                if "combined" in detection_results["feature_results"]
-                else [1.0] * len(detection_results["M_predicted"])
-            ),
-            "strangeness": (
-                detection_results["feature_results"]["combined"]["strangeness"]
-                if "combined" in detection_results["feature_results"]
-                else [0.0] * len(detection_results["M_predicted"])
-            ),
-            "martingale_sum": detection_results[
-                "M_predicted"
-            ],  # Sum of all feature martingales
-            "martingale_avg": [
-                m / len(feature_names) for m in detection_results["M_predicted"]
-            ],  # Average of feature martingales
-        }
-
-        # Create horizon martingale visualization
-        horizon_viz = MartingaleVisualizer(
-            martingales=horizon_martingales,
-            change_points=true_change_points,
-            threshold=DEFAULT_PARAMS["threshold"],
-            epsilon=DEFAULT_PARAMS["epsilon"],
-            output_dir=output_dir,
-            prefix="horizon_",  # Add prefix for horizon martingales
-        )
-        horizon_viz.create_visualization()
 
     logger.info(f"Results saved to {output_dir}/")
 

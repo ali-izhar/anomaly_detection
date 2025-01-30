@@ -98,6 +98,7 @@ class ChangePointDetector:
         epsilon: float,
         max_window: Optional[int] = None,
         max_martingale: Optional[float] = None,
+        batch_size: Optional[int] = None,
         random_state: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
@@ -123,6 +124,8 @@ class ChangePointDetector:
         max_martingale : float, optional
             If specified, we stop early if the sum of martingales
             exceeds this "early stop" threshold.
+        batch_size : int, optional
+            Number of samples to process at a time.
         random_state : int, optional
             Seed for reproducibility.
 
@@ -156,6 +159,7 @@ class ChangePointDetector:
             epsilon=epsilon,
             window_size=max_window,
             early_stop_threshold=max_martingale,
+            batch_size=batch_size,
             random_state=random_state,
         )
 

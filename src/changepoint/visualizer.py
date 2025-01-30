@@ -66,33 +66,45 @@ class MartingaleVisualizer:
         epsilon: float,
         output_dir: str = "results",
         prefix: str = "",
+        skip_shap: bool = False,
     ):
         """Initialize the visualizer.
 
         Args:
-            martingales: Dictionary of martingale results for each feature
+            martingales: Dictionary of martingale results for each feature or pipeline results
             change_points: List of true change points
             threshold: Detection threshold
             epsilon: Sensitivity parameter
             output_dir: Directory to save visualizations
-            prefix: Prefix for output filenames (e.g., "horizon_" for horizon martingales)
+            prefix: Prefix for output filenames
+            skip_shap: Whether to skip SHAP value computation
         """
-        self.martingales = martingales
-        self.change_points = change_points
+        # Set basic parameters first
         self.threshold = threshold
         self.epsilon = epsilon
+        self.change_points = change_points
         self.output_dir = Path(output_dir)
         self.prefix = prefix
         self.vis_config = VisualizationConfig()
 
-        # Compute SHAP values
-        sequence_length = len(next(iter(martingales.values()))["martingales"])
-        self.shap_values, self.feature_names = compute_shap_values(
-            martingales=martingales,
-            change_points=change_points,
-            sequence_length=sequence_length,
-            threshold=threshold,
-        )
+        # Process martingales after parameters are set
+        self.martingales = self._process_martingales(martingales)
+
+        # Compute SHAP values if needed
+        if not skip_shap:
+            try:
+                sequence_length = len(
+                    next(iter(self.martingales.values()))["martingales"]
+                )
+                self.shap_values, self.feature_names = compute_shap_values(
+                    martingales=self.martingales,
+                    change_points=change_points,
+                    sequence_length=sequence_length,
+                    threshold=threshold,
+                )
+            except (ValueError, KeyError):
+                self.shap_values = None
+                self.feature_names = None
 
         # Set paper-style parameters
         plt.style.use("seaborn-v0_8-paper")
@@ -110,12 +122,94 @@ class MartingaleVisualizer:
             }
         )
 
+    def _process_martingales(
+        self, martingales: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Process martingales to ensure consistent format.
+
+        Handles both single-view and multiview results from the pipeline.
+        For single-view: only combined martingale is available
+        For multiview: both combined and feature-specific martingales are available
+        """
+        # Check if this is pipeline output (has features_raw and features_numeric)
+        if "features_raw" in martingales.get("combined", {}):
+            # This is pipeline output, create feature-wise structure
+            processed = {}
+            combined_result = martingales["combined"]
+            features_numeric = combined_result["features_numeric"]
+
+            # Process combined results based on whether it's single-view or multiview
+            is_multiview = combined_result.get("martingales_sum") is not None
+
+            if is_multiview:
+                # Multiview case: use sum and avg martingales
+                processed["combined"] = {
+                    "martingales": combined_result["martingales"],  # This is the sum
+                    "p_values": combined_result["p_values"],
+                    "strangeness": combined_result["strangeness"],
+                    "martingale_sum": combined_result["martingales_sum"],
+                    "martingale_avg": combined_result["martingales_avg"],
+                }
+
+                # Extract individual feature results from multiview result
+                features = [
+                    "degree",
+                    "density",
+                    "clustering",
+                    "betweenness",
+                    "eigenvector",
+                    "closeness",
+                    "singular_value",
+                    "laplacian",
+                ]
+
+                for i, feature in enumerate(features):
+                    if i < len(combined_result["individual_martingales"]):
+                        processed[feature] = {
+                            "martingales": combined_result["individual_martingales"][i],
+                            "p_values": (
+                                combined_result["p_values"][i]
+                                if isinstance(combined_result["p_values"], list)
+                                else None
+                            ),
+                            "strangeness": (
+                                combined_result["strangeness"][i]
+                                if isinstance(combined_result["strangeness"], list)
+                                else None
+                            ),
+                        }
+            else:
+                # Single-view case: only combined martingale
+                processed["combined"] = {
+                    "martingales": combined_result["martingales"],
+                    "p_values": combined_result["p_values"],
+                    "strangeness": combined_result["strangeness"],
+                    "martingale_sum": None,
+                    "martingale_avg": None,
+                }
+
+            return processed
+
+        return martingales
+
     def create_visualization(self) -> None:
         """Create all visualizations."""
-        self._plot_feature_martingales()
+        # Always plot combined martingales
         self._plot_combined_martingales()
-        self._plot_overlaid_martingales()
-        self._plot_shap_values()
+
+        # Only create feature plots for multiview results
+        is_multiview = self.martingales["combined"].get("martingale_sum") is not None
+        if is_multiview and len(self.martingales) > 1:
+            self._plot_feature_martingales()
+            self._plot_overlaid_martingales()
+
+        # Only create SHAP plot if we have SHAP values and it's multiview
+        if (
+            is_multiview
+            and self.shap_values is not None
+            and self.feature_names is not None
+        ):
+            self._plot_shap_values()
 
     def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots."""
@@ -246,28 +340,44 @@ class MartingaleVisualizer:
         )
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
+        is_multiview = combined_results.get("martingale_sum") is not None
 
-        sum_martingale = combined_results["martingale_sum"]
-        ax.plot(
-            sum_martingale,
-            color=self.vis_config.colors["actual"],
-            label="Sum Mart.",
-            linewidth=self.vis_config.line_width,
-            alpha=self.vis_config.line_alpha,
-            zorder=10,
-        )
+        if is_multiview:
+            # Plot both sum and average for multiview
+            sum_martingale = combined_results["martingale_sum"]
+            avg_martingale = combined_results["martingale_avg"]
 
-        avg_martingale = combined_results["martingale_avg"]
-        ax.plot(
-            avg_martingale,
-            color=self.vis_config.colors["average"],
-            label="Avg Mart.",
-            linewidth=self.vis_config.line_width,
-            linestyle="--",
-            alpha=self.vis_config.line_alpha,
-            zorder=8,
-        )
+            ax.plot(
+                sum_martingale,
+                color=self.vis_config.colors["actual"],
+                label="Sum Mart.",
+                linewidth=self.vis_config.line_width,
+                alpha=self.vis_config.line_alpha,
+                zorder=10,
+            )
 
+            ax.plot(
+                avg_martingale,
+                color=self.vis_config.colors["average"],
+                label="Avg Mart.",
+                linewidth=self.vis_config.line_width,
+                linestyle="--",
+                alpha=self.vis_config.line_alpha,
+                zorder=8,
+            )
+        else:
+            # Plot single martingale for single-view
+            martingale = combined_results["martingales"]
+            ax.plot(
+                martingale,
+                color=self.vis_config.colors["actual"],
+                label="Martingale",
+                linewidth=self.vis_config.line_width,
+                alpha=self.vis_config.line_alpha,
+                zorder=10,
+            )
+
+        # Add threshold line
         ax.axhline(
             y=self.threshold,
             color=self.vis_config.colors["threshold"],
@@ -278,6 +388,7 @@ class MartingaleVisualizer:
             zorder=7,
         )
 
+        # Add change points and delay annotations
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
@@ -288,12 +399,15 @@ class MartingaleVisualizer:
                 zorder=6,
             )
 
+            # Get the relevant martingale sequence for delay calculation
+            mart_seq = (
+                combined_results["martingale_sum"]
+                if is_multiview
+                else combined_results["martingales"]
+            )
+
             detection_idx = next(
-                (
-                    i
-                    for i in range(cp, len(sum_martingale))
-                    if sum_martingale[i] > self.threshold
-                ),
+                (i for i in range(cp, len(mart_seq)) if mart_seq[i] > self.threshold),
                 None,
             )
             if detection_idx:
@@ -313,21 +427,31 @@ class MartingaleVisualizer:
                     ),
                 )
 
+        # Grid settings
         ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
         ax.grid(
             True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
         )
+
+        # Axis settings
         ax.set_xticks(np.arange(0, 201, 50))
         ax.set_xlim(0, 200)
 
-        max_mart = max(np.max(sum_martingale), np.max(avg_martingale))
+        # Dynamic y-axis range
+        mart_seq = (
+            combined_results["martingale_sum"]
+            if is_multiview
+            else combined_results["martingales"]
+        )
+        max_mart = np.max(mart_seq)
         y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
         ax.set_ylim(-5, y_max)
         ax.yaxis.set_major_locator(plt.MultipleLocator(50))
         ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
 
+        # Legend
         ax.legend(
-            ncol=3,
+            ncol=3 if is_multiview else 2,
             loc="upper right",
             bbox_to_anchor=(1.0, 1.02),
             fontsize=self.vis_config.legend_size,
@@ -337,6 +461,7 @@ class MartingaleVisualizer:
             columnspacing=1.0,
         )
 
+        # Labels
         ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
         ax.set_ylabel(
             "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
@@ -486,6 +611,9 @@ class MartingaleVisualizer:
 
     def _plot_shap_values(self) -> None:
         """Create plot for SHAP values."""
+        if self.shap_values is None or self.feature_names is None:
+            return
+
         fig = plt.figure(
             figsize=(
                 self.vis_config.double_column_width,

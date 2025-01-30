@@ -165,9 +165,9 @@ def multiview_martingale_test(
     data: List[List[Any]],
     threshold: float,
     epsilon: float,
-    batch_size: int = 1000,
     window_size: Optional[int] = None,
     early_stop_threshold: Optional[float] = None,
+    batch_size: int = 1000,
     random_state: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
@@ -187,12 +187,12 @@ def multiview_martingale_test(
         Detection threshold for the sum of martingales.
     epsilon : float
         Sensitivity parameter in (0,1) for all features.
-    batch_size : int, optional
-        Process data in chunks for large datasets. Default 1000.
     window_size : int, optional
         Rolling window size for each feature. If None, use all past data.
     early_stop_threshold : float, optional
         If specified, stop processing if the sum of martingales > this number.
+    batch_size : int, optional
+        Process data in chunks for large datasets. Default 1000.
     random_state : int, optional
         Seed for reproducibility.
 

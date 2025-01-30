@@ -9,7 +9,6 @@ Usage:
 """
 
 from pathlib import Path
-
 import sys
 import os
 import argparse
@@ -25,10 +24,9 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.changepoint.detector import ChangePointDetector
+from src.changepoint.pipeline import MartingalePipeline
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
-from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
 
@@ -45,47 +43,6 @@ def get_full_model_name(alias: str) -> str:
         "sbm": "stochastic_block_model",
     }
     return REVERSE_ALIASES.get(alias, alias)
-
-
-def extract_numeric_features(feature_dict: dict) -> np.ndarray:
-    """Extract numeric features from feature dictionary in a consistent order."""
-    # Extract basic metrics
-    degrees = feature_dict.get("degrees", [])
-    avg_degree = np.mean(degrees) if degrees else 0.0
-    density = feature_dict.get("density", 0.0)
-    clustering = feature_dict.get("clustering", [])
-    avg_clustering = np.mean(clustering) if clustering else 0.0
-
-    # Extract centrality metrics
-    betweenness = feature_dict.get("betweenness", [])
-    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
-    eigenvector = feature_dict.get("eigenvector", [])
-    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
-    closeness = feature_dict.get("closeness", [])
-    avg_closeness = np.mean(closeness) if closeness else 0.0
-
-    # Extract spectral metrics
-    singular_values = feature_dict.get("singular_values", [])
-    largest_sv = max(singular_values) if singular_values else 0.0
-    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
-    smallest_nonzero_le = (
-        min(x for x in laplacian_eigenvalues if x > 1e-10)
-        if laplacian_eigenvalues
-        else 0.0
-    )
-
-    return np.array(
-        [
-            avg_degree,
-            density,
-            avg_clustering,
-            avg_betweenness,
-            avg_eigenvector,
-            avg_closeness,
-            largest_sv,
-            smallest_nonzero_le,
-        ]
-    )
 
 
 def visualize_network_states(
@@ -170,16 +127,14 @@ def visualize_network_states(
     plt.close()
 
 
-def visualize_results(
+def visualize_feature_evolution(
     model_name: str,
-    graphs: list,
     features_raw: list,
     true_change_points: list,
     detected_change_points: list,
-    feature_results: dict,
     output_dir: str = "examples",
 ):
-    """Create visualizations of network states and features at key points."""
+    """Create visualization of feature evolution over time."""
     os.makedirs(output_dir, exist_ok=True)
     viz = NetworkVisualizer()
 
@@ -187,31 +142,6 @@ def visualize_results(
     plt.style.use("seaborn-v0_8-paper")
     sns.set_style("whitegrid", {"grid.linestyle": ":"})
     sns.set_context("paper", font_scale=1.0)
-
-    # Consistent colors for features
-    feature_colors = {
-        "degree": "#1f77b4",  # Blue
-        "clustering": "#ff7f0e",  # Orange
-        "betweenness": "#2ca02c",  # Green
-        "closeness": "#d62728",  # Red
-        "eigenvector": "#9467bd",  # Purple
-        "density": "#8c564b",  # Brown
-        "singular_value": "#e377c2",  # Pink
-        "laplacian": "#7f7f7f",  # Gray
-    }
-
-    # Special colors for indicators
-    line_colors = {
-        "actual": "#1f77b4",  # Blue
-        "predicted": "#ff7f0e",  # Orange
-        "threshold": "#666666",  # Gray
-        "changepoint": "#FF9999",  # Light red
-    }
-
-    # Create network state visualizations
-    visualize_network_states(
-        model_name, graphs, true_change_points, detected_change_points, output_dir
-    )
 
     # Create feature evolution visualization
     fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
@@ -232,6 +162,13 @@ def visualize_results(
         "singular_values",
         "laplacian_eigenvalues",
     ]
+
+    # Colors for different elements
+    colors = {
+        "actual": "#1f77b4",  # Blue
+        "change_point": "#FF9999",  # Light red
+        "detected": "#ff7f0e",  # Orange
+    }
 
     for i, feature_name in enumerate(feature_names):
         row, col = divmod(i, 2)
@@ -254,7 +191,7 @@ def visualize_results(
             ax.plot(
                 time,
                 mean_values,
-                color=line_colors["actual"],
+                color=colors["actual"],
                 alpha=0.8,
                 linewidth=1.0,
             )
@@ -262,7 +199,7 @@ def visualize_results(
                 time,
                 np.array(mean_values) - np.array(std_values),
                 np.array(mean_values) + np.array(std_values),
-                color=line_colors["actual"],
+                color=colors["actual"],
                 alpha=0.1,
             )
         else:
@@ -271,7 +208,7 @@ def visualize_results(
             ax.plot(
                 time,
                 values,
-                color=line_colors["actual"],
+                color=colors["actual"],
                 alpha=0.8,
                 linewidth=1.0,
             )
@@ -279,42 +216,28 @@ def visualize_results(
         # Add true change points
         for cp in true_change_points:
             ax.axvline(
-                cp,
-                color=line_colors["changepoint"],
+                x=cp,
+                color=colors["change_point"],
                 linestyle="--",
                 alpha=0.5,
                 linewidth=0.8,
             )
 
-        # Add feature-specific detected change points
-        feature_mapping = {
-            "degrees": "degree",
-            "density": "density",
-            "clustering": "clustering",
-            "betweenness": "betweenness",
-            "eigenvector": "eigenvector",
-            "closeness": "closeness",
-            "singular_values": "singular_value",
-            "laplacian_eigenvalues": "laplacian",
-        }
-
-        feature_key = feature_mapping.get(feature_name)
-        if feature_key and feature_key in feature_results:
-            feature_cps = feature_results[feature_key]["change_points"]
-            for cp in feature_cps:
-                if isinstance(features_raw[0][feature_name], list):
-                    y_val = mean_values[cp]
-                else:
-                    y_val = features_raw[cp][feature_name]
-                ax.plot(
-                    cp,
-                    y_val,
-                    "o",
-                    color=line_colors["predicted"],
-                    markersize=6,
-                    alpha=0.8,
-                    markeredgewidth=1,
-                )
+        # Add detected change points
+        for cp in detected_change_points:
+            if isinstance(features_raw[0][feature_name], list):
+                y_val = mean_values[cp]
+            else:
+                y_val = features_raw[cp][feature_name]
+            ax.plot(
+                cp,
+                y_val,
+                "o",
+                color=colors["detected"],
+                markersize=6,
+                alpha=0.8,
+                markeredgewidth=1,
+            )
 
         # Set title and labels
         ax.set_title(
@@ -333,7 +256,7 @@ def visualize_results(
 
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
-        + "True Change Points (Red), Feature-Specific Detected Change Points (Orange)",
+        + "True Change Points (Red), Detected Change Points (Orange)",
         fontsize=viz.TITLE_SIZE,
         y=0.98,
     )
@@ -349,7 +272,13 @@ def visualize_results(
     plt.close()
 
 
-def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float = 0.7):
+def run_visualization(
+    model_alias: str,
+    threshold: float = 60.0,
+    epsilon: float = 0.7,
+    batch_size: int = 1000,
+    max_martingale: float = None,
+):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
     model_name = get_full_model_name(model_alias)
@@ -364,73 +293,27 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     graphs = result["graphs"]  # List of adjacency matrices
     true_change_points = result["change_points"]
 
-    # 3. Extract features from each graph using all available extractors
-    logger.info("Extracting network features...")
-    feature_extractor = NetworkFeatureExtractor()
-    features_raw = []  # Store raw feature dictionaries for visualization
-    features_numeric = []  # Store numeric features for change detection
-
-    for adj_matrix in graphs:
-        graph = nx.from_numpy_array(adj_matrix)
-        # Get all available feature types
-        feature_dict = feature_extractor.get_features(graph)
-        features_raw.append(feature_dict)
-        numeric_features = extract_numeric_features(feature_dict)
-        features_numeric.append(numeric_features)
-
-    # Convert features to numpy array
-    data = np.array(features_numeric)
-    logger.info(f"Extracted feature matrix of shape {data.shape}")
-
-    # Define feature names
-    feature_names = [
-        "degree",
-        "density",
-        "clustering",
-        "betweenness",
-        "eigenvector",
-        "closeness",
-        "singular_value",
-        "laplacian",
-    ]
-
-    # 4. Create a ChangePointDetector instance
-    cpd = ChangePointDetector()
-
-    # 5. Run the detector using multiview martingale test
-    logger.info(
-        "Running multiview change detection with threshold=%f, epsilon=%f",
-        threshold,
-        epsilon,
-    )
-
-    # Run detector on all features together
-    multiview_result = cpd.detect_changes_multiview(
-        data=[
-            data[:, i : i + 1] for i in range(data.shape[1])
-        ],  # Split features into separate views
-        threshold=threshold,  # Threshold only for combined evidence
+    # 3. Create and run the pipeline
+    logger.info("Running multiview change detection pipeline...")
+    pipeline = MartingalePipeline(
+        martingale_method="multiview",
+        threshold=threshold,
         epsilon=epsilon,
-        max_window=None,
         random_state=42,
+        feature_set="all",  # Use all features as separate views
+        batch_size=batch_size,
+        max_martingale=max_martingale,
+        reset=True,
+        max_window=None,
     )
 
-    # Store results for visualization
-    feature_results = {}
+    # Run pipeline directly on adjacency matrices
+    pipeline_result = pipeline.run(
+        data=graphs,
+        data_type="adjacency",  # Specify that we're passing adjacency matrices
+    )
 
-    # Use individual martingales from multiview result
-    for i, feature_name in enumerate(feature_names):
-        feature_results[feature_name] = {
-            "change_points": multiview_result["change_points"],
-            "martingales": multiview_result["individual_martingales"][i],
-            "p_values": multiview_result["p_values"][i],
-            "strangeness": multiview_result["strangeness"][i],
-        }
-
-    # Combined change points are the same as multiview result
-    combined_change_points = multiview_result["change_points"]
-
-    # 6. Print results and compare with true change points
+    # 4. Print results and compare with true change points
     print(
         f"\n==== Multiview Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
@@ -446,30 +329,27 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     print("- Smallest non-zero Laplacian eigenvalue")
 
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points: {combined_change_points}")
+    print(f"Detected change points: {pipeline_result['change_points']}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
+    print(f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}")
     print(
-        f"- Final sum martingale value: {multiview_result['martingales_sum'][-1]:.2f}"
+        f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}"
     )
     print(
-        f"- Final average martingale value: {multiview_result['martingales_avg'][-1]:.2f}"
+        f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}"
     )
     print(
-        f"- Maximum sum martingale value: {np.max(multiview_result['martingales_sum']):.2f}"
-    )
-    print(
-        f"- Maximum average martingale value: {np.max(multiview_result['martingales_avg']):.2f}"
+        f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
     )
 
     # Calculate detection accuracy
-    if true_change_points and combined_change_points:
-        # Simple metric: for each true change point, find the closest detected point
+    if true_change_points and pipeline_result["change_points"]:
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
-                combined_change_points, key=lambda x: abs(x - true_cp)
+                pipeline_result["change_points"], key=lambda x: abs(x - true_cp)
             )
             error = abs(closest_detected - true_cp)
             errors.append(error)
@@ -478,48 +358,37 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
         print(f"\nDetection Performance:")
         print(f"Average detection delay: {avg_error:.2f} time steps")
 
-    # 7. Create visualizations
+    # 5. Create visualizations
     logger.info("Creating visualizations...")
     output_dir = f"examples/{model_name}"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Visualize network states and features
-    visualize_results(
+    # Visualize network states
+    visualize_network_states(
         model_name=model_name,
         graphs=graphs,
-        features_raw=features_raw,
         true_change_points=true_change_points,
-        detected_change_points=combined_change_points,
-        feature_results=feature_results,
+        detected_change_points=pipeline_result["change_points"],
         output_dir=output_dir,
     )
 
-    # Prepare feature martingales for visualization
-    feature_martingales = {
-        name: {
-            "martingales": results["martingales"],
-            "p_values": results["p_values"],
-            "strangeness": results["strangeness"],
-        }
-        for name, results in feature_results.items()
-    }
+    # Visualize feature evolution
+    visualize_feature_evolution(
+        model_name=model_name,
+        features_raw=pipeline_result["features_raw"],
+        true_change_points=true_change_points,
+        detected_change_points=pipeline_result["change_points"],
+        output_dir=output_dir,
+    )
 
-    # Add combined martingales as a special feature
-    feature_martingales["combined"] = {
-        "martingales": multiview_result["martingales_sum"],
-        "p_values": [1.0] * len(multiview_result["martingales_sum"]),
-        "strangeness": [0.0] * len(multiview_result["martingales_sum"]),
-        "martingale_sum": multiview_result["martingales_sum"],
-        "martingale_avg": multiview_result["martingales_avg"],
-    }
-
-    # Visualize martingale analysis
+    # Create martingale visualizer
     martingale_viz = MartingaleVisualizer(
-        martingales=feature_martingales,
+        martingales={"combined": pipeline_result},  # Pass pipeline results directly
         change_points=true_change_points,
         threshold=threshold,
         epsilon=epsilon,
         output_dir=output_dir,
+        skip_shap=False,  # Include SHAP for multiview
     )
     martingale_viz.create_visualization()
 
@@ -529,7 +398,7 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
 def main():
     """Run visualization based on command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize change point detection on network evolution."
+        description="Visualize multiview change point detection on network evolution."
     )
     parser.add_argument(
         "model",
@@ -549,9 +418,27 @@ def main():
         default=0.7,
         help="Sensitivity parameter for martingale (default: 0.7)",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1000,
+        help="Batch size for multiview processing (default: 1000)",
+    )
+    parser.add_argument(
+        "--max_martingale",
+        type=float,
+        default=None,
+        help="Early stopping threshold for multiview (default: None)",
+    )
 
     args = parser.parse_args()
-    run_visualization(args.model, args.threshold, args.epsilon)
+    run_visualization(
+        args.model,
+        args.threshold,
+        args.epsilon,
+        args.batch_size,
+        args.max_martingale,
+    )
 
 
 if __name__ == "__main__":

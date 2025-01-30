@@ -1,6 +1,6 @@
 # examples/direct_martingale_visualization.py
 
-"""Visualize martingale-based change detection on network sequences.
+"""Visualize single-view martingale-based change detection on network sequences.
 Usage:
     python examples/direct_martingale_visualization.py ba
     python examples/direct_martingale_visualization.py ws
@@ -9,7 +9,6 @@ Usage:
 """
 
 from pathlib import Path
-
 import sys
 import os
 import argparse
@@ -18,17 +17,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
 import seaborn as sns
-
 from matplotlib.gridspec import GridSpec
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.changepoint.detector import ChangePointDetector
+from src.changepoint.pipeline import MartingalePipeline
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
-from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
 
@@ -45,47 +42,6 @@ def get_full_model_name(alias: str) -> str:
         "sbm": "stochastic_block_model",
     }
     return REVERSE_ALIASES.get(alias, alias)
-
-
-def extract_numeric_features(feature_dict: dict) -> np.ndarray:
-    """Extract numeric features from feature dictionary in a consistent order."""
-    # Extract basic metrics
-    degrees = feature_dict.get("degrees", [])
-    avg_degree = np.mean(degrees) if degrees else 0.0
-    density = feature_dict.get("density", 0.0)
-    clustering = feature_dict.get("clustering", [])
-    avg_clustering = np.mean(clustering) if clustering else 0.0
-
-    # Extract centrality metrics
-    betweenness = feature_dict.get("betweenness", [])
-    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
-    eigenvector = feature_dict.get("eigenvector", [])
-    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
-    closeness = feature_dict.get("closeness", [])
-    avg_closeness = np.mean(closeness) if closeness else 0.0
-
-    # Extract spectral metrics
-    singular_values = feature_dict.get("singular_values", [])
-    largest_sv = max(singular_values) if singular_values else 0.0
-    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
-    smallest_nonzero_le = (
-        min(x for x in laplacian_eigenvalues if x > 1e-10)
-        if laplacian_eigenvalues
-        else 0.0
-    )
-
-    return np.array(
-        [
-            avg_degree,
-            density,
-            avg_clustering,
-            avg_betweenness,
-            avg_eigenvector,
-            avg_closeness,
-            largest_sv,
-            smallest_nonzero_le,
-        ]
-    )
 
 
 def visualize_network_states(
@@ -338,167 +294,73 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     graphs = result["graphs"]  # List of adjacency matrices
     true_change_points = result["change_points"]
 
-    # 3. Extract features from each graph using all available extractors
-    logger.info("Extracting network features...")
-    feature_extractor = NetworkFeatureExtractor()
-    features_raw = []  # Store raw feature dictionaries for visualization
-    features_numeric = []  # Store numeric features for change detection
-
-    for adj_matrix in graphs:
-        graph = nx.from_numpy_array(adj_matrix)
-        # Get all available feature types
-        feature_dict = feature_extractor.get_features(graph)
-        features_raw.append(feature_dict)
-        numeric_features = extract_numeric_features(feature_dict)
-        features_numeric.append(numeric_features)
-
-    # Convert features to numpy array
-    data = np.array(features_numeric)
-    logger.info(f"Extracted feature matrix of shape {data.shape}")
-
-    # 4. Create a ChangePointDetector instance
-    cpd = ChangePointDetector()
-
-    # 5. Run the detector using direct martingale test
-    logger.info(
-        "Running direct martingale change detection with threshold=%f, epsilon=%f",
-        threshold,
-        epsilon,
-    )
-
-    # Run detector on the sequence
-    result = cpd.detect_changes(
-        data=data,
+    # 3. Create and run the pipeline
+    logger.info("Running single-view change detection pipeline...")
+    pipeline = MartingalePipeline(
+        martingale_method="single_view",
         threshold=threshold,
         epsilon=epsilon,
+        random_state=42,
+        feature_set="all",  # Using all features but will be combined into single view
         reset=True,
         max_window=None,
-        random_state=42,
     )
 
-    # Get detected change points
-    detected_change_points = result["change_points"]
+    # Run pipeline directly on adjacency matrices
+    pipeline_result = pipeline.run(
+        data=graphs,
+        data_type="adjacency",  # Specify that we're passing adjacency matrices
+    )
 
-    # Calculate individual feature martingales
-    individual_results = []
-    for i in range(data.shape[1]):  # For each feature dimension
-        feature_result = cpd.detect_changes(
-            data=data[:, i : i + 1],  # Single feature
-            threshold=threshold,
-            epsilon=epsilon,
-            reset=True,
-            max_window=None,
-            random_state=42,
-        )
-        individual_results.append(feature_result)
-
-    # Define feature names for individual features
-    feature_names = [
-        "degree",
-        "density",
-        "clustering",
-        "betweenness",
-        "eigenvector",
-        "closeness",
-        "singular_value",
-        "laplacian",
-    ]
-
-    # Prepare feature results for visualization
-    feature_results = {}
-
-    # Create individual feature entries with their own martingales
-    for i, feature_name in enumerate(feature_names):
-        feature_results[feature_name] = {
-            "change_points": individual_results[i]["change_points"],
-            "martingales": individual_results[i]["martingales"],
-            "p_values": individual_results[i]["p_values"],
-            "strangeness": individual_results[i]["strangeness"],
-        }
-
-    # Add combined martingales as a special feature
-    feature_results["combined"] = {
-        "martingales": result["martingales"],
-        "p_values": result["p_values"],
-        "strangeness": result["strangeness"],
-        "martingale_sum": result["martingales"],  # For compatibility with visualizer
-        "martingale_avg": result["martingales"]
-        / len(feature_names),  # Average over features
-    }
-
-    # 6. Print results and compare with true change points
+    # 4. Print results and compare with true change points
     print(
-        f"\n==== Direct Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+        f"\n==== Single-View Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
     print(f"Network parameters: {params}")
-    print(f"\nFeatures used for detection:")
-    print("- Average degree")
-    print("- Density")
-    print("- Average clustering coefficient")
-    print("- Average betweenness centrality")
-    print("- Average eigenvector centrality")
-    print("- Average closeness centrality")
-    print("- Largest singular value")
-    print("- Smallest non-zero Laplacian eigenvalue")
-
     print(f"\nTrue change points: {true_change_points}")
-    print("\nDetected change points by feature:")
-    for i, feature_name in enumerate(feature_names):
-        print(f"- {feature_name}: {individual_results[i]['change_points']}")
-    print(f"\nCombined martingale change points: {detected_change_points}")
+    print(f"Detected change points: {pipeline_result['change_points']}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
-    print("Individual feature martingales:")
-    for i, feature_name in enumerate(feature_names):
-        max_martingale = np.max(individual_results[i]["martingales"])
-        final_martingale = individual_results[i]["martingales"][-1]
-        print(f"- {feature_name}:")
-        print(f"  - Final value: {final_martingale:.2f}")
-        print(f"  - Maximum value: {max_martingale:.2f}")
+    print(f"- Final martingale value: {pipeline_result['martingales'][-1]:.2f}")
+    print(f"- Maximum martingale value: {np.max(pipeline_result['martingales']):.2f}")
 
-    print("\nCombined martingale:")
-    print(f"- Final value: {result['martingales'][-1]:.2f}")
-    print(f"- Maximum value: {np.max(result['martingales']):.2f}")
-
-    # Calculate detection accuracy based on sum martingale
-    if true_change_points and detected_change_points:
-        # For each true change point, find the closest detected point from sum martingale
+    # Calculate detection accuracy
+    if true_change_points and pipeline_result["change_points"]:
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
-                detected_change_points, key=lambda x: abs(x - true_cp)
+                pipeline_result["change_points"], key=lambda x: abs(x - true_cp)
             )
             error = abs(closest_detected - true_cp)
             errors.append(error)
 
         avg_error = np.mean(errors)
-        print(f"\nDetection Performance (based on combined martingale):")
+        print(f"\nDetection Performance:")
         print(f"Average detection delay: {avg_error:.2f} time steps")
 
-    # 7. Create visualizations
+    # 5. Create visualizations
     logger.info("Creating visualizations...")
     output_dir = f"examples/{model_name}"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Visualize network states and features
-    visualize_results(
+    # Visualize network states
+    visualize_network_states(
         model_name=model_name,
         graphs=graphs,
-        features_raw=features_raw,
         true_change_points=true_change_points,
-        detected_change_points=detected_change_points,
-        feature_results=feature_results,
+        detected_change_points=pipeline_result["change_points"],
         output_dir=output_dir,
     )
 
-    # Use MartingaleVisualizer for martingale visualization
+    # Create martingale visualizer
     martingale_viz = MartingaleVisualizer(
-        martingales=feature_results,
+        martingales={"combined": pipeline_result},  # Pass pipeline results directly
         change_points=true_change_points,
         threshold=threshold,
         epsilon=epsilon,
         output_dir=output_dir,
+        skip_shap=True,  # Skip SHAP for single-view
     )
     martingale_viz.create_visualization()
 
@@ -508,7 +370,7 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
 def main():
     """Run visualization based on command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize change point detection on network evolution."
+        description="Visualize single-view change point detection on network evolution."
     )
     parser.add_argument(
         "model",
@@ -520,7 +382,7 @@ def main():
         "--threshold",
         type=float,
         default=60.0,
-        help="Detection threshold for martingale (default: 10.0)",
+        help="Detection threshold for martingale (default: 60.0)",
     )
     parser.add_argument(
         "--epsilon",
