@@ -1,11 +1,11 @@
-# examples/multiview_martingale_visualization.py
+# examples/martingale_singleview_visualization.py
 
-"""Visualize multiview martingale-based change detection on network sequences.
+"""Visualize single-view martingale-based change detection on network sequences.
 Usage:
-    python examples/multiview_martingale_visualization.py ba
-    python examples/multiview_martingale_visualization.py ws
-    python examples/multiview_martingale_visualization.py er
-    python examples/multiview_martingale_visualization.py sbm
+    python examples/martingale_singleview_visualization.py ba
+    python examples/martingale_singleview_visualization.py ws
+    python examples/martingale_singleview_visualization.py er
+    python examples/martingale_singleview_visualization.py sbm
 """
 
 from pathlib import Path
@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
 import seaborn as sns
-
 from matplotlib.gridspec import GridSpec
 
 project_root = str(Path(__file__).parent.parent)
@@ -127,14 +126,16 @@ def visualize_network_states(
     plt.close()
 
 
-def visualize_feature_evolution(
+def visualize_results(
     model_name: str,
+    graphs: list,
     features_raw: list,
     true_change_points: list,
     detected_change_points: list,
+    feature_results: dict,
     output_dir: str = "examples",
 ):
-    """Create visualization of feature evolution over time."""
+    """Create visualizations of network states and features at key points."""
     os.makedirs(output_dir, exist_ok=True)
     viz = NetworkVisualizer()
 
@@ -142,6 +143,19 @@ def visualize_feature_evolution(
     plt.style.use("seaborn-v0_8-paper")
     sns.set_style("whitegrid", {"grid.linestyle": ":"})
     sns.set_context("paper", font_scale=1.0)
+
+    # Special colors for indicators
+    line_colors = {
+        "actual": "#1f77b4",  # Blue
+        "predicted": "#ff7f0e",  # Orange
+        "threshold": "#666666",  # Gray
+        "changepoint": "#FF9999",  # Light red
+    }
+
+    # Create network state visualizations
+    visualize_network_states(
+        model_name, graphs, true_change_points, detected_change_points, output_dir
+    )
 
     # Create feature evolution visualization
     fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
@@ -162,13 +176,6 @@ def visualize_feature_evolution(
         "singular_values",
         "laplacian_eigenvalues",
     ]
-
-    # Colors for different elements
-    colors = {
-        "actual": "#1f77b4",  # Blue
-        "change_point": "#FF9999",  # Light red
-        "detected": "#ff7f0e",  # Orange
-    }
 
     for i, feature_name in enumerate(feature_names):
         row, col = divmod(i, 2)
@@ -191,7 +198,7 @@ def visualize_feature_evolution(
             ax.plot(
                 time,
                 mean_values,
-                color=colors["actual"],
+                color=line_colors["actual"],
                 alpha=0.8,
                 linewidth=1.0,
             )
@@ -199,7 +206,7 @@ def visualize_feature_evolution(
                 time,
                 np.array(mean_values) - np.array(std_values),
                 np.array(mean_values) + np.array(std_values),
-                color=colors["actual"],
+                color=line_colors["actual"],
                 alpha=0.1,
             )
         else:
@@ -208,7 +215,7 @@ def visualize_feature_evolution(
             ax.plot(
                 time,
                 values,
-                color=colors["actual"],
+                color=line_colors["actual"],
                 alpha=0.8,
                 linewidth=1.0,
             )
@@ -216,8 +223,8 @@ def visualize_feature_evolution(
         # Add true change points
         for cp in true_change_points:
             ax.axvline(
-                x=cp,
-                color=colors["change_point"],
+                cp,
+                color=line_colors["changepoint"],
                 linestyle="--",
                 alpha=0.5,
                 linewidth=0.8,
@@ -233,7 +240,7 @@ def visualize_feature_evolution(
                 cp,
                 y_val,
                 "o",
-                color=colors["detected"],
+                color=line_colors["predicted"],
                 markersize=6,
                 alpha=0.8,
                 markeredgewidth=1,
@@ -272,13 +279,7 @@ def visualize_feature_evolution(
     plt.close()
 
 
-def run_visualization(
-    model_alias: str,
-    threshold: float = 60.0,
-    epsilon: float = 0.7,
-    batch_size: int = 1000,
-    max_martingale: float = None,
-):
+def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float = 0.7):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
     model_name = get_full_model_name(model_alias)
@@ -294,15 +295,13 @@ def run_visualization(
     true_change_points = result["change_points"]
 
     # 3. Create and run the pipeline
-    logger.info("Running multiview change detection pipeline...")
+    logger.info("Running single-view change detection pipeline...")
     pipeline = MartingalePipeline(
-        martingale_method="multiview",
+        martingale_method="single_view",
         threshold=threshold,
         epsilon=epsilon,
         random_state=42,
-        feature_set="all",  # Use all features as separate views
-        batch_size=batch_size,
-        max_martingale=max_martingale,
+        feature_set="all",  # Using all features but will be combined into single view
         reset=True,
         max_window=None,
     )
@@ -315,34 +314,16 @@ def run_visualization(
 
     # 4. Print results and compare with true change points
     print(
-        f"\n==== Multiview Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+        f"\n==== Single-View Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
     print(f"Network parameters: {params}")
-    print(f"\nFeatures used for detection:")
-    print("- Average degree")
-    print("- Density")
-    print("- Average clustering coefficient")
-    print("- Average betweenness centrality")
-    print("- Average eigenvector centrality")
-    print("- Average closeness centrality")
-    print("- Largest singular value")
-    print("- Smallest non-zero Laplacian eigenvalue")
-
     print(f"\nTrue change points: {true_change_points}")
     print(f"Detected change points: {pipeline_result['change_points']}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
-    print(f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}")
-    print(
-        f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}"
-    )
-    print(
-        f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}"
-    )
-    print(
-        f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
-    )
+    print(f"- Final martingale value: {pipeline_result['martingales'][-1]:.2f}")
+    print(f"- Maximum martingale value: {np.max(pipeline_result['martingales']):.2f}")
 
     # Calculate detection accuracy
     if true_change_points and pipeline_result["change_points"]:
@@ -372,15 +353,6 @@ def run_visualization(
         output_dir=output_dir,
     )
 
-    # Visualize feature evolution
-    visualize_feature_evolution(
-        model_name=model_name,
-        features_raw=pipeline_result["features_raw"],
-        true_change_points=true_change_points,
-        detected_change_points=pipeline_result["change_points"],
-        output_dir=output_dir,
-    )
-
     # Create martingale visualizer
     martingale_viz = MartingaleVisualizer(
         martingales={"combined": pipeline_result},  # Pass pipeline results directly
@@ -388,7 +360,7 @@ def run_visualization(
         threshold=threshold,
         epsilon=epsilon,
         output_dir=output_dir,
-        skip_shap=False,  # Include SHAP for multiview
+        skip_shap=True,  # Skip SHAP for single-view
     )
     martingale_viz.create_visualization()
 
@@ -398,7 +370,7 @@ def run_visualization(
 def main():
     """Run visualization based on command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize multiview change point detection on network evolution."
+        description="Visualize single-view change point detection on network evolution."
     )
     parser.add_argument(
         "model",
@@ -418,27 +390,9 @@ def main():
         default=0.7,
         help="Sensitivity parameter for martingale (default: 0.7)",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=1000,
-        help="Batch size for multiview processing (default: 1000)",
-    )
-    parser.add_argument(
-        "--max_martingale",
-        type=float,
-        default=None,
-        help="Early stopping threshold for multiview (default: None)",
-    )
 
     args = parser.parse_args()
-    run_visualization(
-        args.model,
-        args.threshold,
-        args.epsilon,
-        args.batch_size,
-        args.max_martingale,
-    )
+    run_visualization(args.model, args.threshold, args.epsilon)
 
 
 if __name__ == "__main__":
