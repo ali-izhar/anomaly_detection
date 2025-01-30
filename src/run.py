@@ -1,9 +1,7 @@
 # src/run.py
 
 """
-Main script to run the forecast-based martingale detection algorithm on network sequences.
-Implements the experimental setup from Section 6 of the paper:
-'Faster Structural Change Detection in Dynamic Networks via Statistical Forecasting'
+Main script to run martingale-based change detection on network sequences.
 
 Usage:
     python src/run.py <model_alias>
@@ -14,137 +12,21 @@ import argparse
 import logging
 import numpy as np
 from pathlib import Path
-from tqdm import tqdm
-from typing import List, Dict, Any
-import os
+from typing import Dict, Any
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.algorithm import ObservedStream
+from src.changepoint.pipeline import MartingalePipeline
 from src.configs.loader import get_config
-from src.changepoint.visualizer import MartingaleVisualizer
 from src.graph.generator import GraphGenerator
 
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
-# Default parameters
-DEFAULT_PARAMS = {
-    "horizon": 5,
-    "threshold": 60.0,
-    "epsilon": 0.7,
-    "window_size": 10,
-    "predictor_type": "adaptive",
-}
-
-# Feature names used for detection
-FEATURE_NAMES = [
-    "degree",
-    "density",
-    "clustering",
-    "betweenness",
-    "eigenvector",
-    "closeness",
-    "singular_value",
-    "laplacian",
-]
-
-
-def test_observed_stream(
-    graphs: List[np.ndarray], true_change_points: List[int], params: dict
-) -> Dict[str, Any]:
-    """Test the ObservedStream class on a sequence of graphs.
-
-    Args:
-        graphs: List of adjacency matrices
-        true_change_points: List of true change point indices
-        params: Dictionary of parameters
-
-    Returns:
-        Dictionary containing detection results
-    """
-    # Initialize observed stream with parameters
-    observed_stream = ObservedStream(
-        window_size=params["window_size"],
-        threshold=params["threshold"],
-        epsilon=params["epsilon"],
-        martingale_method="multiview",  # Use multiview for better detection
-        feature_set="all",  # Use all available features
-        batch_size=1000,  # Add batch size for multiview
-        max_martingale=None,  # Optional early stopping
-        reset=True,  # Reset after detection
-        random_state=42,
-    )
-
-    # Process each graph
-    detected_changes = []
-    logger.info("Processing graph sequence through ObservedStream...")
-    pbar = tqdm(total=len(graphs), desc="Processing graphs", unit="graph")
-
-    for t, adj_matrix in enumerate(graphs):
-        # Update stream with new adjacency matrix
-        result = observed_stream.update(adj_matrix, data_type="adjacency")
-
-        # Check for change point
-        if result["is_change"]:
-            detected_changes.append(t)
-            logger.info(f"Change detected at t={t}")
-
-            # Print martingale values at change point
-            if result.get("martingale_sum") is not None:
-                logger.info(f"  Sum martingale: {result['martingale_sum']:.2f}")
-                logger.info(f"  Avg martingale: {result['martingale_avg']:.2f}")
-            else:
-                logger.info(f"  Martingale: {result['martingale']:.2f}")
-
-        pbar.update(1)
-
-    pbar.close()
-
-    # Get final state
-    final_state = observed_stream.get_state()
-
-    # Analyze detection performance
-    if true_change_points and detected_changes:
-        delays = []
-        for true_cp in true_change_points:
-            closest_detection = min(detected_changes, key=lambda x: abs(x - true_cp))
-            delay = closest_detection - true_cp
-            delays.append(delay)
-            logger.info(
-                f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
-            )
-
-        if delays:
-            avg_delay = np.mean(delays)
-            logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
-
-    # Compile results
-    detection_results = {
-        "feature_values": final_state["features_raw"],
-        "martingale_values": final_state["martingale_values"],
-        "detected_changes": detected_changes,
-        "true_changes": true_change_points,
-        "p_values": final_state["p_values"],
-        "strangeness_values": final_state["strangeness_values"],
-    }
-
-    # Add multiview specific results if available
-    if final_state["is_multiview"]:
-        detection_results.update(
-            {
-                "martingales_sum": final_state["martingales_sum"],
-                "martingales_avg": final_state["martingales_avg"],
-                "individual_martingales": final_state["individual_martingales"],
-            }
-        )
-
-    return detection_results
 
 
 def get_full_model_name(alias: str) -> str:
@@ -158,8 +40,31 @@ def get_full_model_name(alias: str) -> str:
     return REVERSE_ALIASES.get(alias, alias)
 
 
-def run_detection(model_alias: str, output_dir: str = "results"):
-    """Run the forecast-based martingale detection algorithm on a network sequence."""
+def run_detection(
+    model_alias: str,
+    threshold: float = 60.0,
+    epsilon: float = 0.7,
+    batch_size: int = 1000,
+    max_martingale: float = None,
+    reset: bool = True,
+    max_window: int = None,
+    random_state: int = 42,
+) -> Dict[str, Any]:
+    """Run martingale detection on a network sequence.
+
+    Args:
+        model_alias: Short name of the network model to use
+        threshold: Detection threshold for martingale
+        epsilon: Sensitivity parameter for martingale
+        batch_size: Batch size for multiview processing
+        max_martingale: Early stopping threshold
+        reset: Whether to reset after detection
+        max_window: Maximum window size for strangeness computation
+        random_state: Random seed
+
+    Returns:
+        Dictionary containing detection results
+    """
     # 1. Setup
     model_name = get_full_model_name(model_alias)
     logger.info(f"Running detection on {model_name} network sequence...")
@@ -168,85 +73,96 @@ def run_detection(model_alias: str, output_dir: str = "results"):
     generator = GraphGenerator(model_alias)
     config = get_config(model_name)
     params = config["params"].__dict__
+
+    # Set sequence parameters
     params.update(
         {
-            "seq_len": 100,
-            "n": 50,
-            "min_changes": 1,
-            "max_changes": 1,
-            "min_segment": 40,
+            "seq_len": 200,  # Length of sequence
+            "n": 50,  # Number of nodes
+            "min_changes": 2,  # Minimum number of change points
+            "max_changes": 2,  # Maximum number of change points
+            "min_segment": 50,  # Minimum segment length
         }
     )
 
     # Generate sequence
+    logger.info(f"Generating {model_name} sequence with parameters: {params}")
     result = generator.generate_sequence(params)
-    graphs = result["graphs"]  # Already adjacency matrices
+    graphs = result["graphs"]  # List of adjacency matrices
     true_change_points = result["change_points"]
+    logger.info(f"Generated sequence with change points at: {true_change_points}")
 
-    # 3. Run ObservedStream Detection
-    logger.info("Running ObservedStream detection...")
-    detection_results = test_observed_stream(
-        graphs=graphs, true_change_points=true_change_points, params=DEFAULT_PARAMS
+    # 3. Initialize and run pipeline
+    logger.info("Running martingale detection pipeline...")
+    pipeline = MartingalePipeline(
+        martingale_method="multiview",
+        threshold=threshold,
+        epsilon=epsilon,
+        random_state=random_state,
+        feature_set="all",
+        batch_size=batch_size,
+        max_martingale=max_martingale,
+        reset=reset,
+        max_window=max_window,
     )
 
-    # 4. Visualize Results
-    logger.info("Creating visualizations...")
-    output_dir = f"results/{model_name}"
-    os.makedirs(output_dir, exist_ok=True)
+    # Run pipeline on entire sequence
+    pipeline_result = pipeline.run(
+        data=graphs,
+        data_type="adjacency",  # Specify that we're passing adjacency matrices
+    )
 
-    # Create martingales dictionary for visualization
-    martingales_dict = {
-        "combined": {
-            "martingales": detection_results["martingale_values"],
-            "p_values": detection_results["p_values"],
-            "strangeness": detection_results["strangeness_values"],
-        }
+    # 4. Analyze results
+    logger.info("\nDetection Results:")
+    logger.info(f"True change points: {true_change_points}")
+    logger.info(f"Detected change points: {pipeline_result['change_points']}")
+
+    # Print martingale statistics
+    logger.info("\nMartingale Statistics:")
+    logger.info(
+        f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}"
+    )
+    logger.info(
+        f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}"
+    )
+    logger.info(
+        f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}"
+    )
+    logger.info(
+        f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
+    )
+
+    # Calculate detection accuracy
+    if true_change_points and pipeline_result["change_points"]:
+        delays = []
+        for true_cp in true_change_points:
+            closest_detection = min(
+                pipeline_result["change_points"], key=lambda x: abs(x - true_cp)
+            )
+            delay = closest_detection - true_cp
+            delays.append(delay)
+            logger.info(
+                f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
+            )
+
+        if delays:
+            avg_delay = np.mean(delays)
+            logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
+
+    # 5. Return results
+    return {
+        "true_change_points": true_change_points,
+        "detected_changes": pipeline_result["change_points"],
+        "model_name": model_name,
+        "params": params,
+        "martingales_sum": pipeline_result["martingales_sum"],
+        "martingales_avg": pipeline_result["martingales_avg"],
+        "individual_martingales": pipeline_result["individual_martingales"],
+        "p_values": pipeline_result["p_values"],
+        "strangeness": pipeline_result["strangeness"],
+        "features_raw": pipeline_result.get("features_raw"),
+        "features_numeric": pipeline_result.get("features_numeric"),
     }
-
-    # Add multiview specific results if available
-    if "martingales_sum" in detection_results:
-        martingales_dict["combined"].update(
-            {
-                "martingale_sum": detection_results["martingales_sum"],
-                "martingale_avg": detection_results["martingales_avg"],
-            }
-        )
-
-        # Add individual feature martingales if available
-        if detection_results.get("individual_martingales"):
-            feature_names = [
-                "degree",
-                "density",
-                "clustering",
-                "betweenness",
-                "eigenvector",
-                "closeness",
-                "singular_value",
-                "laplacian",
-            ]
-            for i, feature in enumerate(feature_names):
-                martingales_dict[feature] = {
-                    "martingales": [
-                        m[i] for m in detection_results["individual_martingales"]
-                    ],
-                    "p_values": [1.0]
-                    * len(detection_results["individual_martingales"]),  # Placeholder
-                    "strangeness": [0.0]
-                    * len(detection_results["individual_martingales"]),  # Placeholder
-                }
-
-    # Create visualizations using MartingaleVisualizer
-    martingale_viz = MartingaleVisualizer(
-        martingales=martingales_dict,
-        change_points=true_change_points,
-        threshold=DEFAULT_PARAMS["threshold"],
-        epsilon=DEFAULT_PARAMS["epsilon"],
-        output_dir=output_dir,
-        prefix=f"{model_name}_",
-    )
-    martingale_viz.create_visualization()
-
-    logger.info(f"Results saved to {output_dir}/")
 
 
 def main():
@@ -261,14 +177,45 @@ def main():
         "er (Erdős-Rényi), sbm (Stochastic Block Model)",
     )
     parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="results",
-        help="Output directory for results (default: results)",
+        "--threshold",
+        type=float,
+        default=60.0,
+        help="Detection threshold (default: 60.0)",
+    )
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=0.7,
+        help="Sensitivity parameter (default: 0.7)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Batch size for multiview (default: 1000)",
+    )
+    parser.add_argument(
+        "--max-window",
+        type=int,
+        default=None,
+        help="Maximum window size (default: None)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed (default: 42)",
     )
 
     args = parser.parse_args()
-    run_detection(args.model, args.output_dir)
+    results = run_detection(
+        model_alias=args.model,
+        threshold=args.threshold,
+        epsilon=args.epsilon,
+        batch_size=args.batch_size,
+        max_window=args.max_window,
+        random_state=args.seed,
+    )
 
 
 if __name__ == "__main__":
