@@ -74,17 +74,6 @@ def run_detection(
     config = get_config(model_name)
     params = config["params"].__dict__
 
-    # Set sequence parameters
-    params.update(
-        {
-            "seq_len": 200,  # Length of sequence
-            "n": 50,  # Number of nodes
-            "min_changes": 2,  # Minimum number of change points
-            "max_changes": 2,  # Maximum number of change points
-            "min_segment": 50,  # Minimum segment length
-        }
-    )
-
     # Generate sequence
     logger.info(f"Generating {model_name} sequence with parameters: {params}")
     result = generator.generate_sequence(params)
