@@ -21,11 +21,12 @@ if project_root not in sys.path:
 from src.changepoint.pipeline import MartingalePipeline
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
+from src.predictor.factory import PredictorFactory
 
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
@@ -49,39 +50,65 @@ def run_detection(
     reset: bool = True,
     max_window: int = None,
     random_state: int = 42,
+    prediction_horizon: int = 5,
 ) -> Dict[str, Any]:
-    """Run martingale detection on a network sequence.
-
-    Args:
-        model_alias: Short name of the network model to use
-        threshold: Detection threshold for martingale
-        epsilon: Sensitivity parameter for martingale
-        batch_size: Batch size for multiview processing
-        max_martingale: Early stopping threshold
-        reset: Whether to reset after detection
-        max_window: Maximum window size for strangeness computation
-        random_state: Random seed
-
-    Returns:
-        Dictionary containing detection results
     """
-    # 1. Setup
+    ALGORITHM: Forecast-based Graph Structural Change Detection using Martingale
+
+    INPUT:
+    - Network sequence {G_t}_{t=1}^n (generated from model_alias)
+    - Threshold λ (threshold parameter)
+    - Epsilon ε (sensitivity parameter)
+    - Batch size (for multiview processing)
+    - Max window (for historical context)
+    - Random state (for reproducibility)
+    - Prediction horizon h (number of steps to predict ahead)
+
+    OUTPUT:
+    - Change points τ and detection statistics
+    """
+
+    # STEP 1: Setup and Initialization
     model_name = get_full_model_name(model_alias)
     logger.info(f"Running detection on {model_name} network sequence...")
 
-    # 2. Generate Network Sequence
+    # Initialize predictor using factory
+    predictor_config = {
+        "n_history": max_window if max_window else 10,
+        "adaptive": True,
+        "enforce_connectivity": True,
+        "binary": True,
+        "spectral_reg": 0.4,
+        "community_reg": 0.4,
+        "n_communities": 2,
+        "temporal_window": 10,
+        "distribution_reg": 0.3,
+    }
+    predictor = PredictorFactory.create("adaptive", predictor_config)
+
+    # STEP 2: Generate Network Sequence
     generator = GraphGenerator(model_alias)
     config = get_config(model_name)
     params = config["params"].__dict__
+    # Override for testing
+    params.update(
+        {
+            "n": 20,
+            "seq_len": 50,
+            "min_changes": 1,
+            "max_changes": 1,
+            "min_segment": 20,
+        }
+    )
 
-    # Generate sequence
+    # Generate sequence with ground truth change points
     logger.info(f"Generating {model_name} sequence with parameters: {params}")
     result = generator.generate_sequence(params)
     graphs = result["graphs"]  # List of adjacency matrices
     true_change_points = result["change_points"]
     logger.info(f"Generated sequence with change points at: {true_change_points}")
 
-    # 3. Initialize and run pipeline
+    # STEP 3: Initialize Pipeline with Prediction
     logger.info("Running martingale detection pipeline...")
     pipeline = MartingalePipeline(
         martingale_method="multiview",
@@ -95,13 +122,45 @@ def run_detection(
         max_window=max_window,
     )
 
-    # Run pipeline on entire sequence
+    # STEP 4: Run Detection Pipeline with Prediction
+    predicted_graphs = []
+    detection_results = []
+
+    for t in range(len(graphs)):
+        # Get current graph and history
+        current = graphs[t]
+        history_start = max(0, t - predictor.history_size)
+        history = [{"adjacency": g} for g in graphs[history_start:t]]
+
+        logger.debug(f"\n=== Timestep t={t} ===")
+        logger.debug(f"Current graph shape: {current.shape}")
+        logger.debug(f"History window: [{history_start}:{t}] (size={len(history)})")
+
+        # Make predictions for next h steps
+        if t >= predictor.history_size:
+            predictions = predictor.predict(history, horizon=prediction_horizon)
+            predicted_graphs.append(predictions)
+
+            logger.debug(f"Made predictions at t={t}:")
+            logger.debug(f"- Number of predictions: {len(predictions)}")
+            logger.debug(
+                f"- Each prediction shape: {predictions[0].shape if len(predictions) > 0 else 'N/A'}"
+            )
+            logger.debug(f"- Predicting for timesteps: t+1 to t+{prediction_horizon}")
+            logger.debug(f"- Total predictions so far: {len(predicted_graphs)}")
+
+            # Update predictor's state with actual observation
+            predictor.update_state({"adjacency": current})
+            logger.debug("Updated predictor state with current observation")
+
+    # Run pipeline with both actual and predicted graphs
     pipeline_result = pipeline.run(
         data=graphs,
-        data_type="adjacency",  # Specify that we're passing adjacency matrices
+        data_type="adjacency",
+        predicted_data=predicted_graphs,
     )
 
-    # 4. Analyze results
+    # STEP 5: Analyze Results
     logger.info("\nDetection Results:")
     logger.info(f"True change points: {true_change_points}")
     logger.info(f"Detected change points: {pipeline_result['change_points']}")
@@ -121,7 +180,7 @@ def run_detection(
         f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
     )
 
-    # Calculate detection accuracy
+    # STEP 6: Calculate Detection Accuracy
     if true_change_points and pipeline_result["change_points"]:
         delays = []
         for true_cp in true_change_points:
@@ -138,7 +197,7 @@ def run_detection(
             avg_delay = np.mean(delays)
             logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
 
-    # 5. Return results
+    # STEP 7: Return Complete Results
     return {
         "true_change_points": true_change_points,
         "detected_changes": pipeline_result["change_points"],
@@ -151,6 +210,8 @@ def run_detection(
         "strangeness": pipeline_result["strangeness"],
         "features_raw": pipeline_result.get("features_raw"),
         "features_numeric": pipeline_result.get("features_numeric"),
+        "predicted_graphs": predicted_graphs,  # Add predictions to output
+        "predictor_states": predictor.get_state(),  # Add final predictor state
     }
 
 

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 def compute_martingale(
     data: List[Any],
+    predicted_data: List[np.ndarray],
     threshold: float,
     epsilon: float,
     reset: bool = True,
@@ -36,9 +37,13 @@ def compute_martingale(
     ----------
     data : List[Any]
         Sequential observations to monitor (e.g., numeric values).
+    predicted_data : List[np.ndarray]
+        List of predicted feature vectors for future timesteps.
+        Each prediction should have same shape as data rows.
     threshold : float
         Detection threshold (>0). If M_n > threshold, a change is reported.
     epsilon : float
+
         Sensitivity parameter in (0,1).
         - Smaller epsilon => more sensitive to small p-values.
     reset : bool, optional
@@ -163,6 +168,7 @@ def compute_martingale(
 
 def multiview_martingale_test(
     data: List[List[Any]],
+    predicted_data: List[List[np.ndarray]],
     threshold: float,
     epsilon: float,
     window_size: Optional[int] = None,
@@ -183,10 +189,14 @@ def multiview_martingale_test(
     data : List[List[Any]]
         data[j] is the entire time-series for feature j.
         Must have the same length across features => num_samples.
+    predicted_data : List[List[np.ndarray]]
+        List of predicted feature vectors for future timesteps.
+        Each prediction should have same shape as data rows.
     threshold : float
         Detection threshold for the sum of martingales.
     epsilon : float
         Sensitivity parameter in (0,1) for all features.
+
     window_size : int, optional
         Rolling window size for each feature. If None, use all past data.
     early_stop_threshold : float, optional

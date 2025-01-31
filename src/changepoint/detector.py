@@ -26,6 +26,7 @@ class ChangePointDetector:
     def detect_changes(
         self,
         data: np.ndarray,
+        predicted_data: List[np.ndarray],
         threshold: float,
         epsilon: float,
         reset: bool = False,
@@ -41,6 +42,9 @@ class ChangePointDetector:
             Shape: (n_samples, n_features). Each row is an observation in time.
             If n_features=1, it's truly univariate. If >1, we treat each row
             as a single "multi-dimensional" observation.
+        predicted_data : List[np.ndarray]
+            List of predicted feature vectors for future timesteps.
+            Each prediction should have same shape as data rows.
         threshold : float
             Detection threshold (> 0). If the power martingale exceeds this, we flag a change.
         epsilon : float
@@ -60,7 +64,10 @@ class ChangePointDetector:
               "change_points": List[int],
               "martingales": np.ndarray,
               "p_values": List[float],
-              "strangeness": List[float]
+              "strangeness": List[float],
+              "prediction_martingales": Optional[np.ndarray],
+              "prediction_p_values": Optional[List[float]],
+              "prediction_strangeness": Optional[List[float]]
             }
         """
         if len(data) == 0:
@@ -77,6 +84,9 @@ class ChangePointDetector:
 
         results = compute_martingale(
             data=data_list,
+            predicted_data=(
+                predicted_data.tolist() if predicted_data is not None else None
+            ),
             threshold=threshold,
             epsilon=epsilon,
             reset=reset,
@@ -89,11 +99,15 @@ class ChangePointDetector:
             "martingales": results["martingales"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
+            "prediction_martingales": results.get("prediction_martingales"),
+            "prediction_p_values": results.get("prediction_pvalues"),
+            "prediction_strangeness": results.get("prediction_strangeness"),
         }
 
     def detect_changes_multiview(
         self,
         data: List[np.ndarray],
+        predicted_data: List[List[np.ndarray]],
         threshold: float,
         epsilon: float,
         max_window: Optional[int] = None,
@@ -115,6 +129,12 @@ class ChangePointDetector:
         ----------
         data : List[np.ndarray]
             Each data[j] must be length n_samples along time dimension.
+        predicted_data : List[List[np.ndarray]]
+            List of predicted feature vectors for each view.
+            Structure:
+            - First level: timesteps where predictions were made
+            - Second level: views (features)
+            - Third level: predictions for each future timestep
         threshold : float
             Detection threshold for sum of martingales.
         epsilon : float
@@ -138,7 +158,12 @@ class ChangePointDetector:
               "martingales_avg": np.ndarray,
               "individual_martingales": List[np.ndarray],
               "p_values": List[List[float]],
-              "strangeness": List[List[float]]
+              "strangeness": List[List[float]],
+              "prediction_martingales_sum": Optional[np.ndarray],
+              "prediction_martingales_avg": Optional[np.ndarray],
+              "prediction_individual_martingales": Optional[List[np.ndarray]],
+              "prediction_p_values": Optional[List[List[float]]],
+              "prediction_strangeness": Optional[List[List[float]]]
             }
         """
         if not data or len(data) == 0:
@@ -152,9 +177,15 @@ class ChangePointDetector:
 
         # Convert each feature array to list-of-lists
         data_lists = [arr.tolist() for arr in data]
+        predicted_lists = None
+        if predicted_data is not None:
+            predicted_lists = [
+                [arr.tolist() for arr in view] for view in predicted_data
+            ]
 
         results = multiview_martingale_test(
             data=data_lists,
+            predicted_data=predicted_lists,
             threshold=threshold,
             epsilon=epsilon,
             window_size=max_window,
@@ -170,4 +201,11 @@ class ChangePointDetector:
             "individual_martingales": results["individual_martingales"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
+            "prediction_martingales_sum": results.get("prediction_martingale_sum"),
+            "prediction_martingales_avg": results.get("prediction_martingale_avg"),
+            "prediction_individual_martingales": results.get(
+                "prediction_individual_martingales"
+            ),
+            "prediction_p_values": results.get("prediction_pvalues"),
+            "prediction_strangeness": results.get("prediction_strangeness"),
         }

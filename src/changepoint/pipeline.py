@@ -147,7 +147,8 @@ class MartingalePipeline:
     def run(
         self,
         data: Union[np.ndarray, List[np.ndarray], List[nx.Graph]],
-        data_type: str = "features",
+        data_type: str = "adjacency",
+        predicted_data: Optional[List[List[np.ndarray]]] = None,
     ) -> Dict[str, Any]:
         """Run the complete pipeline from raw data to change detection.
 
@@ -157,6 +158,10 @@ class MartingalePipeline:
                 - List of adjacency matrices
                 - List of networkx graphs
             data_type: Type of input data ('features', 'adjacency', or 'graph')
+            predicted_data: Optional list of predicted graphs. Structure:
+                - First level list: predictions made at each timestep
+                - Second level list: multiple predictions for future timesteps
+                Each prediction is an adjacency matrix of same shape as input graphs
 
         Returns:
             Dict containing:
@@ -166,9 +171,11 @@ class MartingalePipeline:
                 - martingales: Martingale values (single view) or sum martingales (multiview)
                 - martingales_sum: Sum of martingales (multiview only, None for single view)
                 - martingales_avg: Average of martingales (multiview only, None for single view)
-                - individual_martingales: Individual feature martingales (multiview only, None for single view)
+                - individual_martingales: Individual feature martingales (multiview only)
                 - p_values: P-values for each point
                 - strangeness: Strangeness values
+                - predicted_features: Features extracted from predicted graphs
+                - prediction_martingales: Martingales computed on predicted features
 
         Raises:
             ValueError: If an unknown method or data type is specified.
@@ -182,10 +189,24 @@ class MartingalePipeline:
             features = data
             features_raw = None
 
+        # Process predicted data if available
+        predicted_features = None
+        if predicted_data is not None:
+            predicted_features = []
+            for timestep_predictions in predicted_data:
+                # Process each set of predictions for this timestep
+                processed_predictions = self.process_raw_data(
+                    timestep_predictions, data_type
+                )
+                predicted_features.append(processed_predictions["features_numeric"])
+
         # Run change detection
         if self.method == "single_view":
             result = self.detector.detect_changes(
                 data=features,
+                predicted_data=(
+                    predicted_features if predicted_features is not None else None
+                ),
                 threshold=self.threshold,
                 epsilon=self.epsilon,
                 reset=self.reset,
@@ -200,8 +221,22 @@ class MartingalePipeline:
         elif self.method == "multiview":
             # Split each feature into a separate view
             views = [features[:, i : i + 1] for i in range(features.shape[1])]
+
+            # Split predicted features into views if available
+            predicted_views = None
+            if predicted_features is not None:
+                predicted_views = []
+                for timestep_features in predicted_features:
+                    predicted_views.append(
+                        [
+                            timestep_features[:, i : i + 1]
+                            for i in range(timestep_features.shape[1])
+                        ]
+                    )
+
             result = self.detector.detect_changes_multiview(
                 data=views,
+                predicted_data=predicted_views,
                 threshold=self.threshold,
                 epsilon=self.epsilon,
                 max_window=self.max_window,
@@ -223,5 +258,18 @@ class MartingalePipeline:
         if features_raw is not None:
             result["features_raw"] = features_raw
             result["features_numeric"] = features
+
+        # Add predicted features to result if available
+        if predicted_features is not None:
+            result["predicted_features"] = predicted_features
+            if "prediction_martingales" in result:
+                result["prediction_martingales_sum"] = result.pop(
+                    "prediction_martingales"
+                )
+                if self.method == "multiview":
+                    # Calculate average martingales for predictions
+                    result["prediction_martingales_avg"] = [
+                        sum(m) / len(m) for m in result["prediction_martingales_sum"]
+                    ]
 
         return result
