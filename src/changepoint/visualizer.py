@@ -46,12 +46,14 @@ class VisualizationConfig:
         """Initialize default colors if not provided."""
         if self.colors is None:
             self.colors = {
-                "actual": "blue",
-                "predicted": "orange",
-                "average": "#2ecc71",
-                "pred_avg": "#9b59b6",
-                "threshold": "#FF7F7F",
-                "change_point": "red",
+                "actual": "#1f77b4",  # Blue
+                "predicted": "#ff7f0e",  # Orange
+                "average": "#2ecc71",  # Green
+                "pred_avg": "#9b59b6",  # Purple
+                "threshold": "#FF7F7F",  # Light red
+                "change_point": "#e74c3c",  # Red
+                "feature": "#3498db",  # Light blue
+                "pred_feature": "#e67e22",  # Dark orange
             }
 
 
@@ -125,33 +127,50 @@ class MartingaleVisualizer:
     def _process_martingales(
         self, martingales: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
-        """Process martingales to ensure consistent format.
-
-        Handles both single-view and multiview results from the pipeline.
-        For single-view: only combined martingale is available
-        For multiview: both combined and feature-specific martingales are available
-        """
-        # Check if this is pipeline output (has features_raw and features_numeric)
+        """Process martingales to ensure consistent format."""
+        # Check if this is pipeline output
         if "features_raw" in martingales.get("combined", {}):
-            # This is pipeline output, create feature-wise structure
             processed = {}
             combined_result = martingales["combined"]
-            features_numeric = combined_result["features_numeric"]
 
             # Process combined results based on whether it's single-view or multiview
             is_multiview = combined_result.get("martingales_sum") is not None
 
             if is_multiview:
-                # Multiview case: use sum and avg martingales
+                # Multiview case
                 processed["combined"] = {
-                    "martingales": combined_result["martingales"],  # This is the sum
-                    "p_values": combined_result["p_values"],
-                    "strangeness": combined_result["strangeness"],
-                    "martingale_sum": combined_result["martingales_sum"],
-                    "martingale_avg": combined_result["martingales_avg"],
+                    "martingales": combined_result.get(
+                        "martingales_sum"
+                    ),  # Use sum as main martingale
+                    "martingales_sum": combined_result.get("martingales_sum"),
+                    "martingales_avg": combined_result.get("martingales_avg"),
+                    "p_values": combined_result.get("p_values"),
+                    "strangeness": combined_result.get("strangeness"),
                 }
 
-                # Extract individual feature results from multiview result
+                # Add prediction martingales if available
+                if "prediction_martingale_sum" in combined_result:
+                    processed["combined"].update(
+                        {
+                            "prediction_martingales": combined_result[
+                                "prediction_martingale_sum"
+                            ],  # Use sum as main prediction
+                            "prediction_martingale_sum": combined_result[
+                                "prediction_martingale_sum"
+                            ],
+                            "prediction_martingale_avg": combined_result[
+                                "prediction_martingale_avg"
+                            ],
+                            "prediction_pvalues": combined_result.get(
+                                "prediction_pvalues"
+                            ),
+                            "prediction_strangeness": combined_result.get(
+                                "prediction_strangeness"
+                            ),
+                        }
+                    )
+
+                # Extract individual feature results
                 features = [
                     "degree",
                     "density",
@@ -164,8 +183,8 @@ class MartingaleVisualizer:
                 ]
 
                 for i, feature in enumerate(features):
-                    if i < len(combined_result["individual_martingales"]):
-                        processed[feature] = {
+                    if i < len(combined_result.get("individual_martingales", [])):
+                        feature_dict = {
                             "martingales": combined_result["individual_martingales"][i],
                             "p_values": (
                                 combined_result["p_values"][i]
@@ -178,15 +197,67 @@ class MartingaleVisualizer:
                                 else None
                             ),
                         }
+
+                        # Add prediction martingales for this feature if available
+                        if "prediction_individual_martingales" in combined_result:
+                            pred_martingales = combined_result[
+                                "prediction_individual_martingales"
+                            ]
+                            # In multiview case, prediction_individual_martingales is a list of arrays
+                            # with num_features * num_horizons elements
+                            num_horizons = len(pred_martingales) // len(features)
+                            feature_start_idx = i * num_horizons
+                            feature_end_idx = (i + 1) * num_horizons
+
+                            # Get all horizon predictions for this feature and sum them
+                            if feature_start_idx < len(pred_martingales):
+                                feature_predictions = pred_martingales[
+                                    feature_start_idx:feature_end_idx
+                                ]
+                                if len(feature_predictions) > 0:
+                                    # Sum across horizons to get final prediction martingale for this feature
+                                    feature_dict["prediction_martingales"] = (
+                                        np.sum(feature_predictions, axis=0)
+                                        if len(feature_predictions) > 0
+                                        else None
+                                    )
+                                    feature_dict["prediction_pvalues"] = (
+                                        combined_result.get(
+                                            "prediction_pvalues", [None] * len(features)
+                                        )[i]
+                                    )
+                                    feature_dict["prediction_strangeness"] = (
+                                        combined_result.get(
+                                            "prediction_strangeness",
+                                            [None] * len(features),
+                                        )[i]
+                                    )
+
+                        processed[feature] = feature_dict
+
             else:
-                # Single-view case: only combined martingale
+                # Single-view case
                 processed["combined"] = {
                     "martingales": combined_result["martingales"],
                     "p_values": combined_result["p_values"],
                     "strangeness": combined_result["strangeness"],
-                    "martingale_sum": None,
-                    "martingale_avg": None,
                 }
+
+                # Add prediction martingales if available
+                if "prediction_martingale_sum" in combined_result:
+                    processed["combined"].update(
+                        {
+                            "prediction_martingales": combined_result[
+                                "prediction_martingale_sum"
+                            ],
+                            "prediction_pvalues": combined_result.get(
+                                "prediction_pvalues"
+                            ),
+                            "prediction_strangeness": combined_result.get(
+                                "prediction_strangeness"
+                            ),
+                        }
+                    )
 
             return processed
 
@@ -198,7 +269,7 @@ class MartingaleVisualizer:
         self._plot_combined_martingales()
 
         # Only create feature plots for multiview results
-        is_multiview = self.martingales["combined"].get("martingale_sum") is not None
+        is_multiview = self.martingales["combined"].get("martingales_sum") is not None
         if is_multiview and len(self.martingales) > 1:
             self._plot_feature_martingales()
             self._plot_overlaid_martingales()
@@ -212,7 +283,7 @@ class MartingaleVisualizer:
             self._plot_shap_values()
 
     def _plot_feature_martingales(self) -> None:
-        """Create grid of individual feature martingale plots."""
+        """Create grid of individual feature martingale plots, including both traditional and prediction."""
         fig = plt.figure(
             figsize=(
                 self.vis_config.double_column_width,
@@ -244,60 +315,108 @@ class MartingaleVisualizer:
 
             if feature in self.martingales:
                 results = self.martingales[feature]
-                martingale_values = np.array(
-                    [
-                        x.item() if isinstance(x, np.ndarray) else x
-                        for x in results["martingales"]
-                    ]
-                )
 
-                ax.plot(
-                    martingale_values,
-                    color=self.vis_config.colors["actual"],
-                    linewidth=self.vis_config.line_width,
-                    alpha=self.vis_config.line_alpha,
-                    label="Mart.",
-                )
-
-                # Dynamic y-axis range based on actual martingale values
-                max_mart = np.max(martingale_values)
-                if max_mart < 0.1:  # Very small values
-                    y_max = max(max_mart * 5, 0.1)
-                    n_ticks = 4
-                elif max_mart < 1:  # Small values
-                    y_max = max(max_mart * 2, 1)
-                    n_ticks = 5
-                elif max_mart < 10:  # Medium values
-                    y_max = max(max_mart * 1.5, 5)
-                    n_ticks = 6
-                else:  # Large values
-                    y_max = max_mart * 1.2
-                    n_ticks = min(7, int(y_max / 5) + 1)
-
-                # Calculate negative range as a small percentage of y_max
-                y_min = -y_max * 0.05
-
-                # Create ticks including the negative range
-                y_ticks = np.linspace(y_min, y_max, n_ticks)
-
-                ax.set_ylim(y_min, y_max)
-                ax.set_yticks(y_ticks)
-
-                # Format tick labels to avoid scientific notation and limit decimals
-                ax.yaxis.set_major_formatter(
-                    plt.FuncFormatter(
-                        lambda x, p: f"{x:.3f}" if abs(x) < 0.01 else f"{x:.2f}"
+                # Plot traditional martingale if available
+                if "martingales" in results and results["martingales"] is not None:
+                    martingale_values = np.array(
+                        [
+                            x.item() if isinstance(x, np.ndarray) else x
+                            for x in results["martingales"]
+                        ]
                     )
-                )
 
+                    ax.plot(
+                        martingale_values,
+                        color=self.vis_config.colors["actual"],
+                        linewidth=self.vis_config.line_width,
+                        alpha=self.vis_config.line_alpha,
+                        label="Trad. Mart.",
+                    )
+
+                    # Initialize max_mart with traditional martingale values
+                    max_mart = (
+                        np.max(martingale_values) if len(martingale_values) > 0 else 0
+                    )
+
+                    # Plot prediction martingale if available
+                    if (
+                        "prediction_martingales" in results
+                        and results["prediction_martingales"] is not None
+                        and len(results["prediction_martingales"]) > 0
+                    ):
+                        pred_martingale_values = np.array(
+                            [
+                                x.item() if isinstance(x, np.ndarray) else x
+                                for x in results["prediction_martingales"]
+                            ]
+                        )
+
+                        if (
+                            len(pred_martingale_values) > 0
+                        ):  # Double check array is not empty
+                            ax.plot(
+                                pred_martingale_values,
+                                color=self.vis_config.colors["predicted"],
+                                linewidth=self.vis_config.line_width,
+                                linestyle="--",
+                                alpha=self.vis_config.line_alpha,
+                                label="Pred. Mart.",
+                            )
+
+                            # Update max_mart with prediction values if they exist
+                            pred_max = np.max(pred_martingale_values)
+                            if not np.isnan(pred_max):
+                                max_mart = max(max_mart, pred_max)
+
+                    # Dynamic y-axis range based on both traditional and prediction martingales
+                    if not np.isnan(max_mart):  # Check if max_mart is valid
+                        if max_mart < 0.1:  # Very small values
+                            y_max = max(max_mart * 5, 0.1)
+                            n_ticks = 4
+                        elif max_mart < 1:  # Small values
+                            y_max = max(max_mart * 2, 1)
+                            n_ticks = 5
+                        elif max_mart < 10:  # Medium values
+                            y_max = max(max_mart * 1.5, 5)
+                            n_ticks = 6
+                        else:  # Large values
+                            y_max = max_mart * 1.2
+                            n_ticks = min(7, int(y_max / 5) + 1)
+
+                        # Calculate negative range as a small percentage of y_max
+                        y_min = -y_max * 0.05
+
+                        # Create ticks including the negative range
+                        y_ticks = np.linspace(y_min, y_max, n_ticks)
+
+                        ax.set_ylim(y_min, y_max)
+                        ax.set_yticks(y_ticks)
+
+                        # Format tick labels to avoid scientific notation and limit decimals
+                        ax.yaxis.set_major_formatter(
+                            plt.FuncFormatter(
+                                lambda x, p: f"{x:.3f}" if abs(x) < 0.01 else f"{x:.2f}"
+                            )
+                        )
+
+            # Add change points
             for cp in self.change_points:
                 ax.axvline(
                     x=cp,
                     color=self.vis_config.colors["change_point"],
                     linestyle="--",
-                    alpha=0.3,  # Reduced alpha for less visual clutter
+                    alpha=0.3,
                     linewidth=self.vis_config.grid_width,
                 )
+
+            # Add threshold line
+            ax.axhline(
+                y=self.threshold,
+                color=self.vis_config.colors["threshold"],
+                linestyle="--",
+                alpha=0.3,
+                linewidth=self.vis_config.grid_width,
+            )
 
             ax.set_title(feature.title(), fontsize=self.vis_config.title_size, pad=3)
             ax.set_xlim(0, 200)
@@ -314,7 +433,7 @@ class MartingaleVisualizer:
             if idx == 0:  # Only show legend in first plot
                 ax.legend(
                     fontsize=self.vis_config.legend_size,
-                    ncol=1,
+                    ncol=2,
                     loc="upper right",
                     borderaxespad=0.1,
                     handlelength=1.0,
@@ -326,57 +445,389 @@ class MartingaleVisualizer:
             ax.grid(
                 True,
                 linestyle=":",
-                alpha=self.vis_config.grid_alpha * 0.7,  # Reduced grid alpha
-                linewidth=self.vis_config.grid_width * 0.8,  # Thinner grid lines
+                alpha=self.vis_config.grid_alpha * 0.7,
+                linewidth=self.vis_config.grid_width * 0.8,
             )
 
         plt.tight_layout(pad=0.3)
         self._save_figure("feature_martingales.png")
 
     def _plot_combined_martingales(self) -> None:
-        """Create plot for combined martingales."""
+        """Create plot for combined martingales, including both traditional and prediction."""
         fig = plt.figure(
             figsize=(self.vis_config.double_column_width, self.vis_config.grid_height)
         )
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
-        is_multiview = combined_results.get("martingale_sum") is not None
+        is_multiview = combined_results.get("martingales_sum") is not None
 
         if is_multiview:
-            # Plot both sum and average for multiview
-            sum_martingale = combined_results["martingale_sum"]
-            avg_martingale = combined_results["martingale_avg"]
+            # Plot traditional martingales
+            sum_martingale = combined_results.get("martingales_sum")
+            avg_martingale = combined_results.get("martingales_avg")
 
-            ax.plot(
-                sum_martingale,
-                color=self.vis_config.colors["actual"],
-                label="Sum Mart.",
-                linewidth=self.vis_config.line_width,
-                alpha=self.vis_config.line_alpha,
-                zorder=10,
-            )
+            if sum_martingale is not None:
+                ax.plot(
+                    sum_martingale,
+                    color=self.vis_config.colors["actual"],
+                    label="Sum Mart.",
+                    linewidth=self.vis_config.line_width,
+                    alpha=self.vis_config.line_alpha,
+                    zorder=10,
+                )
 
-            ax.plot(
-                avg_martingale,
-                color=self.vis_config.colors["average"],
-                label="Avg Mart.",
-                linewidth=self.vis_config.line_width,
-                linestyle="--",
-                alpha=self.vis_config.line_alpha,
-                zorder=8,
-            )
+            if avg_martingale is not None:
+                ax.plot(
+                    avg_martingale,
+                    color=self.vis_config.colors["average"],
+                    label="Avg Mart.",
+                    linewidth=self.vis_config.line_width,
+                    linestyle="--",
+                    alpha=self.vis_config.line_alpha,
+                    zorder=8,
+                )
+
+            # Plot prediction martingales if available
+            if "prediction_martingale_sum" in combined_results:
+                pred_sum_martingale = combined_results["prediction_martingale_sum"]
+                pred_avg_martingale = combined_results["prediction_martingale_avg"]
+
+                if pred_sum_martingale is not None:
+                    ax.plot(
+                        pred_sum_martingale,
+                        color=self.vis_config.colors["predicted"],
+                        label="Pred. Sum Mart.",
+                        linewidth=self.vis_config.line_width,
+                        alpha=self.vis_config.line_alpha,
+                        zorder=9,
+                    )
+
+                if pred_avg_martingale is not None:
+                    ax.plot(
+                        pred_avg_martingale,
+                        color=self.vis_config.colors["pred_avg"],
+                        label="Pred. Avg Mart.",
+                        linewidth=self.vis_config.line_width,
+                        linestyle="--",
+                        alpha=self.vis_config.line_alpha,
+                        zorder=7,
+                    )
         else:
             # Plot single martingale for single-view
-            martingale = combined_results["martingales"]
-            ax.plot(
-                martingale,
-                color=self.vis_config.colors["actual"],
-                label="Martingale",
-                linewidth=self.vis_config.line_width,
-                alpha=self.vis_config.line_alpha,
+            martingale = combined_results.get("martingales")
+            if martingale is not None:
+                ax.plot(
+                    martingale,
+                    color=self.vis_config.colors["actual"],
+                    label="Martingale",
+                    linewidth=self.vis_config.line_width,
+                    alpha=self.vis_config.line_alpha,
+                    zorder=10,
+                )
+
+            # Plot prediction martingale if available
+            if "prediction_martingales" in combined_results:
+                pred_martingale = combined_results["prediction_martingales"]
+                if pred_martingale is not None:
+                    ax.plot(
+                        pred_martingale,
+                        color=self.vis_config.colors["predicted"],
+                        label="Pred. Mart.",
+                        linewidth=self.vis_config.line_width,
+                        linestyle="--",
+                        alpha=self.vis_config.line_alpha,
+                        zorder=9,
+                    )
+
+        # Add threshold line
+        ax.axhline(
+            y=self.threshold,
+            color=self.vis_config.colors["threshold"],
+            linestyle="--",
+            alpha=0.7,
+            linewidth=self.vis_config.line_width,
+            label="Threshold",
+            zorder=5,
+        )
+
+        # Add change points and delay annotations
+        for cp in self.change_points:
+            ax.axvline(
+                x=cp,
+                color=self.vis_config.colors["change_point"],
+                linestyle="--",
+                alpha=0.5,
+                linewidth=self.vis_config.grid_width,
+                zorder=4,
+            )
+
+            # Get the relevant martingale sequences for delay calculation
+            mart_seq = combined_results.get(
+                "martingales_sum" if is_multiview else "martingales"
+            )
+            pred_mart_seq = combined_results.get(
+                "prediction_martingale_sum"
+                if is_multiview
+                else "prediction_martingales"
+            )
+
+            # Traditional detection delay
+            if mart_seq is not None:
+                detection_idx = next(
+                    (
+                        i
+                        for i in range(cp, len(mart_seq))
+                        if mart_seq[i] > self.threshold
+                    ),
+                    None,
+                )
+                if detection_idx:
+                    delay = detection_idx - cp
+                    ax.annotate(
+                        f"d:{delay}",
+                        xy=(detection_idx, self.threshold),
+                        xytext=(cp - 10, self.threshold * 1.1),
+                        color=self.vis_config.colors["actual"],
+                        fontsize=self.vis_config.annotation_size,
+                        arrowprops=dict(
+                            arrowstyle="->",
+                            color=self.vis_config.colors["actual"],
+                            alpha=0.8,
+                            linewidth=1.0,
+                            connectionstyle="arc3,rad=-0.2",
+                        ),
+                    )
+
+            # Prediction detection delay
+            if pred_mart_seq is not None:
+                pred_detection_idx = next(
+                    (
+                        i
+                        for i in range(cp, len(pred_mart_seq))
+                        if pred_mart_seq[i] > self.threshold
+                    ),
+                    None,
+                )
+                if pred_detection_idx:
+                    pred_delay = pred_detection_idx - cp
+                    ax.annotate(
+                        f"pd:{pred_delay}",
+                        xy=(pred_detection_idx, self.threshold),
+                        xytext=(cp - 10, self.threshold * 1.3),
+                        color=self.vis_config.colors["predicted"],
+                        fontsize=self.vis_config.annotation_size,
+                        arrowprops=dict(
+                            arrowstyle="->",
+                            color=self.vis_config.colors["predicted"],
+                            alpha=0.8,
+                            linewidth=1.0,
+                            connectionstyle="arc3,rad=0.2",
+                        ),
+                    )
+
+        # Grid settings
+        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
+        ax.grid(
+            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
+        )
+
+        # Axis settings
+        ax.set_xticks(np.arange(0, 201, 50))
+        ax.set_xlim(0, 200)
+
+        # Dynamic y-axis range
+        mart_seq = combined_results.get(
+            "martingales_sum" if is_multiview else "martingales"
+        )
+        pred_mart_seq = combined_results.get(
+            "prediction_martingale_sum" if is_multiview else "prediction_martingales"
+        )
+
+        if mart_seq is not None and len(mart_seq) > 0:
+            max_mart = np.max(mart_seq)
+            if pred_mart_seq is not None and len(pred_mart_seq) > 0:
+                max_mart = max(max_mart, np.max(pred_mart_seq))
+
+            y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
+            ax.set_ylim(-5, y_max)
+            ax.yaxis.set_major_locator(plt.MultipleLocator(50))
+            ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
+
+        # Legend
+        n_cols = 4 if pred_mart_seq is not None else (3 if is_multiview else 2)
+        ax.legend(
+            ncol=n_cols,
+            loc="upper right",
+            bbox_to_anchor=(1.0, 1.02),
+            fontsize=self.vis_config.legend_size,
+            frameon=True,
+            handlelength=1.5,
+            handletextpad=0.5,
+            columnspacing=1.0,
+        )
+
+        # Labels
+        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
+        ax.set_ylabel(
+            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
+        )
+        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
+
+        plt.tight_layout(pad=0.3)
+        self._save_figure("combined_martingales.png")
+
+    def _plot_overlaid_martingales(self) -> None:
+        """Create plot overlaying individual feature martingales with combined martingale.
+        Creates two subplots: one for traditional martingales and one for prediction martingales.
+        """
+        fig = plt.figure(
+            figsize=(
+                self.vis_config.double_column_width,
+                self.vis_config.grid_height * 2,
+            )
+        )
+        gs = GridSpec(2, 1, figure=fig, hspace=0.3)
+
+        feature_names = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
+        ]
+
+        # Use a different color for each feature
+        colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
+
+        # Plot traditional martingales (top subplot)
+        ax1 = fig.add_subplot(gs[0])
+        sum_martingale = None
+
+        for i, feature in enumerate(feature_names):
+            if feature in self.martingales:
+                feature_mart = np.array(self.martingales[feature]["martingales"])
+                if len(feature_mart) > 0:
+                    # Initialize or add to sum_martingale
+                    if sum_martingale is None:
+                        sum_martingale = feature_mart
+                    else:
+                        sum_martingale += feature_mart
+
+                    # Plot individual feature
+                    ax1.plot(
+                        feature_mart,
+                        color=colors[i],
+                        label=f"{feature.replace('_', ' ').title()}",
+                        linewidth=1.0,
+                        alpha=0.3,
+                    )
+
+        # Plot the true sum martingale from combined results
+        combined_sum = self.martingales["combined"].get("martingales_sum")
+        if combined_sum is not None and len(combined_sum) > 0:
+            ax1.plot(
+                combined_sum,
+                color="blue",
+                linestyle="--",
+                label="Combined (Sum)",
+                linewidth=1.5,
+                alpha=0.8,
                 zorder=10,
             )
 
+        # Add threshold and change points to top subplot
+        self._add_threshold_and_changes(ax1, combined_sum)
+        ax1.set_title("Traditional Martingales", fontsize=self.vis_config.title_size)
+
+        # Plot prediction martingales (bottom subplot)
+        ax2 = fig.add_subplot(gs[1])
+        pred_sum_martingale = None
+
+        for i, feature in enumerate(feature_names):
+            if (
+                feature in self.martingales
+                and "prediction_martingales" in self.martingales[feature]
+            ):
+                pred_feature_mart = np.array(
+                    self.martingales[feature]["prediction_martingales"]
+                )
+                if len(pred_feature_mart) > 0:
+                    # Initialize or add to prediction sum_martingale
+                    if pred_sum_martingale is None:
+                        pred_sum_martingale = pred_feature_mart
+                    else:
+                        pred_sum_martingale += pred_feature_mart
+
+                    # Plot individual prediction feature
+                    ax2.plot(
+                        pred_feature_mart,
+                        color=colors[i],
+                        label=f"{feature.replace('_', ' ').title()}",
+                        linewidth=1.0,
+                        alpha=0.3,
+                    )
+
+        # Plot the prediction sum martingale from combined results
+        combined_pred_sum = self.martingales["combined"].get(
+            "prediction_martingale_sum"
+        )
+        if combined_pred_sum is not None and len(combined_pred_sum) > 0:
+            ax2.plot(
+                combined_pred_sum,
+                color="orange",
+                linestyle="--",
+                label="Combined (Sum)",
+                linewidth=1.5,
+                alpha=0.8,
+                zorder=10,
+            )
+
+        # Add threshold and change points to bottom subplot
+        self._add_threshold_and_changes(ax2, combined_pred_sum)
+        ax2.set_title("Prediction Martingales", fontsize=self.vis_config.title_size)
+
+        # Set common parameters for both subplots
+        for ax in [ax1, ax2]:
+            ax.grid(
+                True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha
+            )
+            ax.grid(
+                True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
+            )
+            ax.set_xticks(np.arange(0, 201, 50))
+            ax.set_xlim(0, 200)
+
+            # Create two-column legend with slightly smaller font
+            ax.legend(
+                ncol=2,
+                loc="upper right",
+                bbox_to_anchor=(1.0, 1.02),
+                fontsize=self.vis_config.legend_size * 0.8,
+                frameon=True,
+                handlelength=1.5,
+                handletextpad=0.5,
+                columnspacing=1.0,
+            )
+
+            ax.tick_params(
+                axis="both", which="major", labelsize=self.vis_config.tick_size
+            )
+
+        # Set labels only for bottom subplot
+        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
+        for ax in [ax1, ax2]:
+            ax.set_ylabel(
+                "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
+            )
+
+        plt.tight_layout(pad=0.3)
+        self._save_figure("overlaid_martingales.png")
+
+    def _add_threshold_and_changes(self, ax, martingale_values):
+        """Helper method to add threshold line and change points to a subplot."""
         # Add threshold line
         ax.axhline(
             y=self.threshold,
@@ -399,229 +850,122 @@ class MartingaleVisualizer:
                 zorder=6,
             )
 
-            # Get the relevant martingale sequence for delay calculation
-            mart_seq = (
-                combined_results["martingale_sum"]
-                if is_multiview
-                else combined_results["martingales"]
-            )
-
-            detection_idx = next(
-                (i for i in range(cp, len(mart_seq)) if mart_seq[i] > self.threshold),
-                None,
-            )
-            if detection_idx:
-                delay = detection_idx - cp
-                ax.annotate(
-                    f"d:{delay}",
-                    xy=(detection_idx, self.threshold),
-                    xytext=(cp - 10, self.threshold * 1.1),
-                    color=self.vis_config.colors["actual"],
-                    fontsize=self.vis_config.annotation_size,
-                    arrowprops=dict(
-                        arrowstyle="->",
-                        color=self.vis_config.colors["actual"],
-                        alpha=0.8,
-                        linewidth=1.0,
-                        connectionstyle="arc3,rad=-0.2",
+            if martingale_values is not None and len(martingale_values) > 0:
+                detection_idx = next(
+                    (
+                        i
+                        for i in range(cp, len(martingale_values))
+                        if martingale_values[i] > self.threshold
                     ),
+                    None,
                 )
-
-        # Grid settings
-        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
-        ax.grid(
-            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
-        )
-
-        # Axis settings
-        ax.set_xticks(np.arange(0, 201, 50))
-        ax.set_xlim(0, 200)
-
-        # Dynamic y-axis range
-        mart_seq = (
-            combined_results["martingale_sum"]
-            if is_multiview
-            else combined_results["martingales"]
-        )
-        max_mart = np.max(mart_seq)
-        y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
-        ax.set_ylim(-5, y_max)
-        ax.yaxis.set_major_locator(plt.MultipleLocator(50))
-        ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
-
-        # Legend
-        ax.legend(
-            ncol=3 if is_multiview else 2,
-            loc="upper right",
-            bbox_to_anchor=(1.0, 1.02),
-            fontsize=self.vis_config.legend_size,
-            frameon=True,
-            handlelength=1.5,
-            handletextpad=0.5,
-            columnspacing=1.0,
-        )
-
-        # Labels
-        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
-        ax.set_ylabel(
-            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
-        )
-        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
-
-        plt.tight_layout(pad=0.3)
-        self._save_figure("combined_martingales.png")
-
-    def _plot_overlaid_martingales(self) -> None:
-        """Create plot overlaying individual feature martingales with combined martingale."""
-        fig = plt.figure(
-            figsize=(self.vis_config.double_column_width, self.vis_config.grid_height)
-        )
-        ax = fig.add_subplot(111)
-
-        # Plot individual feature martingales and calculate true sum
-        feature_names = [
-            "degree",
-            "density",
-            "clustering",
-            "betweenness",
-            "eigenvector",
-            "closeness",
-            "singular_value",
-            "laplacian",
-        ]
-
-        # Use a different color for each feature
-        colors = plt.cm.tab10(np.linspace(0, 1, len(feature_names)))
-
-        # Initialize sum martingale array
-        sum_martingale = None
-
-        # First plot individual martingales and calculate true sum
-        for i, feature in enumerate(feature_names):
-            if feature in self.martingales:
-                feature_mart = np.array(self.martingales[feature]["martingales"])
-
-                # Initialize or add to sum_martingale
-                if sum_martingale is None:
-                    sum_martingale = feature_mart
-                else:
-                    sum_martingale += feature_mart
-
-                # Plot individual feature
-                ax.plot(
-                    feature_mart,
-                    color=colors[i],
-                    label=f"{feature.replace('_', ' ').title()}",
-                    linewidth=1.0,
-                    alpha=0.3,  # Reduced alpha for better visibility of combined
-                )
-
-        # Plot the true sum martingale
-        ax.plot(
-            sum_martingale,
-            color="blue",
-            linestyle="--",
-            label="Combined (Sum)",
-            linewidth=1.5,
-            alpha=0.8,
-            zorder=10,
-        )
-
-        # Add threshold line - only relevant for combined martingale
-        ax.axhline(
-            y=self.threshold,
-            color=self.vis_config.colors["threshold"],
-            linestyle="--",
-            alpha=0.7,
-            linewidth=self.vis_config.line_width,
-            label="Threshold (Combined)",
-            zorder=7,
-        )
-
-        # Add true change points
-        for cp in self.change_points:
-            ax.axvline(
-                x=cp,
-                color=self.vis_config.colors["change_point"],
-                linestyle="--",
-                alpha=0.5,
-                linewidth=self.vis_config.grid_width,
-                zorder=6,
-            )
-
-            detection_idx = next(
-                (
-                    i
-                    for i in range(cp, len(sum_martingale))
-                    if sum_martingale[i] > self.threshold
-                ),
-                None,
-            )
-            if detection_idx:
-                delay = detection_idx - cp
-                ax.annotate(
-                    f"d:{delay}",
-                    xy=(detection_idx, self.threshold),
-                    xytext=(cp - 10, self.threshold * 1.1),
-                    color=self.vis_config.colors["actual"],
-                    fontsize=self.vis_config.annotation_size,
-                    arrowprops=dict(
-                        arrowstyle="->",
+                if detection_idx:
+                    delay = detection_idx - cp
+                    ax.annotate(
+                        f"d:{delay}",
+                        xy=(detection_idx, self.threshold),
+                        xytext=(cp - 10, self.threshold * 1.1),
                         color=self.vis_config.colors["actual"],
-                        alpha=0.8,
-                        linewidth=1.0,
-                        connectionstyle="arc3,rad=-0.2",
-                    ),
-                )
+                        fontsize=self.vis_config.annotation_size,
+                        arrowprops=dict(
+                            arrowstyle="->",
+                            color=self.vis_config.colors["actual"],
+                            alpha=0.8,
+                            linewidth=1.0,
+                            connectionstyle="arc3,rad=-0.2",
+                        ),
+                    )
 
-        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
-        ax.grid(
-            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
-        )
-        ax.set_xticks(np.arange(0, 201, 50))
-        ax.set_xlim(0, 200)
-
-        # Set y-axis limits based on the true sum martingale
-        max_mart = np.max(sum_martingale)
-        y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
-        ax.set_ylim(-5, y_max)
-        ax.yaxis.set_major_locator(plt.MultipleLocator(50))
-        ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
-
-        # Create two-column legend with slightly smaller font
-        ax.legend(
-            ncol=2,
-            loc="upper right",
-            bbox_to_anchor=(1.0, 1.02),
-            fontsize=self.vis_config.legend_size * 0.8,
-            frameon=True,
-            handlelength=1.5,
-            handletextpad=0.5,
-            columnspacing=1.0,
-        )
-
-        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
-        ax.set_ylabel(
-            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
-        )
-        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
-
-        plt.tight_layout(pad=0.3)
-        self._save_figure("overlaid_martingales.png")
+        # Set y-axis limits based on martingale values
+        if martingale_values is not None and len(martingale_values) > 0:
+            max_mart = np.max(martingale_values)
+            if not np.isnan(max_mart):
+                y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
+                ax.set_ylim(-5, y_max)
+                ax.yaxis.set_major_locator(plt.MultipleLocator(50))
+                ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
+        else:
+            # Set default y-axis limits if no martingale values
+            ax.set_ylim(-5, self.threshold * 2)
+            ax.yaxis.set_major_locator(plt.MultipleLocator(20))
+            ax.yaxis.set_minor_locator(plt.MultipleLocator(10))
 
     def _plot_shap_values(self) -> None:
-        """Create plot for SHAP values."""
+        """Create plot for SHAP values with two subplots: traditional and prediction."""
         if self.shap_values is None or self.feature_names is None:
             return
 
         fig = plt.figure(
             figsize=(
                 self.vis_config.double_column_width,
-                self.vis_config.grid_height
-                * 0.8,  # Reduced height since we only have one panel
+                self.vis_config.grid_height * 1.6,  # Increased height for two subplots
             )
         )
-        ax = fig.add_subplot(111)
+        gs = GridSpec(2, 1, figure=fig, hspace=0.3)
+
+        # Create color map for available features
+        n_features = len(self.feature_names)
+        colors = plt.cm.tab10(np.linspace(0, 1, n_features))
+
+        # Plot traditional SHAP values (top subplot)
+        ax1 = fig.add_subplot(gs[0])
+        self._plot_shap_subplot(
+            ax1, self.shap_values, self.feature_names, colors, "Traditional SHAP Values"
+        )
+
+        # Plot prediction SHAP values if available (bottom subplot)
+        ax2 = fig.add_subplot(gs[1])
+        if hasattr(self, "prediction_shap_values"):
+            self._plot_shap_subplot(
+                ax2,
+                self.prediction_shap_values,
+                self.feature_names,
+                colors,
+                "Prediction SHAP Values",
+            )
+        else:
+            ax2.text(
+                0.5,
+                0.5,
+                "No prediction SHAP values available",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax2.transAxes,
+                fontsize=self.vis_config.label_size,
+            )
+            ax2.set_title("Prediction SHAP Values", fontsize=self.vis_config.title_size)
+
+        # Set common parameters
+        for ax in [ax1, ax2]:
+            ax.set_xticks(np.arange(0, 201, 50))
+            ax.set_xlim(0, 200)
+            ax.tick_params(
+                axis="both", which="major", labelsize=self.vis_config.tick_size
+            )
+            ax.grid(True, linestyle=":", alpha=self.vis_config.grid_alpha * 0.7)
+
+        # Set labels
+        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size)
+        for ax in [ax1, ax2]:
+            ax.set_ylabel("SHAP Value", fontsize=self.vis_config.label_size)
+
+        plt.tight_layout(pad=0.3)
+        self._save_figure("shap_values.png")
+
+    def _plot_shap_subplot(self, ax, shap_values, feature_names, colors, title):
+        """Helper method to plot SHAP values in a subplot."""
+        if shap_values is None or len(shap_values) == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "No SHAP values available",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax.transAxes,
+                fontsize=self.vis_config.label_size,
+            )
+            ax.set_title(title, fontsize=self.vis_config.title_size)
+            return
 
         # Add vertical "Actual" label
         ax.text(
@@ -635,19 +979,16 @@ class MartingaleVisualizer:
             rotation=90,
         )
 
-        # Create color map for available features
-        n_features = len(self.feature_names)
-        colors = plt.cm.tab10(np.linspace(0, 1, n_features))
-
         # Plot SHAP values for each feature
-        for i, feature in enumerate(self.feature_names):
-            ax.plot(
-                self.shap_values[:, i],
-                label=feature.title(),
-                color=colors[i],
-                linewidth=self.vis_config.line_width,
-                alpha=self.vis_config.line_alpha,
-            )
+        for i, feature in enumerate(feature_names):
+            if i < shap_values.shape[1]:  # Only plot if we have values for this feature
+                ax.plot(
+                    shap_values[:, i],
+                    label=feature.title(),
+                    color=colors[i],
+                    linewidth=self.vis_config.line_width,
+                    alpha=self.vis_config.line_alpha,
+                )
 
         # Add change point markers
         for cp in self.change_points:
@@ -659,42 +1000,25 @@ class MartingaleVisualizer:
                 linewidth=self.vis_config.grid_width,
             )
 
-        ax.set_xticks(np.arange(0, 201, 50))
-        ax.set_xlim(0, 200)
-
         # Dynamic y-axis range with small margin
-        y_vals = self.shap_values
-        y_min, y_max = np.min(y_vals), np.max(y_vals)
-        y_margin = max((y_max - y_min) * 0.1, 0.1)  # At least 0.1 margin
-        ax.set_ylim(y_min - y_margin, y_max + y_margin)
-
-        # Add grid with reduced alpha
-        ax.grid(
-            True,
-            linestyle=":",
-            alpha=self.vis_config.grid_alpha * 0.7,
-            linewidth=self.vis_config.grid_width * 0.8,
-        )
-        ax.tick_params(
-            axis="both",
-            which="major",
-            labelsize=self.vis_config.tick_size,
-            pad=2,
-        )
+        if len(shap_values) > 0:
+            y_min, y_max = np.nanmin(shap_values), np.nanmax(shap_values)
+            if not (np.isnan(y_min) or np.isnan(y_max)):
+                y_margin = max((y_max - y_min) * 0.1, 0.1)  # At least 0.1 margin
+                ax.set_ylim(y_min - y_margin, y_max + y_margin)
 
         # Legend configuration
-        ax.legend(
-            ncol=2,
-            loc="upper right",
-            fontsize=self.vis_config.legend_size,
-            borderaxespad=0.1,
-            handlelength=1.0,
-            columnspacing=0.8,
-        )
+        if len(ax.get_lines()) > 0:  # Only add legend if we have plotted lines
+            ax.legend(
+                ncol=2,
+                loc="upper right",
+                fontsize=self.vis_config.legend_size,
+                borderaxespad=0.1,
+                handlelength=1.0,
+                columnspacing=0.8,
+            )
 
-        ax.set_xlabel("Time", fontsize=self.vis_config.label_size)
-        plt.tight_layout(pad=0.3)
-        self._save_figure("shap_values.png")
+        ax.set_title(title, fontsize=self.vis_config.title_size)
 
     def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""

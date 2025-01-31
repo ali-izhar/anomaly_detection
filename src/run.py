@@ -13,6 +13,10 @@ import logging
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any
+import os
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+import networkx as nx
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
@@ -22,6 +26,8 @@ from src.changepoint.pipeline import MartingalePipeline
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
 from src.predictor.factory import PredictorFactory
+from src.changepoint.visualizer import MartingaleVisualizer
+from src.graph.visualizer import NetworkVisualizer
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -255,7 +261,222 @@ def run_detection(
                 f"Average delay reduction with horizon: {delay_reduction:.2f} time steps"
             )
 
-    # STEP 7: Return Complete Results
+    # STEP 7: Create Visualizations
+    logger.info("\nCreating visualizations...")
+    output_dir = f"examples/{model_name}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Visualize network states at key points
+    viz = NetworkVisualizer()
+    key_points = sorted(
+        list(
+            set(
+                [0]
+                + true_change_points
+                + pipeline_result["change_points"]
+                + [len(graphs) - 1]
+            )
+        )
+    )
+    n_points = len(key_points)
+
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+
+    # Prepare node colors for SBM
+    node_color = None
+    if "stochastic_block_model" in model_name.lower():
+        graph = nx.from_numpy_array(graphs[0])
+        n = graph.number_of_nodes()
+        num_blocks = int(np.sqrt(n))
+        block_sizes = [n // num_blocks] * (num_blocks - 1)
+        block_sizes.append(n - sum(block_sizes))
+        node_color = []
+        for j, size in enumerate(block_sizes):
+            node_color.extend([f"C{j}"] * size)
+
+    for i, time_idx in enumerate(key_points):
+        point_type = (
+            "Initial State"
+            if time_idx == 0
+            else (
+                "Final State"
+                if time_idx == len(graphs) - 1
+                else (
+                    "True Change Point"
+                    if time_idx in true_change_points
+                    else (
+                        "Detected Change Point"
+                        if time_idx in pipeline_result["change_points"]
+                        else "State"
+                    )
+                )
+            )
+        )
+
+        viz.plot_network(
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network {point_type} at t={time_idx}",
+            layout="spring",
+            node_color=node_color,
+        )
+
+        viz.plot_adjacency(
+            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
+        )
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_states.png"),
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+    # 2. Visualize feature evolution
+    features_raw = pipeline_result["features_raw"]
+    detected_change_points = pipeline_result["change_points"]
+
+    fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
+    fig.patch.set_facecolor("white")
+    fig.patch.set_edgecolor("black")
+    fig.patch.set_linewidth(1.0)
+
+    gs = GridSpec(4, 2, figure=fig, hspace=0.4, wspace=0.3)
+
+    feature_names = [
+        "degrees",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_values",
+        "laplacian_eigenvalues",
+    ]
+
+    colors = {
+        "actual": "#1f77b4",  # Blue
+        "change_point": "#FF9999",  # Light red
+        "detected": "#ff7f0e",  # Orange
+    }
+
+    for i, feature_name in enumerate(feature_names):
+        row, col = divmod(i, 2)
+        ax = fig.add_subplot(gs[row, col])
+        time = range(len(features_raw))
+
+        if isinstance(features_raw[0][feature_name], list):
+            mean_values = [
+                np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
+            std_values = [
+                np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
+
+            ax.plot(
+                time,
+                mean_values,
+                color=colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
+            )
+            ax.fill_between(
+                time,
+                np.array(mean_values) - np.array(std_values),
+                np.array(mean_values) + np.array(std_values),
+                color=colors["actual"],
+                alpha=0.1,
+            )
+        else:
+            values = [f[feature_name] for f in features_raw]
+            ax.plot(
+                time,
+                values,
+                color=colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
+            )
+
+        for cp in true_change_points:
+            ax.axvline(
+                x=cp,
+                color=colors["change_point"],
+                linestyle="--",
+                alpha=0.5,
+                linewidth=0.8,
+            )
+
+        for cp in detected_change_points:
+            if isinstance(features_raw[0][feature_name], list):
+                y_val = mean_values[cp]
+            else:
+                y_val = features_raw[cp][feature_name]
+            ax.plot(
+                cp,
+                y_val,
+                "o",
+                color=colors["detected"],
+                markersize=6,
+                alpha=0.8,
+                markeredgewidth=1,
+            )
+
+        ax.set_title(
+            feature_name.replace("_", " ").title(),
+            fontsize=viz.TITLE_SIZE,
+            pad=4,
+        )
+        ax.set_xlabel("Time" if row == 3 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.set_ylabel("Value" if col == 0 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
+        ax.grid(True, alpha=0.15, linewidth=0.5, linestyle=":")
+
+        ax.set_xticks(np.arange(0, len(time), 10))
+        ax.set_xlim(0, len(time))
+
+    plt.suptitle(
+        f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
+        + "True Change Points (Red), Detected Change Points (Orange)",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    plt.tight_layout(pad=0.3)
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_features.png"),
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+        edgecolor="none",
+        pad_inches=0.02,
+    )
+    plt.close()
+
+    # 3. Create martingale visualization
+    martingale_viz = MartingaleVisualizer(
+        martingales={"combined": pipeline_result},
+        change_points=true_change_points,
+        threshold=threshold,
+        epsilon=epsilon,
+        output_dir=output_dir,
+        skip_shap=False,
+    )
+    martingale_viz.create_visualization()
+
+    logger.info(f"Visualizations saved to {output_dir}/")
+
+    # STEP 8: Return Complete Results
     return {
         "true_change_points": true_change_points,
         "model_name": model_name,
