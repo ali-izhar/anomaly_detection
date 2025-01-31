@@ -3,6 +3,7 @@
 from typing import List, Dict, Any, Optional, Union
 import numpy as np
 import networkx as nx
+import logging
 
 from .detector import ChangePointDetector
 from ..graph.features import NetworkFeatureExtractor
@@ -149,6 +150,7 @@ class MartingalePipeline:
         data: Union[np.ndarray, List[np.ndarray], List[nx.Graph]],
         data_type: str = "adjacency",
         predicted_data: Optional[List[List[np.ndarray]]] = None,
+        history_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Run the complete pipeline from raw data to change detection.
 
@@ -162,24 +164,21 @@ class MartingalePipeline:
                 - First level list: predictions made at each timestep
                 - Second level list: multiple predictions for future timesteps
                 Each prediction is an adjacency matrix of same shape as input graphs
+            history_size: Optional history size for horizon martingale computation
 
         Returns:
-            Dict containing:
-                - change_points: List of detected change points
-                - features_raw: Raw feature dictionaries if processing from raw data
-                - features_numeric: Numeric features used for detection
-                - martingales: Martingale values (single view) or sum martingales (multiview)
-                - martingales_sum: Sum of martingales (multiview only, None for single view)
-                - martingales_avg: Average of martingales (multiview only, None for single view)
-                - individual_martingales: Individual feature martingales (multiview only)
-                - p_values: P-values for each point
-                - strangeness: Strangeness values
-                - predicted_features: Features extracted from predicted graphs
-                - prediction_martingales: Martingales computed on predicted features
-
-        Raises:
-            ValueError: If an unknown method or data type is specified.
+            Dict containing detection results and statistics
         """
+        logger = logging.getLogger(__name__)
+        
+        # Debug predicted data
+        if predicted_data is not None:
+            logger.info(f"\nDEBUG: Predicted data received in pipeline:")
+            logger.info(f"- Length of predicted_data: {len(predicted_data)}")
+            if len(predicted_data) > 0:
+                logger.info(f"- Shape of first prediction: {np.array(predicted_data[0]).shape}")
+                logger.info(f"- Number of horizons: {len(predicted_data[0][0])}")
+
         # Process raw data if needed
         if data_type in ["adjacency", "graph"]:
             processed = self.process_raw_data(data, data_type)
@@ -189,26 +188,49 @@ class MartingalePipeline:
             features = data
             features_raw = None
 
+        # Debug features
+        logger.info(f"\nDEBUG: Extracted features:")
+        logger.info(f"- Number of features: {len(features)}")
+        logger.info(f"- Length of each feature: {len(features[0])}")
+
         # Process predicted data if available
         predicted_features = None
         if predicted_data is not None:
-            predicted_features = []
+            # First get features for all predictions
+            predicted_features_raw = []
             for timestep_predictions in predicted_data:
                 # Process each set of predictions for this timestep
                 processed_predictions = self.process_raw_data(
                     timestep_predictions, data_type
                 )
-                predicted_features.append(processed_predictions["features_numeric"])
+                predicted_features_raw.append(processed_predictions["features_numeric"])
+
+            # Now restructure from [timestep][horizon][features] to [feature][timestep][horizon]
+            if predicted_features_raw:
+                num_features = predicted_features_raw[0].shape[1]
+                num_timesteps = len(predicted_features_raw)
+                num_horizons = predicted_features_raw[0].shape[0]
+
+                predicted_features = []
+                for feature_idx in range(num_features):
+                    # Create a 2D array for each feature's predictions
+                    feature_predictions = np.zeros((num_timesteps, num_horizons))
+                    for timestep in range(num_timesteps):
+                        for h in range(num_horizons):
+                            feature_predictions[timestep, h] = predicted_features_raw[timestep][h][feature_idx]
+                    predicted_features.append(feature_predictions)
+
+                # Convert to list of numpy arrays
+                predicted_features = [np.array(feature_pred) for feature_pred in predicted_features]
 
         # Run change detection
         if self.method == "single_view":
             result = self.detector.detect_changes(
                 data=features,
-                predicted_data=(
-                    predicted_features if predicted_features is not None else None
-                ),
+                predicted_data=predicted_features,
                 threshold=self.threshold,
                 epsilon=self.epsilon,
+                history_size=history_size,
                 reset=self.reset,
                 max_window=self.max_window,
                 random_state=self.random_state,
@@ -223,22 +245,16 @@ class MartingalePipeline:
             views = [features[:, i : i + 1] for i in range(features.shape[1])]
 
             # Split predicted features into views if available
-            predicted_views = None
-            if predicted_features is not None:
-                predicted_views = []
-                for timestep_features in predicted_features:
-                    predicted_views.append(
-                        [
-                            timestep_features[:, i : i + 1]
-                            for i in range(timestep_features.shape[1])
-                        ]
-                    )
+            predicted_views = (
+                predicted_features if predicted_features is not None else None
+            )
 
             result = self.detector.detect_changes_multiview(
                 data=views,
                 predicted_data=predicted_views,
                 threshold=self.threshold,
                 epsilon=self.epsilon,
+                history_size=history_size,
                 max_window=self.max_window,
                 max_martingale=self.max_martingale,
                 batch_size=self.batch_size,
@@ -254,6 +270,14 @@ class MartingalePipeline:
                 f"Unknown method: {self.method}. Choose 'single_view' or 'multiview'."
             )
 
+        # Debug detection result
+        logger.info(f"\nDEBUG: Detection result:")
+        logger.info(f"- Has prediction_martingale_sum: {'prediction_martingale_sum' in result}")
+        if 'prediction_martingale_sum' in result:
+            logger.info(f"- Length of prediction_martingale_sum: {len(result['prediction_martingale_sum'])}")
+            logger.info(f"- First few prediction martingale values: {result['prediction_martingale_sum'][:5]}")
+            logger.info(f"- Max prediction martingale value: {np.max(result['prediction_martingale_sum'])}")
+
         # Add processed features to result if available
         if features_raw is not None:
             result["features_raw"] = features_raw
@@ -262,14 +286,10 @@ class MartingalePipeline:
         # Add predicted features to result if available
         if predicted_features is not None:
             result["predicted_features"] = predicted_features
-            if "prediction_martingales" in result:
-                result["prediction_martingales_sum"] = result.pop(
-                    "prediction_martingales"
-                )
+            if "prediction_martingale_sum" in result:
+                result["prediction_martingale_sum"] = result["prediction_martingale_sum"]
                 if self.method == "multiview":
                     # Calculate average martingales for predictions
-                    result["prediction_martingales_avg"] = [
-                        sum(m) / len(m) for m in result["prediction_martingales_sum"]
-                    ]
+                    result["prediction_martingale_avg"] = result["prediction_martingale_avg"]
 
         return result

@@ -26,7 +26,7 @@ from src.predictor.factory import PredictorFactory
 # Setup logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
@@ -132,86 +132,129 @@ def run_detection(
         history_start = max(0, t - predictor.history_size)
         history = [{"adjacency": g} for g in graphs[history_start:t]]
 
-        logger.debug(f"\n=== Timestep t={t} ===")
-        logger.debug(f"Current graph shape: {current.shape}")
-        logger.debug(f"History window: [{history_start}:{t}] (size={len(history)})")
-
         # Make predictions for next h steps
         if t >= predictor.history_size:
             predictions = predictor.predict(history, horizon=prediction_horizon)
             predicted_graphs.append(predictions)
 
-            logger.debug(f"Made predictions at t={t}:")
-            logger.debug(f"- Number of predictions: {len(predictions)}")
-            logger.debug(
-                f"- Each prediction shape: {predictions[0].shape if len(predictions) > 0 else 'N/A'}"
-            )
-            logger.debug(f"- Predicting for timesteps: t+1 to t+{prediction_horizon}")
-            logger.debug(f"- Total predictions so far: {len(predicted_graphs)}")
-
             # Update predictor's state with actual observation
             predictor.update_state({"adjacency": current})
-            logger.debug("Updated predictor state with current observation")
 
-    # Run pipeline with both actual and predicted graphs
+    # Run pipeline with both actual and predicted graphs, passing history_size
     pipeline_result = pipeline.run(
         data=graphs,
         data_type="adjacency",
         predicted_data=predicted_graphs,
+        history_size=predictor.history_size,  # Pass the history size from predictor
     )
 
     # STEP 5: Analyze Results
     logger.info("\nDetection Results:")
     logger.info(f"True change points: {true_change_points}")
-    logger.info(f"Detected change points: {pipeline_result['change_points']}")
+    
+    # Traditional Martingale Results
+    trad_detections = pipeline_result["change_points"]
+    logger.info(f"Traditional detections: {trad_detections}")
+    
+    # Horizon Martingale Results (find points where prediction martingale exceeds threshold)
+    horizon_detections = []
+    if pipeline_result.get("prediction_martingale_sum") is not None:
+        pred_martingale_sum = pipeline_result["prediction_martingale_sum"]
+        logger.info("\nRaw Horizon Martingale Values:")
+        logger.info("Time | Martingale Sum | Exceeds Threshold")
+        logger.info("-" * 50)
+        for t, value in enumerate(pred_martingale_sum):
+            exceeds = "YES" if value > threshold else "no"
+            logger.info(f"{t:4d} | {value:13.2f} | {exceeds}")
+            
+        horizon_detections = [
+            i for i, v in enumerate(pred_martingale_sum) 
+            if v > threshold
+        ]
+        logger.info(f"\nHorizon detections: {horizon_detections}")
 
-    # Print martingale statistics
-    logger.info("\nMartingale Statistics:")
-    logger.info(
-        f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}"
-    )
-    logger.info(
-        f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}"
-    )
-    logger.info(
-        f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}"
-    )
-    logger.info(
-        f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
-    )
+    logger.info("\nTraditional Martingale Statistics:")
+    logger.info(f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}")
+    logger.info(f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}")
+    logger.info(f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}")
+    logger.info(f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}")
 
-    # STEP 6: Calculate Detection Accuracy
-    if true_change_points and pipeline_result["change_points"]:
-        delays = []
-        for true_cp in true_change_points:
-            closest_detection = min(
-                pipeline_result["change_points"], key=lambda x: abs(x - true_cp)
-            )
-            delay = closest_detection - true_cp
-            delays.append(delay)
-            logger.info(
-                f"Change point {true_cp}: detected at {closest_detection} (delay={delay})"
-            )
+    if pipeline_result.get("prediction_martingale_sum") is not None:
+        logger.info("\nHorizon Martingale Statistics:")
+        logger.info(f"- Final sum martingale value: {pipeline_result['prediction_martingale_sum'][-1]:.2f}")
+        logger.info(f"- Final average martingale value: {pipeline_result['prediction_martingale_avg'][-1]:.2f}")
+        logger.info(f"- Maximum sum martingale value: {np.max(pipeline_result['prediction_martingale_sum']):.2f}")
+        logger.info(f"- Maximum average martingale value: {np.max(pipeline_result['prediction_martingale_avg']):.2f}")
 
-        if delays:
-            avg_delay = np.mean(delays)
-            logger.info(f"Average detection delay: {avg_delay:.2f} time steps")
+    # Detection Delays Analysis
+    logger.info("\nDetection Delays Analysis:")
+    logger.info("Change Point | Traditional Detection | Horizon Detection | Trad Delay | Horizon Delay")
+    logger.info("-" * 80)
+    
+    for true_cp in true_change_points:
+        # Find closest traditional detection after true_cp
+        trad_delays = [d - true_cp for d in trad_detections if d >= true_cp]
+        trad_delay = min(trad_delays) if trad_delays else float('inf')
+        trad_detection = true_cp + trad_delay if trad_delay != float('inf') else "Not detected"
+        
+        # Find closest horizon detection after true_cp
+        horizon_detection = "Not detected"
+        horizon_delay = float('inf')
+        if horizon_detections:
+            horizon_delays = [d - true_cp for d in horizon_detections if d >= true_cp]
+            if horizon_delays:
+                horizon_delay = min(horizon_delays)
+                horizon_detection = true_cp + horizon_delay
+        
+        logger.info(f"{true_cp:^11d} | {trad_detection:^20} | {horizon_detection:^16} | "
+                   f"{trad_delay if trad_delay != float('inf') else 'N/A':^10} | "
+                   f"{horizon_delay if horizon_delay != float('inf') else 'N/A':^12}")
+
+    # Average Delays
+    trad_delays = [d - cp for cp in true_change_points for d in trad_detections if d >= cp]
+    if trad_delays:
+        avg_trad_delay = sum(trad_delays) / len(trad_delays)
+        logger.info(f"\nAverage traditional detection delay: {avg_trad_delay:.2f} time steps")
+    
+    horizon_delays = [d - cp for cp in true_change_points for d in horizon_detections if d >= cp]
+    if horizon_delays:
+        avg_horizon_delay = sum(horizon_delays) / len(horizon_delays)
+        logger.info(f"Average horizon detection delay: {avg_horizon_delay:.2f} time steps")
+        if trad_delays:
+            delay_reduction = avg_trad_delay - avg_horizon_delay
+            logger.info(f"Average delay reduction with horizon: {delay_reduction:.2f} time steps")
 
     # STEP 7: Return Complete Results
     return {
         "true_change_points": true_change_points,
-        "detected_changes": pipeline_result["change_points"],
         "model_name": model_name,
         "params": params,
+        # Traditional martingale results
+        "detected_changes": pipeline_result["change_points"],
         "martingales_sum": pipeline_result["martingales_sum"],
         "martingales_avg": pipeline_result["martingales_avg"],
         "individual_martingales": pipeline_result["individual_martingales"],
+        "traditional_delays": trad_delays,
+        "traditional_detection_times": trad_detections,
+        # Prediction martingale results
+        "prediction_martingale_sum": pipeline_result.get("prediction_martingale_sum"),
+        "prediction_martingale_avg": pipeline_result.get("prediction_martingale_avg"),
+        "prediction_individual_martingales": pipeline_result.get(
+            "prediction_individual_martingales"
+        ),
+        "prediction_delays": trad_delays,
+        "prediction_detection_times": trad_detections,
+        # Feature information
         "p_values": pipeline_result["p_values"],
         "strangeness": pipeline_result["strangeness"],
         "features_raw": pipeline_result.get("features_raw"),
         "features_numeric": pipeline_result.get("features_numeric"),
-        "predicted_graphs": predicted_graphs,  # Add predictions to output
-        "predictor_states": predictor.get_state(),  # Add final predictor state
+        # Prediction data
+        "predicted_graphs": predicted_graphs,
+        "predictor_states": predictor.get_state(),
+        # Additional prediction statistics
+        "prediction_pvalues": pipeline_result.get("prediction_pvalues"),
+        "prediction_strangeness": pipeline_result.get("prediction_strangeness"),
     }
 
 

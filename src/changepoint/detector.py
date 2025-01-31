@@ -29,6 +29,7 @@ class ChangePointDetector:
         predicted_data: List[np.ndarray],
         threshold: float,
         epsilon: float,
+        history_size: int,
         reset: bool = False,
         max_window: Optional[int] = None,
         random_state: Optional[int] = None,
@@ -49,6 +50,8 @@ class ChangePointDetector:
             Detection threshold (> 0). If the power martingale exceeds this, we flag a change.
         epsilon : float
             Power martingale sensitivity parameter in (0,1).
+        history_size : int
+            Minimum number of samples required before predictions can be made.
         reset : bool, optional
             If True, reset the martingale and clear history when a change is detected.
         max_window : int, optional
@@ -89,6 +92,7 @@ class ChangePointDetector:
             ),
             threshold=threshold,
             epsilon=epsilon,
+            history_size=history_size,
             reset=reset,
             window_size=max_window,
             random_state=random_state,
@@ -110,6 +114,7 @@ class ChangePointDetector:
         predicted_data: List[List[np.ndarray]],
         threshold: float,
         epsilon: float,
+        history_size: int,
         max_window: Optional[int] = None,
         max_martingale: Optional[float] = None,
         batch_size: Optional[int] = None,
@@ -139,6 +144,8 @@ class ChangePointDetector:
             Detection threshold for sum of martingales.
         epsilon : float
             Sensitivity parameter in (0,1).
+        history_size : int
+            Minimum number of samples required before predictions can be made.
         max_window : int, optional
             Rolling window size for each feature's strangeness history.
         max_martingale : float, optional
@@ -159,8 +166,8 @@ class ChangePointDetector:
               "individual_martingales": List[np.ndarray],
               "p_values": List[List[float]],
               "strangeness": List[List[float]],
-              "prediction_martingales_sum": Optional[np.ndarray],
-              "prediction_martingales_avg": Optional[np.ndarray],
+              "prediction_martingale_sum": Optional[np.ndarray],
+              "prediction_martingale_avg": Optional[np.ndarray],
               "prediction_individual_martingales": Optional[List[np.ndarray]],
               "prediction_p_values": Optional[List[List[float]]],
               "prediction_strangeness": Optional[List[List[float]]]
@@ -183,16 +190,31 @@ class ChangePointDetector:
                 [arr.tolist() for arr in view] for view in predicted_data
             ]
 
+        # Debug inputs
+        logger.info(f"\nDEBUG: Detector inputs:")
+        logger.info(f"- Data shape: {len(data)} features x {len(data[0])} samples")
+        if predicted_data is not None:
+            logger.info(f"- Predicted data length: {len(predicted_data)}")
+            logger.info(f"- History size: {history_size}")
+
         results = multiview_martingale_test(
             data=data_lists,
             predicted_data=predicted_lists,
             threshold=threshold,
             epsilon=epsilon,
+            history_size=history_size,
             window_size=max_window,
             early_stop_threshold=max_martingale,
             batch_size=batch_size,
             random_state=random_state,
         )
+
+        # Debug result
+        logger.info(f"\nDEBUG: Detector result:")
+        logger.info(f"- Keys in result: {list(results.keys())}")
+        if 'prediction_martingale_sum' in results:
+            logger.info(f"- Prediction martingale shape: {results['prediction_martingale_sum'].shape}")
+            logger.info(f"- Max prediction martingale: {np.max(results['prediction_martingale_sum'])}")
 
         return {
             "change_points": results["change_detected_instant"],
@@ -201,8 +223,8 @@ class ChangePointDetector:
             "individual_martingales": results["individual_martingales"],
             "p_values": results["pvalues"],
             "strangeness": results["strangeness"],
-            "prediction_martingales_sum": results.get("prediction_martingale_sum"),
-            "prediction_martingales_avg": results.get("prediction_martingale_avg"),
+            "prediction_martingale_sum": results.get("prediction_martingale_sum"),
+            "prediction_martingale_avg": results.get("prediction_martingale_avg"),
             "prediction_individual_martingales": results.get(
                 "prediction_individual_martingales"
             ),

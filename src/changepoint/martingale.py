@@ -17,6 +17,7 @@ def compute_martingale(
     predicted_data: List[np.ndarray],
     threshold: float,
     epsilon: float,
+    history_size: int,
     reset: bool = True,
     window_size: Optional[int] = None,
     random_state: Optional[int] = None,
@@ -95,6 +96,11 @@ def compute_martingale(
     # Keep track of each observation's strangeness
     saved_strangeness: List[float] = []
 
+    # Initialize prediction-related lists
+    prediction_pvalues: List[List[float]] = []
+    prediction_strangeness: List[List[float]] = []
+    prediction_martingale = [1.0]  # Start with single martingale sequence
+
     try:
         for i, point in enumerate(data):
             # 1. Maintain a rolling window if window_size is set
@@ -151,6 +157,48 @@ def compute_martingale(
                 # If no detection, add the new point to the rolling window
                 window.append(point)
 
+            # Only compute prediction martingales after we have enough history
+            if predicted_data is not None and i >= history_size:
+                pred_idx = i - history_size  # Adjust index for predictions
+                horizon_pvalues = []
+                horizon_strangeness = []
+
+                # Initialize the product of martingale factors
+                pred_martingale_factor = 1.0
+
+                # For each horizon step
+                for h in range(len(predicted_data[pred_idx])):
+                    # Compute strangeness for this horizon's prediction
+                    if len(window) == 0:
+                        pred_strangeness_vals = [0.0]
+                    else:
+                        pred_strangeness_vals = strangeness_point(
+                            window + [[predicted_data[pred_idx][h]]],  # Wrap in extra list
+                            random_state=random_state,
+                        )
+                    current_pred_strg = pred_strangeness_vals[-1]
+                    horizon_strangeness.append(current_pred_strg)
+
+                    # Compute p-value for this horizon's prediction
+                    pred_pvalue = get_pvalue(
+                        pred_strangeness_vals, random_state=random_state
+                    )
+                    horizon_pvalues.append(pred_pvalue)
+
+                    # Multiply by the martingale factor for this horizon
+                    pred_martingale_factor *= epsilon * (pred_pvalue ** (epsilon - 1))
+
+                # Update horizon martingale using product of all martingale factors
+                prev_trad_m = martingale[-1]
+                new_pred_m = prev_trad_m * pred_martingale_factor
+                prediction_martingale.append(new_pred_m)
+
+                prediction_pvalues.append(horizon_pvalues)
+                prediction_strangeness.append(horizon_strangeness)
+            elif predicted_data is not None:
+                # Before we have enough history, just copy the traditional martingale value
+                prediction_martingale.append(martingale[-1])
+
         logger.info(
             f"Martingale computation complete. Found {len(change_points)} change points."
         )
@@ -160,6 +208,17 @@ def compute_martingale(
             "strangeness": saved_strangeness,
             # omit the very first "1.0" if you only want as many martingale values as data points
             "martingales": np.array(saved_martingales[1:], dtype=float),
+            "prediction_martingales": (
+                np.array(prediction_martingale[1:], dtype=float)
+                if predicted_data is not None
+                else None
+            ),
+            "prediction_pvalues": (
+                prediction_pvalues if predicted_data is not None else None
+            ),
+            "prediction_strangeness": (
+                prediction_strangeness if predicted_data is not None else None
+            ),
         }
     except Exception as e:
         logger.error(f"Martingale computation failed: {str(e)}")
@@ -171,6 +230,7 @@ def multiview_martingale_test(
     predicted_data: List[List[np.ndarray]],
     threshold: float,
     epsilon: float,
+    history_size: int,
     window_size: Optional[int] = None,
     early_stop_threshold: Optional[float] = None,
     batch_size: int = 1000,
@@ -254,6 +314,21 @@ def multiview_martingale_test(
     # Store individual martingales for each feature
     individual_martingales = [[1.0] for _ in range(num_features)]
 
+    # Initialize prediction-related structures for each horizon
+    num_horizons = len(predicted_data[0][0]) if predicted_data is not None else 0
+    prediction_windows = [[] for _ in range(num_features)]
+    prediction_martingales = [
+        [1.0] for _ in range(num_features * num_horizons)
+    ]  # One for each feature-horizon pair
+    prediction_pvalues = [
+        [[] for _ in range(num_horizons)] for _ in range(num_features)
+    ]  # [feature][horizon][timestep]
+    prediction_strangeness = [
+        [[] for _ in range(num_horizons)] for _ in range(num_features)
+    ]
+    prediction_martingale_sum = [float(num_features)]
+    prediction_martingale_avg = [1.0]
+
     # Helper loop to go through data in batches
     idx = 0
     while idx < num_samples:
@@ -270,6 +345,10 @@ def multiview_martingale_test(
                     # No history => strangeness is [0]
                     svals = [0.0]
                 else:
+                    logger.info(f"Traditional martingale data at t={i}:")
+                    logger.info(f"Window for feature {j}: {windows[j]}")
+                    logger.info(f"Current point for feature {j}: {data[j][i]}")
+                    logger.info(f"Combined data: {windows[j] + [data[j][i]]}")
                     svals = strangeness_point(
                         windows[j] + [data[j][i]], random_state=random_state
                     )
@@ -325,16 +404,85 @@ def multiview_martingale_test(
             if early_stop_threshold and total_m > early_stop_threshold:
                 logger.info(f"Early stopping at time {i} with M_total={total_m:.4f}")
                 break
+
+            # Only compute prediction martingales after we have enough history
+            if predicted_data is not None and i >= history_size:
+                pred_idx = i - history_size
+                new_pred_martingales = []
+                for j in range(num_features):
+                    pred_martingale_factor = 1.0
+
+                    for h in range(num_horizons):
+                        logger.info(f"\nHorizon martingale data at t={i}, horizon={h}:")
+                        logger.info(f"Window for feature {j}: {windows[j]}")
+                        logger.info(f"Predicted data shape: {np.array(predicted_data[j]).shape}")
+                        logger.info(f"Predicted value: {predicted_data[j][pred_idx][h]}")
+                        logger.info(f"Combined data: {windows[j] + [predicted_data[j][pred_idx][h]]}")
+                        
+                        if len(windows[j]) == 0:
+                            pred_svals = [0.0]
+                        else:
+                            pred_svals = strangeness_point(
+                                windows[j] + [[predicted_data[j][pred_idx][h]]],  # Wrap in extra list
+                                random_state=random_state,
+                            )
+
+                        current_pred_strg = pred_svals[-1]
+                        prediction_strangeness[j][h].append(current_pred_strg)
+
+                        # p-value for predictions
+                        pred_pv = get_pvalue(pred_svals, random_state=random_state)
+                        prediction_pvalues[j][h].append(pred_pv)
+
+                        # Multiply by the martingale factor for this horizon
+                        pred_martingale_factor *= epsilon * (pred_pv ** (epsilon - 1))
+
+                    # Update prediction martingale
+                    prev_trad_m = martingales[j][-1]
+                    new_pred_m = prev_trad_m * pred_martingale_factor
+                    new_pred_martingales.append(new_pred_m)
+
+                # Compute sum and average for predictions
+                pred_total_m = sum(new_pred_martingales)
+                pred_avg_m = pred_total_m / num_features
+            else:
+                # Before we have enough history, copy traditional martingale values
+                pred_total_m = total_m
+                pred_avg_m = avg_m
+
+            prediction_martingale_sum.append(pred_total_m)
+            prediction_martingale_avg.append(pred_avg_m)
         idx = batch_end
 
     return {
         "change_detected_instant": change_points,
         "pvalues": pvalues,
         "strangeness": strangeness_vals,
-        # skip the initial values if you only want (num_samples) length
         "martingale_sum": np.array(martingale_sum[1:], dtype=float),
         "martingale_avg": np.array(martingale_avg[1:], dtype=float),
         "individual_martingales": [
             np.array(m[1:], dtype=float) for m in individual_martingales
         ],
+        # Add prediction results per horizon
+        "prediction_pvalues": (
+            prediction_pvalues if predicted_data is not None else None
+        ),
+        "prediction_strangeness": (
+            prediction_strangeness if predicted_data is not None else None
+        ),
+        "prediction_martingale_sum": (
+            np.array(prediction_martingale_sum[1:], dtype=float)
+            if predicted_data is not None
+            else None
+        ),
+        "prediction_martingale_avg": (
+            np.array(prediction_martingale_avg[1:], dtype=float)
+            if predicted_data is not None
+            else None
+        ),
+        "prediction_individual_martingales": (
+            [np.array(m[1:], dtype=float) for m in prediction_martingales]
+            if predicted_data is not None
+            else None
+        ),
     }
