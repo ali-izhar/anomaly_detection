@@ -173,7 +173,8 @@ def compute_martingale(
                         pred_strangeness_vals = [0.0]
                     else:
                         pred_strangeness_vals = strangeness_point(
-                            window + [[predicted_data[pred_idx][h]]],  # Wrap in extra list
+                            window
+                            + [[predicted_data[pred_idx][h]]],  # Wrap in extra list
                             random_state=random_state,
                         )
                     current_pred_strg = pred_strangeness_vals[-1]
@@ -415,15 +416,24 @@ def multiview_martingale_test(
                     for h in range(num_horizons):
                         logger.info(f"\nHorizon martingale data at t={i}, horizon={h}:")
                         logger.info(f"Window for feature {j}: {windows[j]}")
-                        logger.info(f"Predicted data shape: {np.array(predicted_data[j]).shape}")
-                        logger.info(f"Predicted value: {predicted_data[j][pred_idx][h]}")
-                        logger.info(f"Combined data: {windows[j] + [predicted_data[j][pred_idx][h]]}")
-                        
+                        logger.info(
+                            f"Predicted data shape: {np.array(predicted_data[j]).shape}"
+                        )
+                        logger.info(
+                            f"Predicted value: {predicted_data[j][pred_idx][h]}"
+                        )
+                        logger.info(
+                            f"Combined data: {windows[j] + [predicted_data[j][pred_idx][h]]}"
+                        )
+
                         if len(windows[j]) == 0:
                             pred_svals = [0.0]
                         else:
                             pred_svals = strangeness_point(
-                                windows[j] + [[predicted_data[j][pred_idx][h]]],  # Wrap in extra list
+                                windows[j]
+                                + [
+                                    [predicted_data[j][pred_idx][h]]
+                                ],  # Wrap in extra list
                                 random_state=random_state,
                             )
 

@@ -212,9 +212,13 @@ class ChangePointDetector:
         # Debug result
         logger.info(f"\nDEBUG: Detector result:")
         logger.info(f"- Keys in result: {list(results.keys())}")
-        if 'prediction_martingale_sum' in results:
-            logger.info(f"- Prediction martingale shape: {results['prediction_martingale_sum'].shape}")
-            logger.info(f"- Max prediction martingale: {np.max(results['prediction_martingale_sum'])}")
+        if "prediction_martingale_sum" in results:
+            logger.info(
+                f"- Prediction martingale shape: {results['prediction_martingale_sum'].shape}"
+            )
+            logger.info(
+                f"- Max prediction martingale: {np.max(results['prediction_martingale_sum'])}"
+            )
 
         return {
             "change_points": results["change_detected_instant"],

@@ -151,11 +151,11 @@ def run_detection(
     # STEP 5: Analyze Results
     logger.info("\nDetection Results:")
     logger.info(f"True change points: {true_change_points}")
-    
+
     # Traditional Martingale Results
     trad_detections = pipeline_result["change_points"]
     logger.info(f"Traditional detections: {trad_detections}")
-    
+
     # Horizon Martingale Results (find points where prediction martingale exceeds threshold)
     horizon_detections = []
     if pipeline_result.get("prediction_martingale_sum") is not None:
@@ -166,63 +166,94 @@ def run_detection(
         for t, value in enumerate(pred_martingale_sum):
             exceeds = "YES" if value > threshold else "no"
             logger.info(f"{t:4d} | {value:13.2f} | {exceeds}")
-            
+
         horizon_detections = [
-            i for i, v in enumerate(pred_martingale_sum) 
-            if v > threshold
+            i for i, v in enumerate(pred_martingale_sum) if v > threshold
         ]
         logger.info(f"\nHorizon detections: {horizon_detections}")
 
     logger.info("\nTraditional Martingale Statistics:")
-    logger.info(f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}")
-    logger.info(f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}")
-    logger.info(f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}")
-    logger.info(f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}")
+    logger.info(
+        f"- Final sum martingale value: {pipeline_result['martingales_sum'][-1]:.2f}"
+    )
+    logger.info(
+        f"- Final average martingale value: {pipeline_result['martingales_avg'][-1]:.2f}"
+    )
+    logger.info(
+        f"- Maximum sum martingale value: {np.max(pipeline_result['martingales_sum']):.2f}"
+    )
+    logger.info(
+        f"- Maximum average martingale value: {np.max(pipeline_result['martingales_avg']):.2f}"
+    )
 
     if pipeline_result.get("prediction_martingale_sum") is not None:
         logger.info("\nHorizon Martingale Statistics:")
-        logger.info(f"- Final sum martingale value: {pipeline_result['prediction_martingale_sum'][-1]:.2f}")
-        logger.info(f"- Final average martingale value: {pipeline_result['prediction_martingale_avg'][-1]:.2f}")
-        logger.info(f"- Maximum sum martingale value: {np.max(pipeline_result['prediction_martingale_sum']):.2f}")
-        logger.info(f"- Maximum average martingale value: {np.max(pipeline_result['prediction_martingale_avg']):.2f}")
+        logger.info(
+            f"- Final sum martingale value: {pipeline_result['prediction_martingale_sum'][-1]:.2f}"
+        )
+        logger.info(
+            f"- Final average martingale value: {pipeline_result['prediction_martingale_avg'][-1]:.2f}"
+        )
+        logger.info(
+            f"- Maximum sum martingale value: {np.max(pipeline_result['prediction_martingale_sum']):.2f}"
+        )
+        logger.info(
+            f"- Maximum average martingale value: {np.max(pipeline_result['prediction_martingale_avg']):.2f}"
+        )
 
     # Detection Delays Analysis
     logger.info("\nDetection Delays Analysis:")
-    logger.info("Change Point | Traditional Detection | Horizon Detection | Trad Delay | Horizon Delay")
+    logger.info(
+        "Change Point | Traditional Detection | Horizon Detection | Trad Delay | Horizon Delay"
+    )
     logger.info("-" * 80)
-    
+
     for true_cp in true_change_points:
         # Find closest traditional detection after true_cp
         trad_delays = [d - true_cp for d in trad_detections if d >= true_cp]
-        trad_delay = min(trad_delays) if trad_delays else float('inf')
-        trad_detection = true_cp + trad_delay if trad_delay != float('inf') else "Not detected"
-        
+        trad_delay = min(trad_delays) if trad_delays else float("inf")
+        trad_detection = (
+            true_cp + trad_delay if trad_delay != float("inf") else "Not detected"
+        )
+
         # Find closest horizon detection after true_cp
         horizon_detection = "Not detected"
-        horizon_delay = float('inf')
+        horizon_delay = float("inf")
         if horizon_detections:
             horizon_delays = [d - true_cp for d in horizon_detections if d >= true_cp]
             if horizon_delays:
                 horizon_delay = min(horizon_delays)
                 horizon_detection = true_cp + horizon_delay
-        
-        logger.info(f"{true_cp:^11d} | {trad_detection:^20} | {horizon_detection:^16} | "
-                   f"{trad_delay if trad_delay != float('inf') else 'N/A':^10} | "
-                   f"{horizon_delay if horizon_delay != float('inf') else 'N/A':^12}")
+
+        logger.info(
+            f"{true_cp:^11d} | {trad_detection:^20} | {horizon_detection:^16} | "
+            f"{trad_delay if trad_delay != float('inf') else 'N/A':^10} | "
+            f"{horizon_delay if horizon_delay != float('inf') else 'N/A':^12}"
+        )
 
     # Average Delays
-    trad_delays = [d - cp for cp in true_change_points for d in trad_detections if d >= cp]
+    trad_delays = [
+        d - cp for cp in true_change_points for d in trad_detections if d >= cp
+    ]
     if trad_delays:
         avg_trad_delay = sum(trad_delays) / len(trad_delays)
-        logger.info(f"\nAverage traditional detection delay: {avg_trad_delay:.2f} time steps")
-    
-    horizon_delays = [d - cp for cp in true_change_points for d in horizon_detections if d >= cp]
+        logger.info(
+            f"\nAverage traditional detection delay: {avg_trad_delay:.2f} time steps"
+        )
+
+    horizon_delays = [
+        d - cp for cp in true_change_points for d in horizon_detections if d >= cp
+    ]
     if horizon_delays:
         avg_horizon_delay = sum(horizon_delays) / len(horizon_delays)
-        logger.info(f"Average horizon detection delay: {avg_horizon_delay:.2f} time steps")
+        logger.info(
+            f"Average horizon detection delay: {avg_horizon_delay:.2f} time steps"
+        )
         if trad_delays:
             delay_reduction = avg_trad_delay - avg_horizon_delay
-            logger.info(f"Average delay reduction with horizon: {delay_reduction:.2f} time steps")
+            logger.info(
+                f"Average delay reduction with horizon: {delay_reduction:.2f} time steps"
+            )
 
     # STEP 7: Return Complete Results
     return {

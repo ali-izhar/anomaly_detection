@@ -170,13 +170,15 @@ class MartingalePipeline:
             Dict containing detection results and statistics
         """
         logger = logging.getLogger(__name__)
-        
+
         # Debug predicted data
         if predicted_data is not None:
             logger.info(f"\nDEBUG: Predicted data received in pipeline:")
             logger.info(f"- Length of predicted_data: {len(predicted_data)}")
             if len(predicted_data) > 0:
-                logger.info(f"- Shape of first prediction: {np.array(predicted_data[0]).shape}")
+                logger.info(
+                    f"- Shape of first prediction: {np.array(predicted_data[0]).shape}"
+                )
                 logger.info(f"- Number of horizons: {len(predicted_data[0][0])}")
 
         # Process raw data if needed
@@ -217,11 +219,15 @@ class MartingalePipeline:
                     feature_predictions = np.zeros((num_timesteps, num_horizons))
                     for timestep in range(num_timesteps):
                         for h in range(num_horizons):
-                            feature_predictions[timestep, h] = predicted_features_raw[timestep][h][feature_idx]
+                            feature_predictions[timestep, h] = predicted_features_raw[
+                                timestep
+                            ][h][feature_idx]
                     predicted_features.append(feature_predictions)
 
                 # Convert to list of numpy arrays
-                predicted_features = [np.array(feature_pred) for feature_pred in predicted_features]
+                predicted_features = [
+                    np.array(feature_pred) for feature_pred in predicted_features
+                ]
 
         # Run change detection
         if self.method == "single_view":
@@ -272,11 +278,19 @@ class MartingalePipeline:
 
         # Debug detection result
         logger.info(f"\nDEBUG: Detection result:")
-        logger.info(f"- Has prediction_martingale_sum: {'prediction_martingale_sum' in result}")
-        if 'prediction_martingale_sum' in result:
-            logger.info(f"- Length of prediction_martingale_sum: {len(result['prediction_martingale_sum'])}")
-            logger.info(f"- First few prediction martingale values: {result['prediction_martingale_sum'][:5]}")
-            logger.info(f"- Max prediction martingale value: {np.max(result['prediction_martingale_sum'])}")
+        logger.info(
+            f"- Has prediction_martingale_sum: {'prediction_martingale_sum' in result}"
+        )
+        if "prediction_martingale_sum" in result:
+            logger.info(
+                f"- Length of prediction_martingale_sum: {len(result['prediction_martingale_sum'])}"
+            )
+            logger.info(
+                f"- First few prediction martingale values: {result['prediction_martingale_sum'][:5]}"
+            )
+            logger.info(
+                f"- Max prediction martingale value: {np.max(result['prediction_martingale_sum'])}"
+            )
 
         # Add processed features to result if available
         if features_raw is not None:
@@ -287,9 +301,13 @@ class MartingalePipeline:
         if predicted_features is not None:
             result["predicted_features"] = predicted_features
             if "prediction_martingale_sum" in result:
-                result["prediction_martingale_sum"] = result["prediction_martingale_sum"]
+                result["prediction_martingale_sum"] = result[
+                    "prediction_martingale_sum"
+                ]
                 if self.method == "multiview":
                     # Calculate average martingales for predictions
-                    result["prediction_martingale_avg"] = result["prediction_martingale_avg"]
+                    result["prediction_martingale_avg"] = result[
+                        "prediction_martingale_avg"
+                    ]
 
         return result
