@@ -544,6 +544,10 @@ def multiview_martingale_test(
                     new_pred_m = prev_trad_m * pred_martingale_factor
                     new_pred_martingales.append(new_pred_m)
 
+                    # Store the individual prediction martingale
+                    feature_horizon_idx = j * num_horizons + h
+                    prediction_martingales[feature_horizon_idx].append(new_pred_m)
+
                 pred_total_m = sum(new_pred_martingales)
                 pred_avg_m = pred_total_m / num_features
 

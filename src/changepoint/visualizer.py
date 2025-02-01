@@ -69,6 +69,7 @@ class MartingaleVisualizer:
         output_dir: str = "results",
         prefix: str = "",
         skip_shap: bool = False,
+        method: str = "multiview",
     ):
         """Initialize the visualizer.
 
@@ -80,6 +81,7 @@ class MartingaleVisualizer:
             output_dir: Directory to save visualizations
             prefix: Prefix for output filenames
             skip_shap: Whether to skip SHAP value computation
+            method: Detection method ('single_view' or 'multiview')
         """
         # Set basic parameters first
         self.threshold = threshold
@@ -87,6 +89,7 @@ class MartingaleVisualizer:
         self.change_points = change_points
         self.output_dir = Path(output_dir)
         self.prefix = prefix
+        self.method = method
         self.vis_config = VisualizationConfig()
 
         # Process martingales after parameters are set
@@ -134,17 +137,17 @@ class MartingaleVisualizer:
             combined_result = martingales["combined"]
 
             # Process combined results based on whether it's single-view or multiview
-            is_multiview = combined_result.get("martingales_sum") is not None
+            is_multiview = self.method == "multiview"
 
             if is_multiview:
                 # Multiview case
                 processed["combined"] = {
                     "martingales": combined_result.get(
-                        "martingales_sum"
+                        "martingale_sum"
                     ),  # Use sum as main martingale
-                    "martingales_sum": combined_result.get("martingales_sum"),
-                    "martingales_avg": combined_result.get("martingales_avg"),
-                    "p_values": combined_result.get("p_values"),
+                    "martingales_sum": combined_result.get("martingale_sum"),
+                    "martingales_avg": combined_result.get("martingale_avg"),
+                    "pvalues": combined_result.get("pvalues"),  # Fixed key name
                     "strangeness": combined_result.get("strangeness"),
                 }
 
@@ -182,44 +185,62 @@ class MartingaleVisualizer:
                     "laplacian",
                 ]
 
+                # Get individual martingales and prediction martingales
+                individual_martingales = combined_result.get(
+                    "individual_martingales", []
+                )
+                prediction_individual_martingales = combined_result.get(
+                    "prediction_individual_martingales", []
+                )
+                num_horizons = (
+                    len(prediction_individual_martingales) // len(features)
+                    if prediction_individual_martingales
+                    else 0
+                )
+
                 for i, feature in enumerate(features):
-                    if i < len(combined_result.get("individual_martingales", [])):
+                    if i < len(individual_martingales):
                         feature_dict = {
-                            "martingales": combined_result["individual_martingales"][i],
-                            "p_values": (
-                                combined_result["p_values"][i]
-                                if isinstance(combined_result["p_values"], list)
-                                else None
-                            ),
-                            "strangeness": (
-                                combined_result["strangeness"][i]
-                                if isinstance(combined_result["strangeness"], list)
-                                else None
-                            ),
+                            "martingales": individual_martingales[i],
+                            "pvalues": combined_result.get(
+                                "pvalues", [None] * len(features)
+                            )[i],
+                            "strangeness": combined_result.get(
+                                "strangeness", [None] * len(features)
+                            )[i],
                         }
 
-                        # Add prediction martingales for this feature if available
-                        if "prediction_individual_martingales" in combined_result:
-                            pred_martingales = combined_result[
-                                "prediction_individual_martingales"
-                            ]
-                            # In multiview case, prediction_individual_martingales is a list of arrays
-                            # with num_features * num_horizons elements
-                            num_horizons = len(pred_martingales) // len(features)
+                        # Add prediction martingales for this feature
+                        if prediction_individual_martingales and num_horizons > 0:
                             feature_start_idx = i * num_horizons
                             feature_end_idx = (i + 1) * num_horizons
 
-                            # Get all horizon predictions for this feature and sum them
-                            if feature_start_idx < len(pred_martingales):
-                                feature_predictions = pred_martingales[
+                            if feature_start_idx < len(
+                                prediction_individual_martingales
+                            ):
+                                # Get all horizon predictions for this feature
+                                feature_predictions = prediction_individual_martingales[
                                     feature_start_idx:feature_end_idx
                                 ]
-                                if len(feature_predictions) > 0:
-                                    # Sum across horizons to get final prediction martingale for this feature
+                                if feature_predictions and any(
+                                    len(m) > 0 for m in feature_predictions
+                                ):
+                                    # Store each horizon's predictions separately
+                                    feature_dict["prediction_martingales_horizons"] = (
+                                        feature_predictions
+                                    )
+                                    # Also store the sum for backward compatibility
                                     feature_dict["prediction_martingales"] = (
-                                        np.sum(feature_predictions, axis=0)
-                                        if len(feature_predictions) > 0
-                                        else None
+                                        np.sum(
+                                            [
+                                                np.array(m)
+                                                for m in feature_predictions
+                                                if len(m) > 0
+                                            ],
+                                            axis=0,
+                                        )
+                                        if feature_predictions
+                                        else []
                                     )
                                     feature_dict["prediction_pvalues"] = (
                                         combined_result.get(
@@ -235,26 +256,26 @@ class MartingaleVisualizer:
 
                         processed[feature] = feature_dict
 
-            else:
+            else:  # single_view
                 # Single-view case
                 processed["combined"] = {
-                    "martingales": combined_result["martingales"],
-                    "p_values": combined_result["p_values"],
-                    "strangeness": combined_result["strangeness"],
+                    "martingales": combined_result.get("martingales", []),
+                    "pvalues": combined_result.get("pvalues", []),  # Fixed key name
+                    "strangeness": combined_result.get("strangeness", []),
                 }
 
                 # Add prediction martingales if available
-                if "prediction_martingale_sum" in combined_result:
+                if "prediction_martingales" in combined_result:
                     processed["combined"].update(
                         {
                             "prediction_martingales": combined_result[
-                                "prediction_martingale_sum"
+                                "prediction_martingales"
                             ],
                             "prediction_pvalues": combined_result.get(
-                                "prediction_pvalues"
+                                "prediction_pvalues", []
                             ),
                             "prediction_strangeness": combined_result.get(
-                                "prediction_strangeness"
+                                "prediction_strangeness", []
                             ),
                         }
                     )
@@ -309,14 +330,14 @@ class MartingaleVisualizer:
             "laplacian",
         ]
 
-        for idx, feature in enumerate(main_features):
-            row, col = divmod(idx, 2)
-            ax = fig.add_subplot(gs[row, col])
+        max_mart_global = 0  # Track global maximum for consistent y-axis
 
+        # First pass to find global maximum
+        for feature in main_features:
             if feature in self.martingales:
                 results = self.martingales[feature]
 
-                # Plot traditional martingale if available
+                # Check traditional martingales
                 if "martingales" in results and results["martingales"] is not None:
                     martingale_values = np.array(
                         [
@@ -324,99 +345,141 @@ class MartingaleVisualizer:
                             for x in results["martingales"]
                         ]
                     )
+                    if len(martingale_values) > 0:
+                        max_mart_global = max(
+                            max_mart_global, np.max(martingale_values)
+                        )
 
-                    ax.plot(
-                        martingale_values,
-                        color=self.vis_config.colors["actual"],
-                        linewidth=self.vis_config.line_width,
-                        alpha=self.vis_config.line_alpha,
-                        label="Trad. Mart.",
-                    )
-
-                    # Initialize max_mart with traditional martingale values
-                    max_mart = (
-                        np.max(martingale_values) if len(martingale_values) > 0 else 0
-                    )
-
-                    # Plot prediction martingale if available
-                    if (
-                        "prediction_martingales" in results
-                        and results["prediction_martingales"] is not None
-                        and len(results["prediction_martingales"]) > 0
-                    ):
-                        pred_martingale_values = np.array(
+                # Check prediction martingales (both summed and individual horizons)
+                if (
+                    "prediction_martingales_horizons" in results
+                    and results["prediction_martingales_horizons"] is not None
+                ):
+                    for horizon_pred in results["prediction_martingales_horizons"]:
+                        pred_values = np.array(
                             [
                                 x.item() if isinstance(x, np.ndarray) else x
-                                for x in results["prediction_martingales"]
+                                for x in horizon_pred
                             ]
                         )
+                        if len(pred_values) > 0:
+                            max_mart_global = max(max_mart_global, np.max(pred_values))
 
-                        if (
-                            len(pred_martingale_values) > 0
-                        ):  # Double check array is not empty
-                            ax.plot(
-                                pred_martingale_values,
-                                color=self.vis_config.colors["predicted"],
-                                linewidth=self.vis_config.line_width,
-                                linestyle="--",
-                                alpha=self.vis_config.line_alpha,
-                                label="Pred. Mart.",
-                            )
+        # Now plot each feature
+        for idx, feature in enumerate(main_features):
+            row, col = divmod(idx, 2)
+            ax = fig.add_subplot(gs[row, col])
 
-                            # Update max_mart with prediction values if they exist
-                            pred_max = np.max(pred_martingale_values)
-                            if not np.isnan(pred_max):
-                                max_mart = max(max_mart, pred_max)
+            if feature in self.martingales:
+                results = self.martingales[feature]
 
-                    # Dynamic y-axis range based on both traditional and prediction martingales
-                    if not np.isnan(max_mart):  # Check if max_mart is valid
-                        if max_mart < 0.1:  # Very small values
-                            y_max = max(max_mart * 5, 0.1)
-                            n_ticks = 4
-                        elif max_mart < 1:  # Small values
-                            y_max = max(max_mart * 2, 1)
-                            n_ticks = 5
-                        elif max_mart < 10:  # Medium values
-                            y_max = max(max_mart * 1.5, 5)
-                            n_ticks = 6
-                        else:  # Large values
-                            y_max = max_mart * 1.2
-                            n_ticks = min(7, int(y_max / 5) + 1)
-
-                        # Calculate negative range as a small percentage of y_max
-                        y_min = -y_max * 0.05
-
-                        # Create ticks including the negative range
-                        y_ticks = np.linspace(y_min, y_max, n_ticks)
-
-                        ax.set_ylim(y_min, y_max)
-                        ax.set_yticks(y_ticks)
-
-                        # Format tick labels to avoid scientific notation and limit decimals
-                        ax.yaxis.set_major_formatter(
-                            plt.FuncFormatter(
-                                lambda x, p: f"{x:.3f}" if abs(x) < 0.01 else f"{x:.2f}"
-                            )
+                # Plot traditional martingale
+                if "martingales" in results and results["martingales"] is not None:
+                    martingale_values = np.array(
+                        [
+                            x.item() if isinstance(x, np.ndarray) else x
+                            for x in results["martingales"]
+                        ]
+                    )
+                    if len(martingale_values) > 0:
+                        ax.plot(
+                            martingale_values,
+                            color=self.vis_config.colors["actual"],
+                            linewidth=self.vis_config.line_width,
+                            alpha=self.vis_config.line_alpha,
+                            label="Trad. Mart.",
+                            zorder=10,
                         )
 
-            # Add change points
-            for cp in self.change_points:
-                ax.axvline(
-                    x=cp,
-                    color=self.vis_config.colors["change_point"],
+                # Plot individual horizon predictions
+                if (
+                    "prediction_martingales_horizons" in results
+                    and results["prediction_martingales_horizons"] is not None
+                ):
+                    # Create color gradient for different horizons
+                    num_horizons = len(results["prediction_martingales_horizons"])
+                    colors = plt.cm.Oranges(np.linspace(0.3, 0.8, num_horizons))
+
+                    # Get sequence length from traditional martingales
+                    seq_length = (
+                        len(martingale_values) if "martingales" in results else 0
+                    )
+                    history_size = 10  # Default history size
+
+                    # Find actual history size from the data
+                    if "combined" in self.martingales:
+                        combined_trad = self.martingales["combined"].get(
+                            "martingales", []
+                        )
+                        combined_pred = self.martingales["combined"].get(
+                            "prediction_martingales", []
+                        )
+                        if len(combined_trad) > 0 and len(combined_pred) > 0:
+                            # Calculate history size based on the difference in lengths
+                            history_size = len(combined_trad) - len(combined_pred)
+
+                    for h, horizon_pred in enumerate(
+                        results["prediction_martingales_horizons"]
+                    ):
+                        pred_values = np.array(
+                            [
+                                x.item() if isinstance(x, np.ndarray) else x
+                                for x in horizon_pred
+                            ]
+                        )
+                        if len(pred_values) > 0:
+                            # Create time points starting from history_size
+                            time_points = np.arange(
+                                history_size, history_size + len(pred_values)
+                            )
+                            ax.plot(
+                                time_points,
+                                pred_values,
+                                color=colors[h],
+                                linewidth=self.vis_config.line_width * 0.8,
+                                linestyle="--",
+                                alpha=self.vis_config.line_alpha * 0.7,
+                                label=(
+                                    f"H{h+1} Mart." if idx == 0 else None
+                                ),  # Only show legend in first plot
+                                zorder=5 - h,  # Earlier horizons on top
+                            )
+
+                # Add change points
+                for cp in self.change_points:
+                    ax.axvline(
+                        x=cp,
+                        color=self.vis_config.colors["change_point"],
+                        linestyle="--",
+                        alpha=0.3,
+                        linewidth=self.vis_config.grid_width,
+                        zorder=1,
+                    )
+
+                # Add threshold line
+                ax.axhline(
+                    y=self.threshold,
+                    color=self.vis_config.colors["threshold"],
                     linestyle="--",
                     alpha=0.3,
                     linewidth=self.vis_config.grid_width,
+                    zorder=2,
                 )
 
-            # Add threshold line
-            ax.axhline(
-                y=self.threshold,
-                color=self.vis_config.colors["threshold"],
-                linestyle="--",
-                alpha=0.3,
-                linewidth=self.vis_config.grid_width,
-            )
+                # Set consistent y-axis limits based on global maximum
+                y_max = max_mart_global * 1.1  # Add 10% margin
+                y_min = -y_max * 0.05  # Small negative range
+                ax.set_ylim(y_min, y_max)
+
+                # Create evenly spaced ticks
+                n_ticks = 6
+                y_ticks = np.linspace(0, y_max, n_ticks)
+                ax.set_yticks(y_ticks)
+                ax.yaxis.set_major_formatter(
+                    plt.FuncFormatter(
+                        lambda x, p: f"{x:.2f}" if abs(x) < 0.01 else f"{x:.1f}"
+                    )
+                )
 
             ax.set_title(feature.title(), fontsize=self.vis_config.title_size, pad=3)
             ax.set_xlim(0, 200)

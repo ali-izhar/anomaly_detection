@@ -108,7 +108,7 @@ def run_detection(
     # Override for testing
     params.update(
         {
-            "n": 30,
+            "n": 50,
             "seq_len": 100,
             "min_changes": 1,
             "max_changes": 1,
@@ -521,427 +521,476 @@ def run_detection(
             else:
                 logger.info(f"Horizon martingale did not detect change at t={tcp}")
 
-    # # ========================================================================== #
-    # # =================== STEP 6: Analyze Results ============================== #
-    # # ========================================================================== #
-    # logger.info("\nAnalyzing Detection Results...")
-    # logger.info(f"True change points: {true_change_points}")
+    # ========================================================================== #
+    # =================== STEP 6: Create Visualizations ============================ #
+    # ========================================================================== #
+    logger.info("\nCreating visualizations...")
+    output_dir = f"examples/{model_name}"
+    os.makedirs(output_dir, exist_ok=True)
 
-    # # Get detected change points
-    # detected_changes = detection_result["change_points"]
-    # logger.info(f"Detected change points: {detected_changes}")
+    # 1. Visualize network states at key points
+    viz = NetworkVisualizer()
+    key_points = sorted(
+        list(
+            set(
+                [0]
+                + true_change_points
+                + detection_result["change_points"]
+                + [len(graphs) - 1]
+            )
+        )
+    )
+    n_points = len(key_points)
 
-    # # Analyze martingale statistics based on detection method
-    # if detector.method == "single_view":
-    #     logger.info("\nSingle-view Martingale Statistics:")
-    #     martingales = detection_result.get("martingales")
-    #     if martingales is not None:
-    #         logger.info(f"- Final martingale value: {martingales[-1]:.2f}")
-    #         logger.info(f"- Maximum martingale value: {np.max(martingales):.2f}")
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
 
-    #     # Analyze prediction martingales if available
-    #     pred_martingales = detection_result.get("prediction_martingales")
-    #     if pred_martingales is not None:
-    #         logger.info("\nPrediction Martingale Statistics:")
-    #         logger.info(f"- Final prediction martingale: {pred_martingales[-1]:.2f}")
-    #         logger.info(
-    #             f"- Maximum prediction martingale: {np.max(pred_martingales):.2f}"
-    #         )
+    # Prepare node colors for SBM
+    node_color = None
+    if "stochastic_block_model" in model_name.lower():
+        graph = nx.from_numpy_array(graphs[0])
+        n = graph.number_of_nodes()
+        num_blocks = int(np.sqrt(n))
+        block_sizes = [n // num_blocks] * (num_blocks - 1)
+        block_sizes.append(n - sum(block_sizes))
+        node_color = []
+        for j, size in enumerate(block_sizes):
+            node_color.extend([f"C{j}"] * size)
 
-    #         # Log timesteps where prediction martingale exceeds threshold
-    #         pred_detections = np.where(pred_martingales > detector.threshold)[0]
-    #         if len(pred_detections) > 0:
-    #             logger.info(f"- Prediction-based detections at: {pred_detections}")
+    for i, time_idx in enumerate(key_points):
+        point_type = (
+            "Initial State"
+            if time_idx == 0
+            else (
+                "Final State"
+                if time_idx == len(graphs) - 1
+                else (
+                    "True Change Point"
+                    if time_idx in true_change_points
+                    else (
+                        "Detected Change Point"
+                        if time_idx in detection_result["change_points"]
+                        else "State"
+                    )
+                )
+            )
+        )
 
-    # else:  # multiview
-    #     logger.info("\nMultiview Martingale Statistics:")
-    #     mart_sum = detection_result.get("martingale_sum")
-    #     mart_avg = detection_result.get("martingale_avg")
-    #     indiv_marts = detection_result.get("individual_martingales")
+        viz.plot_network(
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network {point_type} at t={time_idx}",
+            layout="spring",
+            node_color=node_color,
+        )
 
-    #     if mart_sum is not None:
-    #         logger.info(f"- Final sum martingale: {mart_sum[-1]:.2f}")
-    #         logger.info(f"- Maximum sum martingale: {np.max(mart_sum):.2f}")
-    #     if mart_avg is not None:
-    #         logger.info(f"- Final average martingale: {mart_avg[-1]:.2f}")
-    #         logger.info(f"- Maximum average martingale: {np.max(mart_avg):.2f}")
-    #     if indiv_marts:
-    #         logger.info("\nIndividual Feature Martingales:")
-    #         for i, mart in enumerate(indiv_marts):
-    #             logger.info(
-    #                 f"- Feature {i}: final = {mart[-1]:.2f}, max = {np.max(mart):.2f}"
-    #             )
+        viz.plot_adjacency(
+            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
+        )
 
-    #     # Analyze prediction martingales if available
-    #     pred_sum = detection_result.get("prediction_martingale_sum")
-    #     pred_avg = detection_result.get("prediction_martingale_avg")
-    #     pred_indiv = detection_result.get("prediction_individual_martingales")
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_states.png"),
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
 
-    #     if any(x is not None for x in [pred_sum, pred_avg, pred_indiv]):
-    #         logger.info("\nPrediction Martingale Statistics:")
-    #         if pred_sum is not None:
-    #             logger.info(f"- Final prediction sum martingale: {pred_sum[-1]:.2f}")
-    #             logger.info(
-    #                 f"- Maximum prediction sum martingale: {np.max(pred_sum):.2f}"
-    #             )
-    #             # Log timesteps where prediction sum martingale exceeds threshold
-    #             pred_detections = np.where(pred_sum > detector.threshold)[0]
-    #             if len(pred_detections) > 0:
-    #                 logger.info(f"- Prediction-based detections at: {pred_detections}")
-    #         if pred_avg is not None:
-    #             logger.info(
-    #                 f"- Final prediction average martingale: {pred_avg[-1]:.2f}"
-    #             )
-    #             logger.info(
-    #                 f"- Maximum prediction average martingale: {np.max(pred_avg):.2f}"
-    #             )
+    # 2. Visualize feature evolution
+    features_raw = features_raw  # Use the original features
+    detected_change_points = detection_result["change_points"]
 
-    # # Detection Delay Analysis
-    # logger.info("\nDetection Delay Analysis:")
-    # if len(true_change_points) > 0:
-    #     delays = []
-    #     for true_cp in true_change_points:
-    #         # Find closest detection after true change point
-    #         future_detections = [d - true_cp for d in detected_changes if d >= true_cp]
-    #         if future_detections:
-    #             delay = min(future_detections)
-    #             delays.append(delay)
-    #             logger.info(f"- Change point {true_cp}: detected after {delay} steps")
-    #         else:
-    #             logger.info(f"- Change point {true_cp}: not detected")
+    fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
+    fig.patch.set_facecolor("white")
+    fig.patch.set_edgecolor("black")
+    fig.patch.set_linewidth(1.0)
 
-    #     if delays:
-    #         avg_delay = np.mean(delays)
-    #         logger.info(f"- Average detection delay: {avg_delay:.2f} steps")
-    # else:
-    #     logger.info("No true change points to analyze delays")
+    gs = GridSpec(4, 2, figure=fig, hspace=0.4, wspace=0.3)
 
-    # # False Positive Analysis
-    # if len(true_change_points) > 0:
-    #     false_positives = [
-    #         d
-    #         for d in detected_changes
-    #         if not any(abs(d - tcp) <= 5 for tcp in true_change_points)
-    #     ]
-    #     if false_positives:
-    #         logger.info(f"\nFalse Positive Detections: {false_positives}")
-    #         logger.info(
-    #             f"False Positive Rate: {len(false_positives)/len(detected_changes):.2%}"
-    #         )
+    feature_names = [
+        "degrees",
+        "density",
+        "clustering",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "singular_values",
+        "laplacian_eigenvalues",
+    ]
 
-    # logger.info(f"SUCCESSFULLY COMPLETED STEP 6")
-    # logger.info("-" * 100)
+    colors = {
+        "actual": "#1f77b4",  # Blue
+        "change_point": "#FF9999",  # Light red
+        "detected": "#ff7f0e",  # Orange
+    }
 
-    # # ========================================================================== #
-    # # =================== STEP 7: Create Visualizations ============================ #
-    # # ========================================================================== #
-    # logger.info("\nCreating visualizations...")
-    # output_dir = f"examples/{model_name}"
-    # os.makedirs(output_dir, exist_ok=True)
+    for i, feature_name in enumerate(feature_names):
+        row, col = divmod(i, 2)
+        ax = fig.add_subplot(gs[row, col])
+        time = range(len(features_raw))
 
-    # # 1. Visualize network states at key points
-    # viz = NetworkVisualizer()
-    # key_points = sorted(
-    #     list(
-    #         set(
-    #             [0]
-    #             + true_change_points
-    #             + detection_result["change_points"]
-    #             + [len(graphs) - 1]
-    #         )
-    #     )
-    # )
-    # n_points = len(key_points)
+        if isinstance(features_raw[0][feature_name], list):
+            mean_values = [
+                np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
+            std_values = [
+                np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                for f in features_raw
+            ]
 
-    # fig, axes = plt.subplots(
-    #     n_points,
-    #     2,
-    #     figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
-    # )
-    # fig.suptitle(
-    #     f"{model_name.replace('_', ' ').title()} Network States",
-    #     fontsize=viz.TITLE_SIZE,
-    #     y=0.98,
-    # )
+            ax.plot(
+                time,
+                mean_values,
+                color=colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
+            )
+            ax.fill_between(
+                time,
+                np.array(mean_values) - np.array(std_values),
+                np.array(mean_values) + np.array(std_values),
+                color=colors["actual"],
+                alpha=0.1,
+            )
+        else:
+            values = [f[feature_name] for f in features_raw]
+            ax.plot(
+                time,
+                values,
+                color=colors["actual"],
+                alpha=0.8,
+                linewidth=1.0,
+            )
 
-    # # Prepare node colors for SBM
-    # node_color = None
-    # if "stochastic_block_model" in model_name.lower():
-    #     graph = nx.from_numpy_array(graphs[0])
-    #     n = graph.number_of_nodes()
-    #     num_blocks = int(np.sqrt(n))
-    #     block_sizes = [n // num_blocks] * (num_blocks - 1)
-    #     block_sizes.append(n - sum(block_sizes))
-    #     node_color = []
-    #     for j, size in enumerate(block_sizes):
-    #         node_color.extend([f"C{j}"] * size)
+        for cp in true_change_points:
+            ax.axvline(
+                x=cp,
+                color=colors["change_point"],
+                linestyle="--",
+                alpha=0.5,
+                linewidth=0.8,
+            )
 
-    # for i, time_idx in enumerate(key_points):
-    #     point_type = (
-    #         "Initial State"
-    #         if time_idx == 0
-    #         else (
-    #             "Final State"
-    #             if time_idx == len(graphs) - 1
-    #             else (
-    #                 "True Change Point"
-    #                 if time_idx in true_change_points
-    #                 else (
-    #                     "Detected Change Point"
-    #                     if time_idx in detection_result["change_points"]
-    #                     else "State"
-    #                 )
-    #             )
-    #         )
-    #     )
+        for cp in detected_change_points:
+            if isinstance(features_raw[0][feature_name], list):
+                y_val = mean_values[cp]
+            else:
+                y_val = features_raw[cp][feature_name]
+            ax.plot(
+                cp,
+                y_val,
+                "o",
+                color=colors["detected"],
+                markersize=6,
+                alpha=0.8,
+                markeredgewidth=1,
+            )
 
-    #     viz.plot_network(
-    #         graphs[time_idx],
-    #         ax=axes[i, 0],
-    #         title=f"Network {point_type} at t={time_idx}",
-    #         layout="spring",
-    #         node_color=node_color,
-    #     )
+        ax.set_title(
+            feature_name.replace("_", " ").title(),
+            fontsize=viz.TITLE_SIZE,
+            pad=4,
+        )
+        ax.set_xlabel("Time" if row == 3 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.set_ylabel("Value" if col == 0 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
+        ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
+        ax.grid(True, alpha=0.15, linewidth=0.5, linestyle=":")
 
-    #     viz.plot_adjacency(
-    #         graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
-    #     )
+        ax.set_xticks(np.arange(0, len(time), 10))
+        ax.set_xlim(0, len(time))
 
-    # plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
-    # plt.savefig(
-    #     os.path.join(output_dir, f"{model_name}_states.png"),
-    #     bbox_inches="tight",
-    #     dpi=300,
-    # )
-    # plt.close()
+    plt.suptitle(
+        f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
+        + "True Change Points (Red), Detected Change Points (Orange)",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    plt.tight_layout(pad=0.3)
+    plt.savefig(
+        os.path.join(output_dir, f"{model_name}_features.png"),
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+        edgecolor="none",
+        pad_inches=0.02,
+    )
+    plt.close()
 
-    # # 2. Visualize feature evolution
-    # features_raw = detection_result["features_raw"]
-    # detected_change_points = detection_result["change_points"]
+    # 3. Create martingale visualization
+    logger.info("\nAnalyzing detection results before visualization:")
+    logger.info("-" * 50)
+    logger.info("Available keys in detection_result:")
+    logger.info(f"- {list(detection_result.keys())}")
 
-    # fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
-    # fig.patch.set_facecolor("white")
-    # fig.patch.set_edgecolor("black")
-    # fig.patch.set_linewidth(1.0)
+    if "individual_martingales" in detection_result:
+        logger.info("\nIndividual Martingales Analysis:")
+        logger.info(
+            f"- Number of individual martingales: {len(detection_result['individual_martingales'])}"
+        )
+        if detection_result["individual_martingales"]:
+            logger.info(
+                f"- Length of each individual martingale: {len(detection_result['individual_martingales'][0])}"
+            )
 
-    # gs = GridSpec(4, 2, figure=fig, hspace=0.4, wspace=0.3)
+    if "prediction_individual_martingales" in detection_result:
+        logger.info("\nPrediction Individual Martingales Analysis:")
+        logger.info(
+            f"- Number of prediction martingales: {len(detection_result['prediction_individual_martingales'])}"
+        )
+        if detection_result["prediction_individual_martingales"]:
+            logger.info(
+                f"- Length of each prediction martingale: {len(detection_result['prediction_individual_martingales'][0])}"
+            )
 
-    # feature_names = [
-    #     "degrees",
-    #     "density",
-    #     "clustering",
-    #     "betweenness",
-    #     "eigenvector",
-    #     "closeness",
-    #     "singular_values",
-    #     "laplacian_eigenvalues",
-    # ]
+    logger.info("\nCombined Martingales Analysis:")
+    logger.info(
+        f"- Martingale sum length: {len(detection_result.get('martingale_sum', []))}"
+    )
+    logger.info(
+        f"- Prediction martingale sum length: {len(detection_result.get('prediction_martingale_sum', []))}"
+    )
+    logger.info("-" * 50)
 
-    # colors = {
-    #     "actual": "#1f77b4",  # Blue
-    #     "change_point": "#FF9999",  # Light red
-    #     "detected": "#ff7f0e",  # Orange
-    # }
+    martingale_data = {}
+    if detector.method == "single_view":
+        martingale_data = {
+            "combined": {
+                # Traditional martingales
+                "martingales": detection_result.get("martingales", []),
+                "pvalues": detection_result.get("pvalues", []),
+                "strangeness": detection_result.get("strangeness", []),
+                # Prediction martingales
+                "prediction_martingales": detection_result.get(
+                    "prediction_martingales", []
+                ),
+                "prediction_pvalues": detection_result.get("prediction_pvalues", []),
+                "prediction_strangeness": detection_result.get(
+                    "prediction_strangeness", []
+                ),
+                # Change points and features
+                "change_points": detection_result.get("change_points", []),
+                "features_raw": features_raw,
+            }
+        }
+    else:  # multiview
+        # First get individual feature martingales
+        individual_martingales = detection_result.get("individual_martingales", [])
+        prediction_individual_martingales = detection_result.get(
+            "prediction_individual_martingales", []
+        )
 
-    # for i, feature_name in enumerate(feature_names):
-    #     row, col = divmod(i, 2)
-    #     ax = fig.add_subplot(gs[row, col])
-    #     time = range(len(features_raw))
+        # Create feature-specific entries
+        features = [
+            "degree",
+            "density",
+            "clustering",
+            "betweenness",
+            "eigenvector",
+            "closeness",
+            "singular_value",
+            "laplacian",
+        ]
 
-    #     if isinstance(features_raw[0][feature_name], list):
-    #         mean_values = [
-    #             np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0
-    #             for f in features_raw
-    #         ]
-    #         std_values = [
-    #             np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0
-    #             for f in features_raw
-    #         ]
+        feature_data = {}
+        for i, feature in enumerate(features):
+            if i < len(individual_martingales):
+                feature_data[feature] = {
+                    # Traditional martingales for this feature
+                    "martingales": individual_martingales[i],
+                    "pvalues": detection_result.get("pvalues", [None] * len(features))[
+                        i
+                    ],
+                    "strangeness": detection_result.get(
+                        "strangeness", [None] * len(features)
+                    )[i],
+                }
 
-    #         ax.plot(
-    #             time,
-    #             mean_values,
-    #             color=colors["actual"],
-    #             alpha=0.8,
-    #             linewidth=1.0,
-    #         )
-    #         ax.fill_between(
-    #             time,
-    #             np.array(mean_values) - np.array(std_values),
-    #             np.array(mean_values) + np.array(std_values),
-    #             color=colors["actual"],
-    #             alpha=0.1,
-    #         )
-    #     else:
-    #         values = [f[feature_name] for f in features_raw]
-    #         ax.plot(
-    #             time,
-    #             values,
-    #             color=colors["actual"],
-    #             alpha=0.8,
-    #             linewidth=1.0,
-    #         )
+                # Add prediction martingales for this feature
+                if prediction_individual_martingales:
+                    num_horizons = len(prediction_individual_martingales) // len(
+                        features
+                    )
+                    feature_start_idx = i * num_horizons
+                    feature_end_idx = (i + 1) * num_horizons
 
-    #     for cp in true_change_points:
-    #         ax.axvline(
-    #             x=cp,
-    #             color=colors["change_point"],
-    #             linestyle="--",
-    #             alpha=0.5,
-    #             linewidth=0.8,
-    #         )
+                    if feature_start_idx < len(prediction_individual_martingales):
+                        feature_predictions = prediction_individual_martingales[
+                            feature_start_idx:feature_end_idx
+                        ]
+                        if feature_predictions:
+                            feature_data[feature].update(
+                                {
+                                    # Store all horizon predictions separately
+                                    "prediction_martingales_horizons": feature_predictions,
+                                    # Also store the sum for backward compatibility
+                                    "prediction_martingales": (
+                                        np.sum(
+                                            [
+                                                np.array(m)
+                                                for m in feature_predictions
+                                                if len(m) > 0
+                                            ],
+                                            axis=0,
+                                        )
+                                        if feature_predictions
+                                        and any(len(m) > 0 for m in feature_predictions)
+                                        else []
+                                    ),
+                                    "prediction_pvalues": detection_result.get(
+                                        "prediction_pvalues", [None] * len(features)
+                                    )[i],
+                                    "prediction_strangeness": detection_result.get(
+                                        "prediction_strangeness", [None] * len(features)
+                                    )[i],
+                                }
+                            )
 
-    #     for cp in detected_change_points:
-    #         if isinstance(features_raw[0][feature_name], list):
-    #             y_val = mean_values[cp]
-    #         else:
-    #             y_val = features_raw[cp][feature_name]
-    #         ax.plot(
-    #             cp,
-    #             y_val,
-    #             "o",
-    #             color=colors["detected"],
-    #             markersize=6,
-    #             alpha=0.8,
-    #             markeredgewidth=1,
-    #         )
+        martingale_data = {
+            # Add feature-specific data
+            **feature_data,
+            # Add combined data
+            "combined": {
+                # Traditional martingales
+                "martingales": detection_result.get(
+                    "martingale_sum", []
+                ),  # Use sum as main martingale
+                "martingale_sum": detection_result.get("martingale_sum", []),
+                "martingale_avg": detection_result.get("martingale_avg", []),
+                "individual_martingales": detection_result.get(
+                    "individual_martingales", []
+                ),
+                # Prediction martingales
+                "prediction_martingales": detection_result.get(
+                    "prediction_martingale_sum", []
+                ),  # Use sum as main prediction
+                "prediction_martingale_sum": detection_result.get(
+                    "prediction_martingale_sum", []
+                ),
+                "prediction_martingale_avg": detection_result.get(
+                    "prediction_martingale_avg", []
+                ),
+                "prediction_individual_martingales": detection_result.get(
+                    "prediction_individual_martingales", []
+                ),
+                # P-values and strangeness
+                "pvalues": detection_result.get("pvalues", []),
+                "strangeness": detection_result.get("strangeness", []),
+                "prediction_pvalues": detection_result.get("prediction_pvalues", []),
+                "prediction_strangeness": detection_result.get(
+                    "prediction_strangeness", []
+                ),
+                # Change points and features
+                "change_points": detection_result.get("change_points", []),
+                "features_raw": features_raw,
+            },
+        }
 
-    #     ax.set_title(
-    #         feature_name.replace("_", " ").title(),
-    #         fontsize=viz.TITLE_SIZE,
-    #         pad=4,
-    #     )
-    #     ax.set_xlabel("Time" if row == 3 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
-    #     ax.set_ylabel("Value" if col == 0 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
-    #     ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
-    #     ax.grid(True, alpha=0.15, linewidth=0.5, linestyle=":")
+    martingale_viz = MartingaleVisualizer(
+        martingales=martingale_data,
+        change_points=true_change_points,
+        threshold=threshold,
+        epsilon=epsilon,
+        output_dir=output_dir,
+        skip_shap=False,
+        method=detector.method,
+    )
+    martingale_viz.create_visualization()
 
-    #     ax.set_xticks(np.arange(0, len(time), 10))
-    #     ax.set_xlim(0, len(time))
+    logger.info(f"Visualizations saved to {output_dir}/")
 
-    # plt.suptitle(
-    #     f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
-    #     + "True Change Points (Red), Detected Change Points (Orange)",
-    #     fontsize=viz.TITLE_SIZE,
-    #     y=0.98,
-    # )
-    # plt.tight_layout(pad=0.3)
-    # plt.savefig(
-    #     os.path.join(output_dir, f"{model_name}_features.png"),
-    #     dpi=300,
-    #     bbox_inches="tight",
-    #     facecolor="white",
-    #     edgecolor="none",
-    #     pad_inches=0.02,
-    # )
-    # plt.close()
+    # ========================================================================== #
+    # =================== STEP 7: Return Complete Results ======================== #
+    # ========================================================================== #
+    results = {
+        "true_change_points": true_change_points,
+        "model_name": model_name,
+        "params": params,
+        "detected_changes": detection_result["change_points"],
+        # Feature information
+        "pvalues": detection_result.get("pvalues", []),  # Fixed key name
+        "strangeness": detection_result.get("strangeness", []),
+        "features_raw": features_raw,  # Use original features
+        "features_numeric": features_numeric,  # Use original features
+        # Prediction data
+        "predicted_graphs": predicted_graphs,
+        "predictor_states": predictor.get_state(),
+        # Additional prediction statistics
+        "prediction_pvalues": detection_result.get("prediction_pvalues", []),
+        "prediction_strangeness": detection_result.get("prediction_strangeness", []),
+    }
 
-    # # 3. Create martingale visualization
-    # martingale_data = {}
-    # if detector.method == "single_view":
-    #     martingale_data = {
-    #         "martingales": detection_result.get("martingales", []),
-    #         "prediction_martingales": detection_result.get(
-    #             "prediction_martingales", []
-    #         ),
-    #         "p_values": detection_result.get("p_values", []),
-    #         "strangeness": detection_result.get("strangeness", []),
-    #         "change_points": detection_result.get("change_points", []),
-    #     }
-    # else:  # multiview
-    #     martingale_data = {
-    #         "martingale_sum": detection_result.get("martingale_sum", []),
-    #         "martingale_avg": detection_result.get("martingale_avg", []),
-    #         "individual_martingales": detection_result.get(
-    #             "individual_martingales", []
-    #         ),
-    #         "prediction_martingale_sum": detection_result.get(
-    #             "prediction_martingale_sum", []
-    #         ),
-    #         "prediction_martingale_avg": detection_result.get(
-    #             "prediction_martingale_avg", []
-    #         ),
-    #         "prediction_individual_martingales": detection_result.get(
-    #             "prediction_individual_martingales", []
-    #         ),
-    #         "p_values": detection_result.get("p_values", []),
-    #         "strangeness": detection_result.get("strangeness", []),
-    #         "change_points": detection_result.get("change_points", []),
-    #     }
+    # Add method-specific results
+    if detector.method == "single_view":
+        results.update(
+            {
+                "martingales": detection_result.get("martingales", []),
+                "prediction_martingales": detection_result.get(
+                    "prediction_martingales", []
+                ),
+                "traditional_delays": [
+                    d - tcp
+                    for tcp in true_change_points
+                    for d in detection_result["change_points"]
+                    if d >= tcp
+                ],
+                "traditional_detection_times": detection_result["change_points"],
+                "prediction_delays": [
+                    d - tcp
+                    for tcp in true_change_points
+                    for d in detection_result.get("horizon_change_points", [])
+                    if d >= tcp
+                ],
+                "prediction_detection_times": detection_result.get(
+                    "horizon_change_points", []
+                ),
+            }
+        )
+    else:  # multiview
+        results.update(
+            {
+                "martingale_sum": detection_result.get("martingale_sum", []),
+                "martingale_avg": detection_result.get("martingale_avg", []),
+                "individual_martingales": detection_result.get(
+                    "individual_martingales", []
+                ),
+                "prediction_martingale_sum": detection_result.get(
+                    "prediction_martingale_sum", []
+                ),
+                "prediction_martingale_avg": detection_result.get(
+                    "prediction_martingale_avg", []
+                ),
+                "prediction_individual_martingales": detection_result.get(
+                    "prediction_individual_martingales", []
+                ),
+                "traditional_delays": [
+                    d - tcp
+                    for tcp in true_change_points
+                    for d in detection_result["change_points"]
+                    if d >= tcp
+                ],
+                "traditional_detection_times": detection_result["change_points"],
+                "prediction_delays": [
+                    d - tcp
+                    for tcp in true_change_points
+                    for d in detection_result.get("horizon_change_points", [])
+                    if d >= tcp
+                ],
+                "prediction_detection_times": detection_result.get(
+                    "horizon_change_points", []
+                ),
+            }
+        )
 
-    # martingale_viz = MartingaleVisualizer(
-    #     martingales={"combined": martingale_data},
-    #     change_points=true_change_points,
-    #     threshold=threshold,
-    #     epsilon=epsilon,
-    #     output_dir=output_dir,
-    #     skip_shap=False,
-    #     method=detector.method,
-    # )
-    # martingale_viz.create_visualization()
-
-    # logger.info(f"Visualizations saved to {output_dir}/")
-
-    # # ========================================================================== #
-    # # =================== STEP 8: Return Complete Results ======================== #
-    # # ========================================================================== #
-    # results = {
-    #     "true_change_points": true_change_points,
-    #     "model_name": model_name,
-    #     "params": params,
-    #     "detected_changes": detection_result["change_points"],
-    #     # Feature information
-    #     "p_values": detection_result.get("p_values", []),
-    #     "strangeness": detection_result.get("strangeness", []),
-    #     "features_raw": detection_result.get("features_raw", []),
-    #     "features_numeric": detection_result.get("features_numeric", []),
-    #     # Prediction data
-    #     "predicted_graphs": predicted_graphs,
-    #     "predictor_states": predictor.get_state(),
-    #     # Additional prediction statistics
-    #     "prediction_pvalues": detection_result.get("prediction_pvalues", []),
-    #     "prediction_strangeness": detection_result.get("prediction_strangeness", []),
-    # }
-
-    # # Add method-specific results
-    # if detector.method == "single_view":
-    #     results.update(
-    #         {
-    #             "martingales": detection_result.get("martingales", []),
-    #             "prediction_martingales": detection_result.get(
-    #                 "prediction_martingales", []
-    #             ),
-    #             "traditional_delays": delays if "delays" in locals() else [],
-    #             "traditional_detection_times": detected_changes,
-    #             "prediction_delays": delays if "delays" in locals() else [],
-    #             "prediction_detection_times": detected_changes,
-    #         }
-    #     )
-    # else:  # multiview
-    #     results.update(
-    #         {
-    #             "martingales_sum": detection_result.get("martingale_sum", []),
-    #             "martingales_avg": detection_result.get("martingale_avg", []),
-    #             "individual_martingales": detection_result.get(
-    #                 "individual_martingales", []
-    #             ),
-    #             "prediction_martingale_sum": detection_result.get(
-    #                 "prediction_martingale_sum", []
-    #             ),
-    #             "prediction_martingale_avg": detection_result.get(
-    #                 "prediction_martingale_avg", []
-    #             ),
-    #             "prediction_individual_martingales": detection_result.get(
-    #                 "prediction_individual_martingales", []
-    #             ),
-    #             "traditional_delays": delays if "delays" in locals() else [],
-    #             "traditional_detection_times": detected_changes,
-    #             "prediction_delays": delays if "delays" in locals() else [],
-    #             "prediction_detection_times": detected_changes,
-    #         }
-    #     )
-
-    # return results
+    return results
 
 
 def main():
