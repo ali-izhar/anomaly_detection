@@ -64,11 +64,39 @@ def strangeness_point(
         logger.error("Data array has zero size after np.array conversion")
         raise ValueError("Empty data sequence")
 
+    # Validate dimensions
+    if data_array.ndim not in [2, 3]:
+        logger.error(
+            f"Invalid data dimensions: {data_array.ndim}D. Expected 2D or 3D array."
+        )
+        raise ValueError(
+            f"Invalid data dimensions: {data_array.ndim}D. Expected 2D or 3D array."
+        )
+
+    # Log input dimensions
+    logger.debug("Input data dimensions:")
+    logger.debug(f"- Original shape: {data_array.shape}")
+
     # If data is 3D (e.g., (N, something, d)), flatten the extra dimension.
     if data_array.ndim == 3:
+        original_shape = data_array.shape
         data_array = data_array.reshape(-1, data_array.shape[-1])
+        logger.debug(f"- Reshaped to: {data_array.shape}")
 
-    N = data_array.shape[0]
+    # Validate reshaped dimensions
+    N, d = data_array.shape
+    if N < n_clusters:
+        logger.error(
+            f"Number of points ({N}) must be >= number of clusters ({n_clusters})"
+        )
+        raise ValueError(
+            f"Number of points ({N}) must be >= number of clusters ({n_clusters})"
+        )
+
+    if d == 0:
+        logger.error("Feature dimension cannot be zero")
+        raise ValueError("Feature dimension cannot be zero")
+
     # Choose MiniBatchKMeans if batch_size is provided and data is large.
     if batch_size is not None and N > batch_size:
         model = MiniBatchKMeans(
@@ -81,8 +109,28 @@ def strangeness_point(
     # Compute distances from each point to each cluster center using the specified metric.
     distances = compute_cluster_distances(data_array, model, distance_measure, p)
 
+    # Validate distances shape
+    if distances.shape != (N, n_clusters):
+        logger.error(
+            f"Invalid distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
+        )
+        raise ValueError(
+            f"Invalid distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
+        )
+
     # The strangeness for each point is the minimum distance to any of the cluster centers.
     strangeness_scores = distances.min(axis=1)
+
+    # Validate output shape
+    if strangeness_scores.shape != (N,):
+        logger.error(
+            f"Invalid output shape: {strangeness_scores.shape}. Expected: ({N},)"
+        )
+        raise ValueError(
+            f"Invalid output shape: {strangeness_scores.shape}. Expected: ({N},)"
+        )
+
+    logger.debug(f"Output strangeness shape: {strangeness_scores.shape}")
     return strangeness_scores
 
 
