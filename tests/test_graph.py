@@ -9,9 +9,17 @@ Test the `src/graph` module.
 4. Edge cases and error handling
 """
 
+import sys
 import pytest
 import numpy as np
 import networkx as nx
+from pathlib import Path
+
+
+# Add project root to Python path
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
@@ -254,7 +262,6 @@ class TestEdgeCases:
                         "min_m": 1,
                         "max_m": 1,
                         "m_std": None,
-                        "phase_mode": "sparse",
                     }
                 )
             elif model == "ws":
@@ -277,13 +284,9 @@ class TestEdgeCases:
                         "min_prob": 0.2,
                         "max_prob": 0.2,
                         "prob_std": None,
-                        "phase_mode": "sparse",
-                        "target_clustering": 0.3,
-                        "min_clustering": 0.3,
-                        "max_clustering": 0.3,
-                        "clustering_std": None,
                     }
                 )
+
             elif model == "sbm":
                 min_configs[model].update(
                     {

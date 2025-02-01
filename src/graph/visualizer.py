@@ -9,10 +9,11 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from .utils import graph_to_adjacency
+from .utils import graph_to_adjacency, adjacency_to_graph
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,6 @@ logger = logging.getLogger(__name__)
 class NetworkVisualizer:
     """Visualizer for network graphs, adjacency matrices, and features."""
 
-    # Research paper styling constants
     SINGLE_COLUMN_WIDTH = 5.5  # inches, standard for single column
     DOUBLE_COLUMN_WIDTH = 7.2  # inches, standard for double column
     STANDARD_HEIGHT = 4.0  # inches
@@ -165,7 +165,7 @@ class NetworkVisualizer:
 
         # Convert adjacency matrix to graph if needed
         if isinstance(graph, np.ndarray):
-            graph = nx.from_numpy_array(graph)
+            graph = adjacency_to_graph(graph)
         else:
             graph = nx.convert_node_labels_to_integers(graph)
 

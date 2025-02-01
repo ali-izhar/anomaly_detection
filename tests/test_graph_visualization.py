@@ -11,14 +11,21 @@ Tests cover:
 5. Style customization
 """
 
+import sys
 import pytest
 import numpy as np
 import networkx as nx
 import matplotlib
+from pathlib import Path
 
 # Use Agg backend for testing (non-interactive)
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Add project root to Python path
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer

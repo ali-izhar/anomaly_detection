@@ -1,4 +1,4 @@
-# src/configs/evolution.py
+# src/graph/evolution.py
 
 """Controls the evolution of graph parameters."""
 

@@ -8,8 +8,8 @@ import logging
 import numpy as np
 import networkx as nx
 
+from .evolution import EvolutionManager
 from .utils import graph_to_adjacency
-from ..configs.evolution import EvolutionManager
 
 logger = logging.getLogger(__name__)
 

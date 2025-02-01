@@ -11,6 +11,7 @@ import networkx as nx
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 
@@ -57,14 +58,21 @@ class BasicMetricsExtractor(BaseFeatureExtractor):
             - clustering: List of node clustering coefficients
         """
         if graph.number_of_nodes() == 0:
+            logger.debug(
+                "Empty graph detected in BasicMetricsExtractor, returning empty features"
+            )
             return {"degrees": [], "density": 0.0, "clustering": []}
 
         degrees = [float(deg) for _, deg in graph.degree()]
+        density = float(nx.density(graph))
         clustering = list(nx.clustering(graph).values())
 
+        logger.debug(
+            f"Collected BasicMetrics. Returning {len(degrees)} degrees, {density} density, and {len(clustering)} clustering coefficients"
+        )
         return {
             "degrees": degrees,
-            "density": float(nx.density(graph)),
+            "density": density,
             "clustering": clustering,
         }
 
@@ -88,6 +96,9 @@ class CentralityMetricsExtractor(BaseFeatureExtractor):
             - closeness: List of node closeness values
         """
         if graph.number_of_nodes() == 0:
+            logger.debug(
+                "Empty graph detected in CentralityMetricsExtractor, returning empty features"
+            )
             return self._handle_empty_graph()
 
         # Compute betweenness centrality
@@ -99,13 +110,17 @@ class CentralityMetricsExtractor(BaseFeatureExtractor):
         largest_eigenvalue_idx = np.argmax(eigenvalues)
         eigenvector_values = np.abs(eigenvectors[:, largest_eigenvalue_idx])
         eigenvector_values = eigenvector_values / eigenvector_values.sum()
+        eigenvector_values = list(eigenvector_values)
 
         # Compute closeness centrality
         closeness = list(nx.closeness_centrality(graph).values())
 
+        logger.debug(
+            f"Collected CentralityMetrics. Returning {len(betweenness)} betweenness values, {len(eigenvector_values)} eigenvector values, and {len(closeness)} closeness values"
+        )
         return {
             "betweenness": betweenness,
-            "eigenvector": list(eigenvector_values),
+            "eigenvector": eigenvector_values,
             "closeness": closeness,
         }
 
@@ -128,6 +143,9 @@ class SpectralMetricsExtractor(BaseFeatureExtractor):
             - laplacian_eigenvalues: List of Laplacian eigenvalues
         """
         if graph.number_of_nodes() == 0:
+            logger.debug(
+                "Empty graph detected in SpectralMetricsExtractor, returning empty features"
+            )
             return self._handle_empty_graph()
 
         # Get singular values of adjacency matrix
@@ -138,9 +156,15 @@ class SpectralMetricsExtractor(BaseFeatureExtractor):
         L = nx.laplacian_matrix(graph).todense()
         laplacian_eigenvalues = list(np.linalg.eigvalsh(L))
 
+        singular_values = [float(s) for s in singular_values]
+        laplacian_eigenvalues = [float(e) for e in laplacian_eigenvalues]
+
+        logger.debug(
+            f"Collected SpectralMetrics. Returning {len(singular_values)} singular values and {len(laplacian_eigenvalues)} Laplacian eigenvalues"
+        )
         return {
-            "singular_values": [float(s) for s in singular_values],
-            "laplacian_eigenvalues": [float(e) for e in laplacian_eigenvalues],
+            "singular_values": singular_values,
+            "laplacian_eigenvalues": laplacian_eigenvalues,
         }
 
 
