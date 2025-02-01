@@ -1,7 +1,10 @@
+# src/changepoint/utils.py
+
 """Utility functions for changepoint analysis."""
 
 from typing import Dict, List, Any
 import numpy as np
+
 from .threshold import CustomThresholdModel
 
 
