@@ -12,7 +12,7 @@ import argparse
 import logging
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 import os
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -417,9 +417,13 @@ def run_detection(
     logger.info(
         f"Traditional strangeness sequence length: {len(detection_result.get('strangeness', []))}"
     )
-    logger.info(
-        f"Traditional p-values sequence length: {len(detection_result.get('p_values', []))}"
+    # Fix p-values length reporting
+    pvalues_length = (
+        len(detection_result["pvalues"])
+        if detection_result["pvalues"] is not None
+        else 0
     )
+    logger.info(f"Traditional p-values sequence length: {pvalues_length}")
 
     if "prediction_strangeness" in detection_result:
         logger.info(
