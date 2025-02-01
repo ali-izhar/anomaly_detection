@@ -1,9 +1,10 @@
 # src/predictor/statistical.py
 
-import numpy as np
-import networkx as nx
 from typing import List, Dict, Any
 from collections import deque
+
+import numpy as np
+import networkx as nx
 from sklearn.cluster import SpectralClustering
 
 from .base import BasePredictor
@@ -24,6 +25,7 @@ class StatisticalAdaptivePredictor(BasePredictor):
 
     def __init__(
         self,
+        n_history: int = 5,
         alpha: float = 0.8,  # Smoothing factor for parameter updates
         change_threshold: float = 5,  # Threshold for log-likelihood drops to trigger changes
         min_phase_length: int = 40,
@@ -32,19 +34,22 @@ class StatisticalAdaptivePredictor(BasePredictor):
         """
         Parameters
         ----------
+        n_history : int
+            Number of historical states to keep.
         alpha : float
             Exponential smoothing factor for parameter updates (0 < alpha < 1).
         change_threshold : float
+
             Threshold for detecting a large drop in model fit => indicates a changepoint.
         min_phase_length : int
             Minimum length of a "phase" before we consider another changepoint.
         history_size : int
             Number of past adjacencies to store. Also used for advanced calculations.
         """
+        self.n_history = n_history
         self._alpha = alpha
         self._change_threshold = change_threshold
         self._min_phase_length = min_phase_length
-        self._history_size = history_size
 
         # Internal trackers
         self._t = 0
@@ -58,10 +63,6 @@ class StatisticalAdaptivePredictor(BasePredictor):
         # Pre-initialize known models
         self._known_models = ["er", "ba", "ws", "sbm"]
         self._init_model_params()
-
-    @property
-    def history_size(self) -> int:
-        return self._history_size
 
     def predict(
         self, history: List[Dict[str, Any]], horizon: int = 1
@@ -88,6 +89,9 @@ class StatisticalAdaptivePredictor(BasePredictor):
         if not history:
             # Fallback: return empty or identity if no history
             return [np.zeros((0, 0)) for _ in range(horizon)]
+
+        if len(history) < self.n_history:
+            raise ValueError(f"Need at least {self.n_history} historical states")
 
         # Identify the best model and parameters from the last update_state (or do quick check)
         current_model = self._best_model

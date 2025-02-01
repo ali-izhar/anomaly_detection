@@ -1,271 +1,455 @@
-"""Tests for the graph predictor module."""
+# tests/test_predictor.py
 
-import os
+"""Use all predictors on the same graph network (ba, sbm, er, ws) to compare their performance."""
+
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-import logging
 import networkx as nx
 from pathlib import Path
+import argparse
+from typing import Dict, Any, List
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.predictor.adaptive import GraphPredictor
+from src.configs.loader import get_config
+from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
-from src.configs.loader import get_config
+from src.predictor.factory import PredictorFactory
+from src.metrics.feature_metrics import (
+    compute_feature_metrics,
+    compute_feature_distribution_metrics,
+    FeatureMetrics,
+    DistributionMetrics,
+)
 
-logger = logging.getLogger(__name__)
 
-
-def compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
-    """
-    Compute prediction accuracy metrics.
-
-    Parameters
-    ----------
-    actual : np.ndarray
-        True adjacency matrix
-    predicted : np.ndarray
-        Predicted adjacency matrix
-
-    Returns
-    -------
-    dict
-        Dictionary containing accuracy metrics:
-        - accuracy: Overall accuracy
-        - recall: Edge coverage (% of true edges predicted)
-        - fpr: False positive rate
-        - precision: % of predicted edges that are correct
-    """
-    # Convert to binary
-    actual_bin = actual.astype(bool)
-    pred_bin = predicted.astype(bool)
-
-    # True positives, false positives, etc
-    tp = np.sum((actual_bin & pred_bin))
-    fp = np.sum((~actual_bin & pred_bin))
-    tn = np.sum((~actual_bin & ~pred_bin))
-    fn = np.sum((actual_bin & ~pred_bin))
-
-    # Compute metrics
-    accuracy = (tp + tn) / (tp + tn + fp + fn)
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-
-    return {
-        "accuracy": accuracy,
-        "recall": recall,
-        "fpr": fpr,
-        "precision": precision,
-        "true_density": np.mean(actual_bin),
-        "pred_density": np.mean(pred_bin),
+def get_full_model_name(alias: str) -> str:
+    """Get full model name from alias."""
+    REVERSE_ALIASES = {
+        "ba": "barabasi_albert",
+        "ws": "watts_strogatz",
+        "er": "erdos_renyi",
+        "sbm": "stochastic_block_model",
     }
+    return REVERSE_ALIASES.get(alias, alias)
 
 
-def test_predictor_visualization():
-    """Test and visualize how the predictor forecasts graph evolution."""
-
-    # 1. Load base configuration and override for visualization
-    config = get_config("stochastic_block_model")
+def generate_network_and_features():
+    """Generate network sequence and compute features once."""
+    # Get full model name and config
+    model_name = get_full_model_name(model_alias)
+    config = get_config(model_name)
     params = config["params"].__dict__
 
-    # Override with visualization-friendly parameters
-    params.update(
-        {
-            "n": 20,  # Small number of nodes for clear visualization
-            "seq_len": 50,  # Longer sequence to ensure enough history
-            "min_changes": 1,
-            "max_changes": 1,
-            "min_segment": 20,  # Longer segments
-            # Keep other SBM parameters from config but ensure clear community structure
-            "intra_prob": 0.8,  # High intra-community probability
-            "inter_prob": 0.1,  # Low inter-community probability
-        }
-    )
+    # Initialize components
+    generator = GraphGenerator(model_alias)
+    feature_extractor = NetworkFeatureExtractor()
 
-    # 2. Generate sequence
-    generator = GraphGenerator("sbm")
+    # Generate network sequence
+    print(f"Generating {model_name} network sequence...")
     result = generator.generate_sequence(params)
     graphs = result["graphs"]
     change_points = result["change_points"]
 
-    # 3. Initialize predictor with test parameters
-    predictor = GraphPredictor(
-        k=10,  # Larger window for better temporal patterns
-        alpha=0.8,
-        initial_gamma=0.1,
-        initial_beta=0.5,
-    )
+    # Extract features for each graph
+    print("Extracting network features...")
+    features = []
+    for adj_matrix in graphs:
+        graph = nx.from_numpy_array(adj_matrix)
+        features.append(feature_extractor.get_features(graph))
 
-    # 4. Create visualizer
+    return model_name, params, graphs, change_points, features
+
+
+def test_network_feature_visualization(
+    model_name, params, graphs, change_points, features
+):
+    """Test network feature visualization for different graph models."""
+    output_dir = "tests/output"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Initialize visualizer
     viz = NetworkVisualizer()
 
-    # 5. Select points around change point for visualization
-    change_point = change_points[0]
-    test_points = [
-        max(15, change_point - 3),  # Ensure at least 15 graphs of history
-        change_point,
-        min(len(graphs) - 4, change_point + 3),  # Ensure we can see 3 steps ahead
-    ]
+    # Create network state visualizations
+    print("Creating network state visualizations...")
+    key_points = [0] + change_points + [len(graphs) - 1]
+    n_points = len(key_points)
 
-    print(f"\nChange point at t={change_point}")
-    print(f"Testing prediction at points: {test_points}")
+    fig, axes = plt.subplots(
+        n_points,
+        2,
+        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Network States",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
 
-    # Create output directory
-    os.makedirs("test_results", exist_ok=True)
+    for i, time_idx in enumerate(key_points):
+        # Prepare node colors for SBM
+        node_color = None
+        if model_alias == "sbm":
+            block_sizes = [params["n"] // params["num_blocks"]] * (
+                params["num_blocks"] - 1
+            )
+            block_sizes.append(params["n"] - sum(block_sizes))
+            node_color = []
+            for j, size in enumerate(block_sizes):
+                node_color.extend([f"C{j}"] * size)
 
-    # Track metrics across all predictions
-    all_metrics = []
-
-    # 6. For each test point, make predictions and visualize
-    for t in test_points:
-        # Get history for prediction
-        history = graphs[max(0, t - 10) : t]  # Use full k=10 history when possible
-        current = graphs[t]
-
-        print(f"\nPredicting at t={t} with {len(history)} graphs in history")
-        print(f"History densities: {[np.mean(g) for g in history]}")
-        print(f"Current density: {np.mean(current)}")
-
-        # Make predictions
-        predicted_adjs = predictor.forecast(
-            history_adjs=history, current_adj=current, h=3  # Predict 3 steps ahead
-        )
-
-        # Print prediction stats before thresholding
-        print(
-            "Prediction densities before threshold:",
-            [np.mean(p) for p in predicted_adjs],
-        )
-
-        # Threshold predictions to binary (0 or 1)
-        predicted_adjs = (predicted_adjs > 0.5).astype(float)
-        print(
-            "Prediction densities after threshold:",
-            [np.mean(p) for p in predicted_adjs],
-        )
-
-        # Create visualization grid
-        fig, axes = plt.subplots(2, 4, figsize=(15, 8))
-        fig.suptitle(
-            f"Graph Evolution at t={t} (Change Point: {change_point})", fontsize=12
-        )
-
-        # Compute layout once using current graph
-        G_current = nx.from_numpy_array(current)
-        pos = nx.spring_layout(G_current, k=1, iterations=50, seed=42)
-
-        # Plot current state
+        # Plot network state
         viz.plot_network(
-            current, ax=axes[0, 0], title=f"Current (t={t})", layout_params={"pos": pos}
+            graphs[time_idx],
+            ax=axes[i, 0],
+            title=f"Network State at t={time_idx}"
+            + (" (Change Point)" if time_idx in change_points else ""),
+            layout="spring",
+            node_color=node_color,
         )
-        viz.plot_adjacency(current, ax=axes[1, 0], title="Current Adjacency")
 
-        # Plot predictions
-        for i, pred_adj in enumerate(predicted_adjs):
-            viz.plot_network(
-                pred_adj,
-                ax=axes[0, i + 1],
-                title=f"Predicted t+{i+1}",
-                layout_params={"pos": pos},
-            )
-            viz.plot_adjacency(
-                pred_adj,
-                ax=axes[1, i + 1],
-                title=f"Predicted Adj t+{i+1}",
-                show_values=True,  # Show the binary values
-            )
+        # Plot adjacency matrix
+        viz.plot_adjacency(
+            graphs[time_idx],
+            ax=axes[i, 1],
+            title=f"Adjacency Matrix at t={time_idx}",
+        )
 
-        plt.tight_layout()
-        plt.savefig(f"test_results/prediction_t{t}.png", dpi=300, bbox_inches="tight")
-        plt.close()
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        Path(output_dir) / f"{model_name}_states.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
 
-        # Also create a comparison with actual future states if available
-        if t + 3 < len(graphs):
-            fig, axes = plt.subplots(2, 3, figsize=(12, 8))
-            fig.suptitle(f"Prediction vs Actual at t={t}", fontsize=12)
+    print(f"Done! Network state visualizations have been saved to {output_dir}/")
 
-            for i in range(3):
-                # Plot predicted (thresholded)
-                viz.plot_adjacency(
-                    predicted_adjs[i],
-                    ax=axes[0, i],
-                    title=f"Predicted t+{i+1}",
-                    show_values=True,
-                )
 
-                # Plot actual
-                viz.plot_adjacency(
-                    graphs[t + i + 1],
-                    ax=axes[1, i],
-                    title=f"Actual t+{i+1}",
-                    show_values=True,
-                )
+def compare_predictors(
+    model_name: str,
+    graphs: List[np.ndarray],
+    change_points: List[int],
+    features: List[Dict[str, Any]],
+    predictor_configs: Dict[str, Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Compare all predictors on the same data."""
+    output_dir = "tests/output"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-            plt.tight_layout()
-            plt.savefig(
-                f"test_results/comparison_t{t}.png", dpi=300, bbox_inches="tight"
-            )
-            plt.close()
+    # Initialize components
+    viz = NetworkVisualizer()
+    feature_extractor = NetworkFeatureExtractor()
 
-        # For each prediction step
-        for step in range(min(3, len(predicted_adjs))):
-            if t + step + 1 < len(graphs):  # If we have actual future graph
-                actual_adj = graphs[t + step + 1]
-                pred_adj = predicted_adjs[step]
+    # Get all predictor types
+    predictor_types = list(PredictorFactory.PREDICTOR_TYPES.keys())
 
-                # Compute metrics
-                metrics = compute_metrics(actual_adj, pred_adj)
-                all_metrics.append(metrics)
+    # Store results for each predictor
+    results = {}
 
-                # Log metrics for this prediction
-                logger.info(f"\nPrediction metrics for t={t}, step={step+1}:")
-                logger.info(f"Accuracy: {metrics['accuracy']:.3f}")
-                logger.info(f"Edge Coverage (Recall): {metrics['recall']:.3f}")
-                logger.info(f"False Positive Rate: {metrics['fpr']:.3f}")
-                logger.info(f"Precision: {metrics['precision']:.3f}")
-                logger.info(f"True Density: {metrics['true_density']:.3f}")
-                logger.info(f"Predicted Density: {metrics['pred_density']:.3f}")
+    # Initial warmup period
+    warmup = 50
 
-    # Print average metrics
-    if all_metrics:
-        avg_metrics = {
-            k: np.mean([m[k] for m in all_metrics]) for k in all_metrics[0].keys()
+    # Run each predictor on the same data
+    for predictor_type in predictor_types:
+        print(f"\nTesting {predictor_type} predictor...")
+
+        # Create predictor
+        config = predictor_configs.get(predictor_type) if predictor_configs else None
+        predictor = PredictorFactory.create(predictor_type, config)
+        print(f"Using config:", config or "default")
+
+        # Initialize history
+        history = []
+        predicted_features = []
+
+        # Warmup period
+        for t in range(warmup):
+            state = {"adjacency": graphs[t], "time": t}
+            history.append(state)
+            predictor.update_state(state)
+
+        # Generate predictions
+        for t in range(warmup, len(graphs) - 1):
+            # Update current state
+            state = {"adjacency": graphs[t], "time": t}
+            history.append(state)
+            if len(history) > predictor.history_size:
+                history = history[-predictor.history_size :]
+
+            # Get predicted next state features
+            pred_adjs = predictor.predict(history, horizon=1)
+            pred_graph = nx.from_numpy_array(pred_adjs[0])
+            predicted_features.append(feature_extractor.get_features(pred_graph))
+
+            # Update predictor state
+            predictor.update_state(state)
+
+        # Get actual features for comparison
+        actual_features = features[warmup + 1 : len(graphs)]
+
+        # Compute metrics
+        basic_metrics = compute_feature_metrics(actual_features, predicted_features)
+        dist_metrics = compute_feature_distribution_metrics(
+            actual_features, predicted_features
+        )
+
+        # Store results
+        results[predictor_type] = {
+            "basic_metrics": basic_metrics,
+            "distribution_metrics": dist_metrics,
+            "predicted_features": predicted_features,
         }
-        logger.info("\nAverage metrics across all predictions:")
-        logger.info(f"Accuracy: {avg_metrics['accuracy']:.3f}")
-        logger.info(f"Edge Coverage (Recall): {avg_metrics['recall']:.3f}")
-        logger.info(f"False Positive Rate: {avg_metrics['fpr']:.3f}")
-        logger.info(f"Precision: {avg_metrics['precision']:.3f}")
-        logger.info(f"True Density: {avg_metrics['true_density']:.3f}")
-        logger.info(f"Predicted Density: {avg_metrics['pred_density']:.3f}")
+
+        # Plot individual predictor results
+        plot_prediction_comparison(
+            model_name,
+            predictor_type,
+            actual_features,
+            predicted_features,
+            basic_metrics,
+            dist_metrics,
+            change_points,
+            warmup,
+            viz,
+            output_dir,
+        )
+
+    # Create comparison plot across predictors
+    plot_predictor_comparison(model_name, results, viz, output_dir)
+
+    return results
 
 
-def test_predictor_basic():
-    """Test basic functionality of the predictor."""
-    # Create a simple predictor
-    predictor = GraphPredictor(k=3, alpha=0.8)
+def plot_prediction_comparison(
+    model_name: str,
+    predictor_type: str,
+    actual_features: List[Dict[str, Any]],
+    predicted_features: List[Dict[str, Any]],
+    basic_metrics: Dict[str, FeatureMetrics],
+    dist_metrics: Dict[str, DistributionMetrics],
+    change_points: List[int],
+    warmup: int,
+    viz: NetworkVisualizer,
+    output_dir: str,
+):
+    """Plot comparison for a single predictor."""
+    fig, axes = plt.subplots(
+        4, 2, figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.GRID_HEIGHT * 2)
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+    axes = axes.flatten()
 
-    # Create a simple sequence of graphs
-    n = 5  # number of nodes
-    A1 = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
-    A2 = np.array([[0, 1, 1], [1, 0, 1], [1, 1, 0]])
+    # Plot each feature comparison
+    feature_names = list(actual_features[0].keys())
+    for i, feature in enumerate(feature_names):
+        ax = axes[i]
+        time = np.arange(len(actual_features))
 
-    # Test forecast
-    history = [A1, A2]
-    current = A2
-    predictions = predictor.forecast(history, current, h=2)
+        # For list features (like degrees), plot mean and std
+        if isinstance(actual_features[0][feature], list):
+            # Actual values
+            actual_means = [np.mean(f[feature]) for f in actual_features]
+            actual_stds = [np.std(f[feature]) for f in actual_features]
+            ax.plot(time, actual_means, label="Actual", color=viz.COLORS["actual"])
+            ax.fill_between(
+                time,
+                np.array(actual_means) - np.array(actual_stds),
+                np.array(actual_means) + np.array(actual_stds),
+                color=viz.COLORS["actual"],
+                alpha=0.1,
+            )
 
-    # Basic checks
-    assert isinstance(predictions, np.ndarray)
-    assert predictions.shape == (2, 3, 3)  # h=2 predictions for 3x3 matrices
-    assert np.all(predictions >= 0) and np.all(predictions <= 1)
+            # Predicted values
+            pred_means = [np.mean(f[feature]) for f in predicted_features]
+            pred_stds = [np.std(f[feature]) for f in predicted_features]
+            ax.plot(time, pred_means, label="Predicted", color=viz.COLORS["predicted"])
+            ax.fill_between(
+                time,
+                np.array(pred_means) - np.array(pred_stds),
+                np.array(pred_means) + np.array(pred_stds),
+                color=viz.COLORS["predicted"],
+                alpha=0.1,
+            )
 
-    # Test symmetry
-    for pred in predictions:
-        assert np.allclose(pred, pred.T)
-        assert np.allclose(np.diag(pred), 0)
+            # Add distribution metrics if available
+            if feature in dist_metrics:
+                metrics_text = (
+                    f"KL: {dist_metrics[feature].kl_divergence:.3f}\n"
+                    f"JS: {dist_metrics[feature].js_divergence:.3f}\n"
+                    f"W: {dist_metrics[feature].wasserstein:.3f}"
+                )
+            else:
+                metrics_text = ""
+        else:
+            # For scalar features
+            actual_values = [f[feature] for f in actual_features]
+            pred_values = [f[feature] for f in predicted_features]
+            ax.plot(time, actual_values, label="Actual", color=viz.COLORS["actual"])
+            ax.plot(time, pred_values, label="Predicted", color=viz.COLORS["predicted"])
+            metrics_text = ""
+
+        # Add basic metrics
+        basic_text = (
+            f"RMSE: {basic_metrics[feature].rmse:.3f}\n"
+            f"MAE: {basic_metrics[feature].mae:.3f}\n"
+            f"R²: {basic_metrics[feature].r2:.3f}"
+        )
+
+        # Combine metrics text
+        full_text = basic_text
+        if metrics_text:
+            full_text += "\n" + metrics_text
+
+        # Add metrics text to plot
+        ax.text(
+            0.02,
+            0.98,
+            full_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            horizontalalignment="left",
+            fontsize=viz.ANNOTATION_SIZE,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
+        )
+
+        # Mark change points
+        for cp in change_points:
+            if cp >= warmup and cp < len(actual_features) + warmup:
+                ax.axvline(
+                    cp - warmup,
+                    color=viz.COLORS["change_point"],
+                    linestyle="--",
+                    alpha=0.5,
+                )
+
+        ax.set_title(feature.replace("_", " ").title(), fontsize=viz.TITLE_SIZE)
+        ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE)
+        ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE)
+        ax.tick_params(labelsize=viz.TICK_SIZE)
+        ax.grid(True, alpha=viz.GRID_ALPHA)
+        ax.legend(fontsize=viz.LEGEND_SIZE)
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        Path(output_dir) / f"{model_name}_{predictor_type}_prediction_features.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+
+def plot_predictor_comparison(
+    model_name: str,
+    results: Dict[str, Dict[str, Any]],
+    viz: NetworkVisualizer,
+    output_dir: str,
+):
+    """Plot comparison across all predictors."""
+    # Get feature names from first predictor's results
+    first_predictor = next(iter(results.values()))
+    feature_names = list(first_predictor["basic_metrics"].keys())
+
+    # Create comparison plots
+    fig, axes = plt.subplots(
+        len(feature_names),
+        1,
+        figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * len(feature_names)),
+    )
+    fig.suptitle(
+        f"{model_name.replace('_', ' ').title()} Predictor Comparison",
+        fontsize=viz.TITLE_SIZE,
+        y=0.98,
+    )
+
+    if len(feature_names) == 1:
+        axes = [axes]
+
+    # Plot comparison for each feature
+    for i, feature in enumerate(feature_names):
+        ax = axes[i]
+
+        # Bar plot of RMSE and R² for each predictor
+        x = np.arange(len(results))
+        width = 0.35
+
+        rmse_values = [results[p]["basic_metrics"][feature].rmse for p in results]
+        r2_values = [results[p]["basic_metrics"][feature].r2 for p in results]
+
+        ax.bar(x - width / 2, rmse_values, width, label="RMSE")
+        ax.bar(x + width / 2, r2_values, width, label="R²")
+
+        ax.set_title(f"{feature.replace('_', ' ').title()}", fontsize=viz.TITLE_SIZE)
+        ax.set_xticks(x)
+        ax.set_xticklabels(results.keys())
+        ax.legend()
+        ax.grid(True, alpha=viz.GRID_ALPHA)
+
+    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    plt.savefig(
+        Path(output_dir) / f"{model_name}_predictor_comparison.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Test network predictors")
+    parser.add_argument(
+        "model", choices=["ba", "ws", "er", "sbm"], help="Network model type"
+    )
+    parser.add_argument(
+        "--configs", type=str, help="JSON string of predictor configs for each type"
+    )
+    args = parser.parse_args()
+
+    model_alias = args.model
+
+    # Parse configs if provided
+    predictor_configs = None
+    if args.configs:
+        import json
+
+        try:
+            predictor_configs = json.loads(args.configs)
+        except json.JSONDecodeError:
+            print("Error: Invalid JSON config string")
+            sys.exit(1)
+
+    # Generate network and compute features once
+    model_name, params, graphs, change_points, features = (
+        generate_network_and_features()
+    )
+
+    # Run visualizations
+    test_network_feature_visualization(
+        model_name, params, graphs, change_points, features
+    )
+
+    # Compare all predictors
+    results = compare_predictors(
+        model_name, graphs, change_points, features, predictor_configs
+    )
+
+    # Print summary metrics for all predictors
+    print("\nPrediction Performance Summary:")
+    for predictor_type, metrics in results.items():
+        print(f"\n{predictor_type} Predictor:")
+        print(
+            "Average RMSE across features:",
+            np.mean([m.rmse for m in metrics["basic_metrics"].values()]),
+        )
+        print(
+            "Average R² across features:",
+            np.mean([m.r2 for m in metrics["basic_metrics"].values()]),
+        )

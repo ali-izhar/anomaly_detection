@@ -4,6 +4,7 @@
 
 from typing import List, Dict, Any, Optional, Tuple
 
+import logging
 import warnings
 import networkx as nx
 import numpy as np
@@ -15,6 +16,8 @@ from sklearn.cluster import SpectralClustering
 from .base import BasePredictor
 
 warnings.filterwarnings("ignore", category=UserWarning)
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveDistributionAwarePredictor(BasePredictor):
@@ -81,7 +84,6 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             Strength of distribution-based adjustments (e.g., density alignment).
         """
         self.n_history = n_history
-        self._history_size = n_history  # Set history size property
 
         # Default weighting scheme (exponential decay) if no custom weights are provided
         if weights is None:
@@ -422,9 +424,9 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
         return np.clip(pred_new, 0, 1)
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     #           Triadic Closure Reinforcement for Higher Clustering
-    # -------------------------------------------------------------------------
+    # =========================================================================
     def _reinforce_triadic_closure(
         self, pred: np.ndarray, factor: float = 0.05
     ) -> np.ndarray:
@@ -453,9 +455,9 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
         return np.clip(new_pred, 0, 1)
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     #    Slight Path-Length Shaping for Better Closeness Approximation
-    # -------------------------------------------------------------------------
+    # =========================================================================
     def _reduce_path_length(
         self, pred: np.ndarray, last_adj: np.ndarray, alpha: float = 0.02
     ) -> np.ndarray:
@@ -831,6 +833,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             )
 
         # Update distribution tracking
+        logger.debug(f"Updating distribution history for {len(current_history)} states")
         self._update_distribution_history(current_history[-1]["adjacency"])
 
         # Check for phase transition
@@ -842,6 +845,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             self.change_points.append(len(current_history))
 
         predictions = []
+        logger.debug(f"Starting prediction loop for {horizon} steps")
         for _ in range(horizon):
             last_states = current_history[-self.n_history :]
             last_adjs = [st["adjacency"] for st in last_states]
@@ -905,6 +909,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 if self.enforce_connectivity:
                     pred = self._enforce_connectivity_enhanced(pred, orig_pred)
 
+            logger.debug(f"{_ + 1} / {horizon}: Predicted adjacency matrix: {pred}")
             predictions.append(pred)
 
             # Update history and distribution tracking
@@ -923,6 +928,9 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 self.weights = np.maximum(new_weights, self.min_weight)
                 self.weights = self.weights / self.weights.sum()
 
+        logger.debug(
+            f"Finished prediction loop for {horizon} steps. Returning {len(predictions)} predictions"
+        )
         return predictions
 
     # =========================================================================
@@ -976,7 +984,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
     def reset(self) -> None:
         """Reset the predictor to its initial state: clears all histories,
-        reinitializes weights, and starts a new “unknown” phase."""
+        reinitializes weights, and starts a new "unknown" phase."""
         self.weights = np.array([0.5, 0.3, 0.1, 0.05, 0.05])
         self.weights = np.maximum(self.weights, self.min_weight)
         self.weights = self.weights / self.weights.sum()

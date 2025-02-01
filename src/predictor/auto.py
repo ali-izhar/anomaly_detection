@@ -19,23 +19,29 @@ logger = logging.getLogger(__name__)
 class AutoChangepointPredictor(BasePredictor):
     """Predictor with automatic changepoint detection using feature distribution monitoring."""
 
-    def __init__(self, alpha: float = 0.85, min_phase_length: int = 40):
+    def __init__(
+        self, n_history: int = 5, alpha: float = 0.85, min_phase_length: int = 40
+    ):
         """
         Parameters
         ----------
+        n_history : int
+            Number of historical states to keep
         alpha : float
+
             Exponential decay factor for temporal weighting
         min_phase_length : int
             Minimum timesteps between changepoints (40 as specified)
         """
+        self.n_history = n_history
         self.alpha = alpha
         self.min_phase_length = min_phase_length
         self.current_phase_start = 0
         self.structural_params = {}
         self.history = []
         self.feature_history = deque(maxlen=100)
+
         self.network_type = None
-        self._history_size = min_phase_length  # Set history size to match phase length
         self._initialize_feature_tracking()
 
     def predict(
@@ -58,6 +64,9 @@ class AutoChangepointPredictor(BasePredictor):
         """
         if not history:
             raise ValueError("Need at least one historical state")
+
+        if len(history) < self.n_history:
+            raise ValueError(f"Need at least {self.n_history} historical states")
 
         # Extract current adjacency and update feature tracking
         current_adj = history[-1]["adjacency"]

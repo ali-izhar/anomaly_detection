@@ -37,8 +37,9 @@ class PredictorFactory:
             "temporal_window": 10,
             "distribution_reg": 0.3,
         },
-        "auto": {"alpha": 0.85, "min_phase_length": 40},
+        "auto": {"n_history": 5, "alpha": 0.85, "min_phase_length": 40},
         "statistical": {
+            "n_history": 5,
             "alpha": 0.8,
             "change_threshold": 5,
             "min_phase_length": 40,

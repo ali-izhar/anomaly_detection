@@ -3,8 +3,9 @@
 """Base class for network prediction algorithms."""
 
 from abc import ABC, abstractmethod
-import numpy as np
 from typing import List, Dict, Any
+
+import numpy as np
 
 
 class BasePredictor(ABC):
@@ -20,7 +21,7 @@ class BasePredictor(ABC):
             Number of historical states needed for prediction
         """
         # Default to 5 if not specified by child class
-        return getattr(self, "_history_size", 5)
+        return getattr(self, "n_history", 5)
 
     @abstractmethod
     def predict(
