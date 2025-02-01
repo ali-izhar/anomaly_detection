@@ -79,7 +79,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
         distribution_memory : int
             How many past states to store for distribution-based computations.
         phase_length : int
-            Minimum length of a “phase” before we can detect a possible transition.
+            Minimum length of a "phase" before we can detect a possible transition.
         distribution_reg : float
             Strength of distribution-based adjustments (e.g., density alignment).
         """
@@ -323,32 +323,94 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
         return pred_reg
 
     def _preserve_communities(
-        self,
-        pred: np.ndarray,
-        comm_labels: np.ndarray,
-        modularity: float,
-        strength_factor: float = 1.0,
+        self, pred: np.ndarray, comm_labels: np.ndarray, modularity: float
     ) -> np.ndarray:
-        """Enhance or preserve intra-community edges and reduce inter-community edges,
-        scaled by the detected modularity."""
+        """Enhanced community preservation with explicit block probability estimation."""
         n = pred.shape[0]
         modifier = np.zeros((n, n))
 
-        # Intra-community edges get strengthened, inter-community edges weakened
-        intra_weight = 0.15 * (1 + modularity) * strength_factor
-        inter_weight = -0.1 * (1 + modularity) * strength_factor
+        # Statistical-style block probability estimation
+        block0 = comm_labels == 0
+        block1 = comm_labels == 1
 
+        # Compute block-wise edge probabilities like statistical predictor
+        A_00 = pred[block0][:, block0]
+        A_11 = pred[block1][:, block1]
+        A_01 = pred[block0][:, block1]
+
+        n0, n1 = block0.sum(), block1.sum()
+        e00 = A_00[np.triu_indices(n0, k=1)].sum()
+        e11 = A_11[np.triu_indices(n1, k=1)].sum()
+        e01 = A_01.sum()
+
+        poss00 = max(1, n0 * (n0 - 1) / 2)
+        poss11 = max(1, n1 * (n1 - 1) / 2)
+        poss01 = max(1, n0 * n1)
+
+        p_intra0 = e00 / poss00
+        p_intra1 = e11 / poss11
+        p_inter = e01 / poss01
+
+        # Use these probabilities for more accurate community preservation
         for i in range(n):
             for j in range(i + 1, n):
                 if comm_labels[i] == comm_labels[j]:
-                    modifier[i, j] = modifier[j, i] = intra_weight
+                    target_p = p_intra0 if comm_labels[i] == 0 else p_intra1
+                    modifier[i, j] = modifier[j, i] = target_p - pred[i, j]
                 else:
-                    modifier[i, j] = modifier[j, i] = inter_weight
+                    modifier[i, j] = modifier[j, i] = p_inter - pred[i, j]
 
+        # Blend with original prediction using modularity-based weight
         alpha = self.community_reg * (1 + modularity)
         pred_comm = pred + alpha * modifier
 
         return np.clip(pred_comm, 0, 1)
+
+    def _preserve_global_structure(
+        self, pred: np.ndarray, last_adj: np.ndarray
+    ) -> np.ndarray:
+        """Enhance global structure preservation for better closeness centrality."""
+
+        # Compute current closeness centrality
+        G_pred = nx.from_numpy_array(pred)
+        G_last = nx.from_numpy_array(last_adj)
+
+        try:
+            close_pred = nx.closeness_centrality(G_pred)
+            close_last = nx.closeness_centrality(G_last)
+
+            # Identify nodes with significant closeness deviation
+            deviations = {}
+            for node in G_pred.nodes():
+                if close_last[node] > 0:  # avoid division by zero
+                    dev = abs(close_pred[node] - close_last[node]) / close_last[node]
+                    if dev > 0.1:  # threshold for significant deviation
+                        deviations[node] = dev
+
+            # For nodes with high deviation, adjust their connections
+            if deviations:
+                modifier = np.zeros_like(pred)
+                for node, dev in deviations.items():
+                    # Find optimal paths in last adjacency
+                    paths = nx.single_source_shortest_path_length(G_last, node)
+
+                    # Strengthen connections that maintain similar path lengths
+                    for target, path_len in paths.items():
+                        if path_len <= 2:  # focus on close neighbors
+                            weight = (1.0 / (path_len + 1)) * dev
+                            modifier[node, target] = modifier[target, node] = weight
+
+                # Apply modifications with adaptive weight
+                alpha = 0.3 * (
+                    1.0
+                    - np.mean(list(close_pred.values()))
+                    / np.mean(list(close_last.values()))
+                )
+                pred = pred + alpha * modifier
+
+            return np.clip(pred, 0, 1)
+        except:
+            return pred
 
     def _enforce_connectivity_enhanced(
         self, pred: np.ndarray, orig_pred: np.ndarray
@@ -569,9 +631,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
         if model_type == "sbm":
             # Strengthen community structure
             comm_labels, modularity = self._detect_communities(last_adj)
-            pred = self._preserve_communities(
-                pred, comm_labels, modularity, strength_factor=1.5
-            )
+            pred = self._preserve_communities(pred, comm_labels, modularity)
 
         elif model_type == "ba":
             # Enhance hub connections for BA-like networks
@@ -874,15 +934,17 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             target_vals, target_vecs = self._compute_spectral_features(last_adjs[-1])
             pred = self._spectral_regularization(pred, target_vals, target_vecs)
 
-            # 3) Community preservation if high modularity
+            # 3) Enhanced community preservation
             comm_labels, modularity = self._detect_communities(last_adjs[-1])
-            if modularity > 0.3:
-                pred = self._preserve_communities(pred, comm_labels, modularity)
+            pred = self._preserve_communities(pred, comm_labels, modularity)
 
-            # 3.1) **New**: Light triadic closure reinforcement
+            # 4) Global structure enhancement for closeness
+            pred = self._preserve_global_structure(pred, last_adjs[-1])
+
+            # 5) Light triadic closure reinforcement
             pred = self._reinforce_triadic_closure(pred, factor=0.02)
 
-            # 3.2) **New**: Slightly reduce path length if too large
+            # 6) Slightly reduce path length if too large
             pred = self._reduce_path_length(pred, last_adjs[-1], alpha=0.02)
 
             # Ensure valid probabilities
@@ -939,7 +1001,7 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
     def update_state(self, actual_state: Dict[str, Any]) -> None:
         """Update the predictor's internal state with a new observed adjacency.
-        This should be called after receiving a real “future” state that
+        This should be called after receiving a real "future" state that
         either confirms or contradicts the predictions."""
         actual_adj = actual_state["adjacency"]
 
