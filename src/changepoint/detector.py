@@ -8,10 +8,27 @@ import numpy as np
 import networkx as nx
 
 # Import the modular betting functions; by default, we use the power martingale.
-from .betting import power_martingale, exponential_martingale, mixture_martingale
+from .betting import (
+    power_martingale,
+    exponential_martingale,
+    mixture_martingale,
+    constant_martingale,
+    beta_martingale,
+    kernel_density_martingale,
+)
 from .martingale import compute_martingale, multiview_martingale_test
 
 logger = logging.getLogger(__name__)
+
+# Mapping of betting function names to their implementations
+BETTING_FUNCTIONS = {
+    "power": power_martingale,
+    "exponential": exponential_martingale,
+    "mixture": mixture_martingale,
+    "constant": constant_martingale,
+    "beta": beta_martingale,
+    "kernel": kernel_density_martingale,
+}
 
 
 class ChangePointDetector:
@@ -49,12 +66,11 @@ class ChangePointDetector:
         max_martingale: Optional[float] = None,
         reset: bool = True,
         max_window: Optional[int] = None,
-        betting_func: Optional[
-            Callable[[float, float, float], float]
-        ] = power_martingale,
+        betting_func: Union[str, Callable] = "power",
     ):
         """Initialize the detector with specified parameters."""
         self.method = martingale_method
+
         self.history_size = history_size
         self.threshold = threshold
         self.epsilon = epsilon
@@ -64,7 +80,19 @@ class ChangePointDetector:
         self.max_martingale = max_martingale
         self.reset = reset
         self.max_window = max_window
-        self.betting_func = betting_func
+
+        # Handle betting function selection
+        if isinstance(betting_func, str):
+            if betting_func not in BETTING_FUNCTIONS:
+
+                raise ValueError(
+                    f"Unknown betting function '{betting_func}'. "
+                    f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
+                )
+            self.betting_func = BETTING_FUNCTIONS[betting_func]
+
+        else:
+            self.betting_func = betting_func
 
     def run(
         self,

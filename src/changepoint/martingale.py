@@ -25,7 +25,7 @@ def compute_martingale(
     reset: bool = True,
     window_size: Optional[int] = None,
     random_state: Optional[int] = None,
-    bitting_func: Callable[[float, float, float], float] = None,
+    betting_func: Callable[[float, float, float], float] = None,
 ) -> Dict[str, Any]:
     """
     Compute a martingale for online change detection over a univariate data stream using conformal p-values
@@ -36,7 +36,7 @@ def compute_martingale(
       2. Horizon martingale: uses the current timestep plus all predicted future states (horizon)
          together with the history.
 
-    The martingale update is performed using the provided 'bitting_func', which defaults to the power martingale update.
+    The martingale update is performed using the provided 'betting_func', which defaults to the power martingale update.
 
     Parameters
     ----------
@@ -58,7 +58,7 @@ def compute_martingale(
         If None, keeps all past observations.
     random_state : int, optional
         Random seed for reproducibility.
-    bitting_func : callable, optional
+    betting_func : callable, optional
         Function to update the martingale. It should accept (prev_m, pvalue, epsilon) and return the updated value.
         Defaults to the power martingale update.
 
@@ -157,8 +157,8 @@ def compute_martingale(
             # Get previous martingale value before any updates
             prev_m = martingale[-1]
 
-            # Update the traditional martingale using the provided bitting function.
-            new_m = bitting_func(prev_m, pvalue, epsilon)
+            # Update the traditional martingale using the provided betting function.
+            new_m = betting_func(prev_m, pvalue, epsilon)
             traditional_detection = (
                 False  # Only set for traditional martingale detection
             )
@@ -205,8 +205,8 @@ def compute_martingale(
                     )
                     horizon_pvalues.append(pred_pvalue)
 
-                    # Update the product factor for this horizon step using the bitting function.
-                    pred_martingale_factor *= bitting_func(1.0, pred_pvalue, epsilon)
+                    # Update the product factor for this horizon step using the betting function.
+                    pred_martingale_factor *= betting_func(1.0, pred_pvalue, epsilon)
 
                 # Use the same previous martingale value for horizon update
                 new_pred_m = prev_m * pred_martingale_factor
@@ -286,11 +286,10 @@ def multiview_martingale_test(
     early_stop_threshold: Optional[float] = None,
     batch_size: int = 1000,
     random_state: Optional[int] = None,
-    bitting_func: Callable[[float, float, float], float] = None,
+    betting_func: Callable[[float, float, float], float] = None,
 ) -> Dict[str, Any]:
     """
     Compute a multivariate (multiview) martingale test, combining evidence across multiple features.
-
 
     For d features, each feature j maintains its own martingale M_j(n) computed using the
     traditional update (current observation + history) and (if provided) the horizon update.
@@ -299,7 +298,7 @@ def multiview_martingale_test(
         M_avg(n) = M_total(n) / d
     A change is detected if M_total(n) > threshold.
 
-    The martingale update is performed using the provided 'bitting_func', which defaults to the
+    The martingale update is performed using the provided 'betting_func', which defaults to the
     power martingale update.
 
     Parameters
@@ -324,7 +323,7 @@ def multiview_martingale_test(
         Process data in chunks for large datasets.
     random_state : int, optional
         Seed for reproducibility.
-    bitting_func : callable, optional
+    betting_func : callable, optional
         Function to update the martingale. It should accept (prev_m, pvalue, epsilon) and return the updated value.
         Defaults to the power martingale update.
 
@@ -468,7 +467,7 @@ def multiview_martingale_test(
                 timestep_pvalues.append(pv)
 
                 prev_m = martingales[j][-1]
-                new_m = bitting_func(prev_m, pv, epsilon)
+                new_m = betting_func(prev_m, pv, epsilon)
                 new_martingales.append(new_m)  # Append to list of new martingale values
                 individual_martingales[j].append(new_m)
 
@@ -537,7 +536,7 @@ def multiview_martingale_test(
                         pred_pv = get_pvalue(pred_svals, random_state=random_state)
                         timestep_pred_pvalues.append(pred_pv)
 
-                        pred_martingale_factor *= bitting_func(1.0, pred_pv, epsilon)
+                        pred_martingale_factor *= betting_func(1.0, pred_pv, epsilon)
 
                     # Use original martingale value (before potential reset)
                     prev_trad_m = new_martingales[j]  # Use value before reset
