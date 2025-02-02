@@ -2,14 +2,17 @@
 
 """Threshold-based classifier for change point detection in graph sequences.
 
-This module defines a simple classifier that uses a fixed decision rule:
+This module defines:
+1. A simple classifier that uses a fixed decision rule:
     y = 1[sum_i x_i > τ]
-where x_i are the feature values (e.g. centrality measures extracted from graph snapshots)
-and τ is the decision threshold. This classifier is also set up for SHAP analysis so that
-one can explain which features (centrality measures) contribute most to the detected changes.
+   where x_i are the feature values and τ is the decision threshold.
+
+2. SHAP analysis functionality to explain:
+   - Which features contribute most to detected changes
+   - How martingale values from different features influence detection
 """
 
-from typing import List
+from typing import List, Dict, Any, Tuple
 import logging
 import numpy as np
 import shap
@@ -19,6 +22,18 @@ from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 logger = logging.getLogger(__name__)
+
+# Fixed feature order for consistent visualization
+FEATURE_ORDER = [
+    "degree",
+    "density",
+    "clustering",
+    "betweenness",
+    "eigenvector",
+    "closeness",
+    "singular_value",
+    "laplacian",
+]
 
 
 class CustomThresholdModel(BaseEstimator, ClassifierMixin):
@@ -198,6 +213,62 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
             logger.error(f"SHAP computation failed: {str(e)}")
             # Return a dummy array on error.
             return np.zeros((len(X), X.shape[1]))
+
+    def compute_martingale_shap_values(
+        self,
+        martingales: Dict[str, Dict[str, Any]],
+        change_points: List[int],
+        sequence_length: int,
+        window_size: int = 5,
+    ) -> Tuple[np.ndarray, List[str]]:
+        """
+        Compute SHAP values specifically for martingale values from different features.
+
+        This method converts the martingale dictionary into a feature matrix and computes
+        SHAP values to explain how each feature's martingale contributes to change detection.
+
+        Args:
+            martingales: Dictionary containing martingale values for each feature
+            change_points: True change point indices
+            sequence_length: Length of the sequence
+            window_size: Window size for SHAP computation
+
+        Returns:
+            tuple: (shap_values, feature_names)
+                - shap_values: numpy.ndarray of shape [n_timesteps x n_features]
+                - feature_names: list of feature names in order matching shap_values columns
+        """
+        # Convert martingale values to feature matrix with consistent ordering
+        feature_matrix = []
+        feature_names = []  # Keep track of which features were actually found
+
+        for feature in FEATURE_ORDER:
+            if feature in martingales and feature != "combined":
+                # Convert array of arrays to flat array
+                martingales_array = np.array(
+                    [
+                        x.item() if isinstance(x, np.ndarray) else x
+                        for x in martingales[feature]["martingales"]
+                    ]
+                )
+                feature_matrix.append(martingales_array)
+                feature_names.append(feature)
+
+        if not feature_matrix:
+            logger.error("No valid features found in martingales dictionary")
+            raise ValueError("No valid features found in martingales dictionary")
+
+        X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
+
+        # Compute SHAP values using the base method
+        shap_values = self.compute_shap_values(
+            X=X,
+            change_points=change_points,
+            sequence_length=sequence_length,
+            window_size=window_size,
+        )
+
+        return shap_values, feature_names
 
     def get_feature_importances(self) -> np.ndarray:
         """

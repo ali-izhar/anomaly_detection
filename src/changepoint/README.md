@@ -1,100 +1,156 @@
-## What is a Change Point?
+# Change Point Detection via Martingale Framework
 
-Given a data stream $X_1, X_2, \ldots, X_n$, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs significantly from the distribution of $X_{k+1:n}$. In practice, we usually do **online** detection — we process observations one at a time and raise an alarm as soon as a suspected shift is detected.
+## Overview
+
+Given a data stream $X_1, X_2, \ldots, X_n$, a **change point** at time $k$ indicates that the distribution of $X_{1:k}$ differs from $X_{k+1:n}$. We perform **online** detection, processing observations sequentially and raising alarms for suspected distribution shifts.
 
 ## The Martingale Framework
 
-### Background
+### Core Components
 
-A **martingale** $\{M_n\}_{n \ge 0}$ is a process that satisfies the property
+1. **Strangeness Measure**: $\alpha(x)$ quantifies how "unusual" an observation $x$ is
+2. **P-value Computation**: Converts strangeness to a probability via conformal prediction
+3. **Betting Function**: Updates martingale value based on p-value
+4. **Threshold Detection**: Raises alarm when martingale exceeds threshold
+
+### Betting Functions
+
+We support multiple betting functions $\epsilon(p)$ that convert p-values to martingale updates:
+
+1. **Power Martingale**:
+   $$
+   M_n = M_{n-1} \times \epsilon \times p_n^{\epsilon-1}
+   $$
+   - Most sensitive to very small p-values
+   - Parameter $\epsilon \in (0,1)$ controls sensitivity
+
+2. **Simple Mixture**:
+   $$
+   M_n = M_{n-1} \times \frac{\epsilon}{p_n}
+   $$
+   - Linear relationship with inverse p-value
+   - More stable than power martingale
+
+3. **Beta Martingale**:
+   $$
+   M_n = M_{n-1} \times \text{Beta}(p_n; \alpha, \beta)
+   $$
+   - Uses Beta distribution density
+   - Parameters $\alpha, \beta$ control shape of betting
+
+4. **Kernel Martingale**:
+   $$
+   M_n = M_{n-1} \times K(p_n)
+   $$
+   - Uses kernel function (e.g., Gaussian)
+   - Smooth betting across p-value range
+
+### Strangeness Measures
+
+For graph/network data, we compute strangeness using:
+
+1. **Structural Features**:
+   - Node degree distribution
+   - Clustering coefficients
+   - Betweenness centrality
+   - Eigenvector centrality
+   - Graph density
+   - Average path length
+   - Connected components
+
+2. **Distance Metrics**:
+   - Euclidean distance in feature space
+   - Graph edit distance
+   - Spectral distance
+   - NetSimile distance
+
+### P-value Computation
+
+Given strangeness scores $\{\alpha_1, \ldots, \alpha_n\}$:
 
 $$
-E[M_{n+1} \mid M_1, M_2, \ldots, M_n] = M_n
+p_n = \frac{|\{i: \alpha_i > \alpha_n\}| + \theta|\{i: \alpha_i = \alpha_n\}|}{n}
 $$
 
-Intuitively, the expected future value of a martingale equals its current value. This differs from:
+where $\theta \sim U(0,1)$ breaks ties randomly.
 
-- **Markov Processes**: Where the future state depends only on the current state.
-- **Martingale Processes**: Where the *expected* future value is the current value (like fair games where your expected winnings remain constant).
+Properties:
+- Under null (no change): $p_n \sim U(0,1)$
+- Under alternative: $p_n$ tends to be small
+- Exchangeability is key assumption
 
-In **change detection**, we construct a **test martingale** from sequentially computed p-values. Under a stable (unchanged) distribution, this martingale remains bounded or grows slowly; a sharp growth in the martingale suggests a change point.
+### Horizon Martingale
 
-### The Power Martingale Update
-
-We use the **power martingale** update rule:
-
-$$
-M_n = M_{n-1} \times \epsilon \times (p_n)^{(\epsilon - 1)}
-$$
-
-where
-
-- $p_n$ is the **p-value** at time $n$.
-- $\epsilon \in (0,1)$ is a **sensitivity parameter**. Smaller $\epsilon$ places more emphasis on small p-values (anomalies), making the martingale spike faster.
-
-**Key insight**:  
-- If $p_n$ is high (meaning the new observation is not strange), $(p_n)^{(\epsilon - 1)}$ is not too large, and $M_n$ remains stable or decreases.  
-- If $p_n$ is very low (the point is suspicious), $(p_n)^{(\epsilon - 1)}$ can be large, so $M_n$ increases significantly.
-
-### Thresholding
-
-We set a **detection threshold** $\tau$. Whenever $M_n$ exceeds $\tau$, we raise a **change point alarm**. Optionally, we can **reset** the martingale and/or the historical window upon detection to search for subsequent changes.
-
-## P-Value via Strangeness
-
-### Strangeness
-
-Each new observation gets a **strangeness** value, $\alpha_n$, measuring how "unusual" it is relative to past observations. For instance, one might use:
-
-- **Cluster-based distance**: Minimum distance to a KMeans cluster center.
-- **Graph structural features**: Degree, betweenness, or subgraph patterns.
-- **Embedding distance**: Distance in a learned embedding space (node2vec, GNN, etc.).
-
-### Empirical P-value Calculation
-
-Let $\{\alpha_1, \alpha_2, \ldots, \alpha_n\}$ be all strangeness values up to time $n$. We define:
+Extension using predicted future states:
 
 $$
-p_n = \frac{| \{\alpha_i : \alpha_i > \alpha_n\} | + \theta | \{\alpha_i : \alpha_i = \alpha_n\} |}{n}
+\hat{M}_t = M_{t-1} \times \prod_{j=1}^h \epsilon(p_{t+j})^{\epsilon-1}
 $$
 
-where $\theta \sim U(0,1)$ is a random tie-break. This is the **standard conformal prediction** p-value approach:
+where:
+- $h$ is prediction horizon length
+- $\hat{p}_{t+j}$ is p-value for predicted state at $t+j$
+- Uses same previous value $M_{t-1}$ as traditional martingale
 
-- **Low p-value** ($p_n \approx 0$) means $\alpha_n$ is larger than most previous strangeness scores (the new point is very unusual).
-- **High p-value** ($p_n \approx 1$) means the new point is not unusual compared to history.
+## Implementation Details
 
-## Single-View vs. Multi-View Detection
+### Key Files
 
-1. **Single-View**: We have a single stream $\{X_t\}$. For each point, we compute strangeness, then p-value, then update one martingale $M_n$.
-2. **Multi-View** (or multi-feature): Suppose we have $d$ different features or "views," each producing its own martingale $M_j(n)$. Then we can **combine** them (often by summation) to get a global statistic:
+- `detector.py`: Main change point detector class
+- `martingale.py`: Martingale computation and betting functions
+- `strangeness.py`: Strangeness measures and p-value computation
+- `predictor/`: Graph prediction models for horizon martingale
 
-   $$M_{\mathrm{total}}(n) = \sum_{j=1}^{d} M_j(n)$$
+### Usage
 
-   If $M_{\mathrm{total}}(n)$ exceeds $\tau$, we declare a global change point.
+```python
+detector = ChangePointDetector(
+    betting_function="power",  # or "mixture", "beta", "kernel"
+    epsilon=0.1,              # sensitivity parameter
+    threshold=20.0,           # detection threshold
+    window_size=100,          # rolling window size
+    reset=True               # reset after detection
+)
 
-## Step-by-Step Algorithm
+# Single-view detection
+results = detector.detect(data_stream)
 
-1. **Compute Strangeness**: For each new observation (or network snapshot), compute a numeric measure of how unusual it is.
-2. **Compute P-value**: Compare that strangeness to the empirical distribution of past strangeness, per conformal prediction.
-3. **Update Martingale**: 
+# Multi-view detection
+results = detector.detect_multiview(feature_streams)
+```
 
-   $$M_n = M_{n-1} \times \epsilon \times \bigl(p_n\bigr)^{(\epsilon - 1)}$$
+### Reset Strategy
 
-4. **Threshold**: If $M_n > \tau$, flag a change point and optionally reset.
+- **Traditional Martingale**: Resets to 1.0 immediately after detection
+- **Horizon Martingale**: Only resets when traditional martingale confirms change
+- **Window**: Cleared on traditional martingale detection
 
-**Advantages**:
-- Nonparametric, distribution-free approach.
-- Adaptable to complex data (graphs, embeddings, etc.) by customizing the strangeness measure.
-- Online: can process data as it arrives.
+## Mathematical Properties
 
-**Challenges**:
-- Choosing $\epsilon$ and $\tau$ can be domain-specific.
-- Large dimensional data might need sophisticated strangeness measures (e.g., embeddings).
+1. **Martingale Property**:
+   Under null hypothesis (no change):
+   $$
+   \mathbb{E}[M_n | M_1,\ldots,M_{n-1}] = M_{n-1}
+   $$
+
+2. **Growth Rate**:
+   Under alternative (after change):
+   $$
+   \mathbb{E}[\log M_n] \approx n \times \text{KL}(P_1\|P_0)
+   $$
+   where KL is Kullback-Leibler divergence
+
+3. **False Alarm Rate**:
+   By Ville's inequality:
+   $$
+   \mathbb{P}(\sup_n M_n \geq \lambda) \leq \frac{1}{\lambda}
+   $$
+   for threshold $\lambda$
 
 ## References
 
-- Ho, S. S., & Wechsler, H. (2005). A martingale framework for detecting changes in data streams by testing exchangeability. IEEE Transactions on Pattern Analysis and Machine Intelligence.
-- Newman, M. E. J. (2010). Networks: An Introduction. Oxford University Press.
-- Doob, J. L. (1953). Stochastic Processes. John Wiley & Sons.
-- Vovk, V. et al. (2005+). Conformal Prediction frameworks for nonparametric p-values in machine learning.
-- Shafer, G., & Vovk, V. (2008). A tutorial on conformal prediction. Journal of Machine Learning Research.
+1. Ho, S. S., & Wechsler, H. (2005). A martingale framework for detecting changes in data streams by testing exchangeability.
+2. Vovk, V. et al. (2005+). Conformal Prediction frameworks.
+3. Shafer, G., & Vovk, V. (2008). A tutorial on conformal prediction.
+4. Doob, J. L. (1953). Stochastic Processes.
+5. Newman, M. E. J. (2010). Networks: An Introduction.

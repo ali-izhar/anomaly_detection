@@ -4,57 +4,22 @@
 
 from pathlib import Path
 from typing import Dict, List, Any
-from dataclasses import dataclass
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from .utils import compute_shap_values
-
-
-@dataclass
-class VisualizationConfig:
-    """Configuration for visualization parameters."""
-
-    # Figure sizes (in inches)
-    single_column_width: float = 3.3
-    double_column_width: float = 7.0
-    standard_height: float = 2.5
-    grid_height: float = 3.3
-
-    # Grid parameters
-    grid_spacing: float = 0.4  # Space between subplots
-
-    # Font sizes
-    title_size: int = 8
-    label_size: int = 8
-    tick_size: int = 6
-    legend_size: int = 6
-    annotation_size: int = 6
-
-    # Line parameters
-    line_width: float = 0.8
-    line_alpha: float = 0.8
-    grid_alpha: float = 0.3
-    grid_width: float = 0.5
-
-    # Colors
-    colors: Dict[str, str] = None
-
-    def __post_init__(self):
-        """Initialize default colors if not provided."""
-        if self.colors is None:
-            self.colors = {
-                "actual": "#1f77b4",  # Blue
-                "predicted": "#ff7f0e",  # Orange
-                "average": "#2ecc71",  # Green
-                "pred_avg": "#9b59b6",  # Purple
-                "threshold": "#FF7F7F",  # Light red
-                "change_point": "#e74c3c",  # Red
-                "feature": "#3498db",  # Light blue
-                "pred_feature": "#e67e22",  # Dark orange
-            }
+from .threshold import CustomThresholdModel
+from ..configs.plotting import (
+    FIGURE_DIMENSIONS as FD,
+    TYPOGRAPHY as TYPO,
+    LINE_STYLE as LS,
+    COLORS,
+    LEGEND_STYLE as LEGEND,
+    GRID_STYLE as GRID,
+    EXPORT_SETTINGS as EXPORT,
+    get_matplotlib_rc_params,
+)
 
 
 class MartingaleVisualizer:
@@ -83,16 +48,15 @@ class MartingaleVisualizer:
             skip_shap: Whether to skip SHAP value computation
             method: Detection method ('single_view' or 'multiview')
         """
-        # Set basic parameters first
+        # Set basic parameters
         self.threshold = threshold
         self.epsilon = epsilon
         self.change_points = change_points
         self.output_dir = Path(output_dir)
         self.prefix = prefix
         self.method = method
-        self.vis_config = VisualizationConfig()
 
-        # Process martingales after parameters are set
+        # Process martingales
         self.martingales = self._process_martingales(martingales)
 
         # Compute SHAP values if needed
@@ -101,11 +65,14 @@ class MartingaleVisualizer:
                 sequence_length = len(
                     next(iter(self.martingales.values()))["martingales"]
                 )
-                self.shap_values, self.feature_names = compute_shap_values(
-                    martingales=self.martingales,
-                    change_points=change_points,
-                    sequence_length=sequence_length,
-                    threshold=threshold,
+                model = CustomThresholdModel(threshold=threshold)
+                self.shap_values, self.feature_names = (
+                    model.compute_martingale_shap_values(
+                        martingales=self.martingales,
+                        change_points=change_points,
+                        sequence_length=sequence_length,
+                        threshold=threshold,
+                    )
                 )
             except (ValueError, KeyError):
                 self.shap_values = None
@@ -113,19 +80,7 @@ class MartingaleVisualizer:
 
         # Set paper-style parameters
         plt.style.use("seaborn-v0_8-paper")
-        plt.rcParams.update(
-            {
-                "font.size": self.vis_config.label_size,
-                "axes.titlesize": self.vis_config.title_size,
-                "axes.labelsize": self.vis_config.label_size,
-                "xtick.labelsize": self.vis_config.tick_size,
-                "ytick.labelsize": self.vis_config.tick_size,
-                "legend.fontsize": self.vis_config.legend_size,
-                "lines.linewidth": self.vis_config.line_width,
-                "grid.alpha": self.vis_config.grid_alpha,
-                "grid.linewidth": self.vis_config.grid_width,
-            }
-        )
+        plt.rcParams.update(get_matplotlib_rc_params())
 
     def _process_martingales(
         self, martingales: Dict[str, Dict[str, Any]]
@@ -306,17 +261,14 @@ class MartingaleVisualizer:
     def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots, including both traditional and prediction."""
         fig = plt.figure(
-            figsize=(
-                self.vis_config.double_column_width,
-                self.vis_config.grid_height * 2,
-            )
+            figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2),
         )
         gs = GridSpec(
             4,
             2,
             figure=fig,
-            hspace=self.vis_config.grid_spacing,
-            wspace=self.vis_config.grid_spacing,
+            hspace=FD["GRID_SPACING"],
+            wspace=FD["GRID_SPACING"],
         )
 
         main_features = [
@@ -384,9 +336,9 @@ class MartingaleVisualizer:
                     if len(martingale_values) > 0:
                         ax.plot(
                             martingale_values,
-                            color=self.vis_config.colors["actual"],
-                            linewidth=self.vis_config.line_width,
-                            alpha=self.vis_config.line_alpha,
+                            color=COLORS["actual"],
+                            linewidth=LS["LINE_WIDTH"],
+                            alpha=LS["LINE_ALPHA"],
                             label="Trad. Mart.",
                             zorder=10,
                         )
@@ -436,9 +388,9 @@ class MartingaleVisualizer:
                                 time_points,
                                 pred_values,
                                 color=colors[h],
-                                linewidth=self.vis_config.line_width * 0.8,
+                                linewidth=LS["LINE_WIDTH"] * 0.8,
                                 linestyle="--",
-                                alpha=self.vis_config.line_alpha * 0.7,
+                                alpha=LS["LINE_ALPHA"] * 0.7,
                                 label=(
                                     f"H{h+1} Mart." if idx == 0 else None
                                 ),  # Only show legend in first plot
@@ -449,20 +401,20 @@ class MartingaleVisualizer:
                 for cp in self.change_points:
                     ax.axvline(
                         x=cp,
-                        color=self.vis_config.colors["change_point"],
+                        color=COLORS["change_point"],
                         linestyle="--",
                         alpha=0.3,
-                        linewidth=self.vis_config.grid_width,
+                        linewidth=GRID["MAJOR_LINE_WIDTH"],
                         zorder=1,
                     )
 
                 # Add threshold line
                 ax.axhline(
                     y=self.threshold,
-                    color=self.vis_config.colors["threshold"],
+                    color=COLORS["threshold"],
                     linestyle="--",
                     alpha=0.3,
-                    linewidth=self.vis_config.grid_width,
+                    linewidth=GRID["MAJOR_LINE_WIDTH"],
                     zorder=2,
                 )
 
@@ -481,21 +433,21 @@ class MartingaleVisualizer:
                     )
                 )
 
-            ax.set_title(feature.title(), fontsize=self.vis_config.title_size, pad=3)
+            ax.set_title(feature.title(), fontsize=TYPO["TITLE_SIZE"], pad=3)
             ax.set_xlim(0, 200)
             ax.set_xticks(np.arange(0, 201, 50))
 
             if row == 3:
-                ax.set_xlabel("Time", fontsize=self.vis_config.label_size)
+                ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])
             else:
                 ax.set_xticklabels([])
 
             if col == 0:
-                ax.set_ylabel("Mart. Value", fontsize=self.vis_config.label_size)
+                ax.set_ylabel("Mart. Value", fontsize=TYPO["LABEL_SIZE"])
 
             if idx == 0:  # Only show legend in first plot
                 ax.legend(
-                    fontsize=self.vis_config.legend_size,
+                    fontsize=LEGEND["LEGEND_SIZE"],
                     ncol=2,
                     loc="upper right",
                     borderaxespad=0.1,
@@ -503,13 +455,13 @@ class MartingaleVisualizer:
                     columnspacing=0.8,
                 )
             ax.tick_params(
-                axis="both", which="major", labelsize=self.vis_config.tick_size, pad=2
+                axis="both", which="major", labelsize=TYPO["TICK_SIZE"], pad=2
             )
             ax.grid(
                 True,
                 linestyle=":",
-                alpha=self.vis_config.grid_alpha * 0.7,
-                linewidth=self.vis_config.grid_width * 0.8,
+                alpha=GRID["MAJOR_ALPHA"] * 0.7,
+                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.8,
             )
 
         plt.tight_layout(pad=0.3)
@@ -517,9 +469,7 @@ class MartingaleVisualizer:
 
     def _plot_combined_martingales(self) -> None:
         """Create plot for combined martingales, including both traditional and prediction."""
-        fig = plt.figure(
-            figsize=(self.vis_config.double_column_width, self.vis_config.grid_height)
-        )
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"]))
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
         is_multiview = combined_results.get("martingales_sum") is not None
@@ -532,21 +482,21 @@ class MartingaleVisualizer:
             if sum_martingale is not None:
                 ax.plot(
                     sum_martingale,
-                    color=self.vis_config.colors["actual"],
+                    color=COLORS["actual"],
                     label="Sum Mart.",
-                    linewidth=self.vis_config.line_width,
-                    alpha=self.vis_config.line_alpha,
+                    linewidth=LS["LINE_WIDTH"],
+                    alpha=LS["LINE_ALPHA"],
                     zorder=10,
                 )
 
             if avg_martingale is not None:
                 ax.plot(
                     avg_martingale,
-                    color=self.vis_config.colors["average"],
+                    color=COLORS["average"],
                     label="Avg Mart.",
-                    linewidth=self.vis_config.line_width,
+                    linewidth=LS["LINE_WIDTH"],
                     linestyle="--",
-                    alpha=self.vis_config.line_alpha,
+                    alpha=LS["LINE_ALPHA"],
                     zorder=8,
                 )
 
@@ -558,21 +508,21 @@ class MartingaleVisualizer:
                 if pred_sum_martingale is not None:
                     ax.plot(
                         pred_sum_martingale,
-                        color=self.vis_config.colors["predicted"],
+                        color=COLORS["predicted"],
                         label="Pred. Sum Mart.",
-                        linewidth=self.vis_config.line_width,
-                        alpha=self.vis_config.line_alpha,
+                        linewidth=LS["LINE_WIDTH"],
+                        alpha=LS["LINE_ALPHA"],
                         zorder=9,
                     )
 
                 if pred_avg_martingale is not None:
                     ax.plot(
                         pred_avg_martingale,
-                        color=self.vis_config.colors["pred_avg"],
+                        color=COLORS["pred_avg"],
                         label="Pred. Avg Mart.",
-                        linewidth=self.vis_config.line_width,
+                        linewidth=LS["LINE_WIDTH"],
                         linestyle="--",
-                        alpha=self.vis_config.line_alpha,
+                        alpha=LS["LINE_ALPHA"],
                         zorder=7,
                     )
         else:
@@ -581,10 +531,10 @@ class MartingaleVisualizer:
             if martingale is not None:
                 ax.plot(
                     martingale,
-                    color=self.vis_config.colors["actual"],
+                    color=COLORS["actual"],
                     label="Martingale",
-                    linewidth=self.vis_config.line_width,
-                    alpha=self.vis_config.line_alpha,
+                    linewidth=LS["LINE_WIDTH"],
+                    alpha=LS["LINE_ALPHA"],
                     zorder=10,
                 )
 
@@ -594,21 +544,21 @@ class MartingaleVisualizer:
                 if pred_martingale is not None:
                     ax.plot(
                         pred_martingale,
-                        color=self.vis_config.colors["predicted"],
+                        color=COLORS["predicted"],
                         label="Pred. Mart.",
-                        linewidth=self.vis_config.line_width,
+                        linewidth=LS["LINE_WIDTH"],
                         linestyle="--",
-                        alpha=self.vis_config.line_alpha,
+                        alpha=LS["LINE_ALPHA"],
                         zorder=9,
                     )
 
         # Add threshold line
         ax.axhline(
             y=self.threshold,
-            color=self.vis_config.colors["threshold"],
+            color=COLORS["threshold"],
             linestyle="--",
             alpha=0.7,
-            linewidth=self.vis_config.line_width,
+            linewidth=LS["LINE_WIDTH"],
             label="Threshold",
             zorder=5,
         )
@@ -617,10 +567,10 @@ class MartingaleVisualizer:
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
-                color=self.vis_config.colors["change_point"],
+                color=COLORS["change_point"],
                 linestyle="--",
                 alpha=0.5,
-                linewidth=self.vis_config.grid_width,
+                linewidth=GRID["MAJOR_LINE_WIDTH"],
                 zorder=4,
             )
 
@@ -650,11 +600,11 @@ class MartingaleVisualizer:
                         f"d:{delay}",
                         xy=(detection_idx, self.threshold),
                         xytext=(cp - 10, self.threshold * 1.1),
-                        color=self.vis_config.colors["actual"],
-                        fontsize=self.vis_config.annotation_size,
+                        color=COLORS["actual"],
+                        fontsize=LEGEND["ANNOTATION_SIZE"],
                         arrowprops=dict(
                             arrowstyle="->",
-                            color=self.vis_config.colors["actual"],
+                            color=COLORS["actual"],
                             alpha=0.8,
                             linewidth=1.0,
                             connectionstyle="arc3,rad=-0.2",
@@ -677,11 +627,11 @@ class MartingaleVisualizer:
                         f"pd:{pred_delay}",
                         xy=(pred_detection_idx, self.threshold),
                         xytext=(cp - 10, self.threshold * 1.3),
-                        color=self.vis_config.colors["predicted"],
-                        fontsize=self.vis_config.annotation_size,
+                        color=COLORS["predicted"],
+                        fontsize=LEGEND["ANNOTATION_SIZE"],
                         arrowprops=dict(
                             arrowstyle="->",
-                            color=self.vis_config.colors["predicted"],
+                            color=COLORS["predicted"],
                             alpha=0.8,
                             linewidth=1.0,
                             connectionstyle="arc3,rad=0.2",
@@ -689,10 +639,8 @@ class MartingaleVisualizer:
                     )
 
         # Grid settings
-        ax.grid(True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha)
-        ax.grid(
-            True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
-        )
+        ax.grid(True, which="major", linestyle=":", alpha=GRID["MAJOR_ALPHA"])
+        ax.grid(True, which="minor", linestyle=":", alpha=GRID["MAJOR_ALPHA"] / 2)
 
         # Axis settings
         ax.set_xticks(np.arange(0, 201, 50))
@@ -722,7 +670,7 @@ class MartingaleVisualizer:
             ncol=n_cols,
             loc="upper right",
             bbox_to_anchor=(1.0, 1.02),
-            fontsize=self.vis_config.legend_size,
+            fontsize=LEGEND["LEGEND_SIZE"],
             frameon=True,
             handlelength=1.5,
             handletextpad=0.5,
@@ -730,11 +678,9 @@ class MartingaleVisualizer:
         )
 
         # Labels
-        ax.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
-        ax.set_ylabel(
-            "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
-        )
-        ax.tick_params(axis="both", which="major", labelsize=self.vis_config.tick_size)
+        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
+        ax.set_ylabel("Martingale Value", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
+        ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
 
         plt.tight_layout(pad=0.3)
         self._save_figure("combined_martingales.png")
@@ -743,12 +689,7 @@ class MartingaleVisualizer:
         """Create plot overlaying individual feature martingales with combined martingale.
         Creates two subplots: one for traditional martingales and one for prediction martingales.
         """
-        fig = plt.figure(
-            figsize=(
-                self.vis_config.double_column_width,
-                self.vis_config.grid_height * 2,
-            )
-        )
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2))
         gs = GridSpec(2, 1, figure=fig, hspace=0.3)
 
         feature_names = [
@@ -803,7 +744,7 @@ class MartingaleVisualizer:
 
         # Add threshold and change points to top subplot
         self._add_threshold_and_changes(ax1, combined_sum)
-        ax1.set_title("Traditional Martingales", fontsize=self.vis_config.title_size)
+        ax1.set_title("Traditional Martingales", fontsize=TYPO["TITLE_SIZE"])
 
         # Plot prediction martingales (bottom subplot)
         ax2 = fig.add_subplot(gs[1])
@@ -850,16 +791,12 @@ class MartingaleVisualizer:
 
         # Add threshold and change points to bottom subplot
         self._add_threshold_and_changes(ax2, combined_pred_sum)
-        ax2.set_title("Prediction Martingales", fontsize=self.vis_config.title_size)
+        ax2.set_title("Prediction Martingales", fontsize=TYPO["TITLE_SIZE"])
 
         # Set common parameters for both subplots
         for ax in [ax1, ax2]:
-            ax.grid(
-                True, which="major", linestyle=":", alpha=self.vis_config.grid_alpha
-            )
-            ax.grid(
-                True, which="minor", linestyle=":", alpha=self.vis_config.grid_alpha / 2
-            )
+            ax.grid(True, which="major", linestyle=":", alpha=GRID["MAJOR_ALPHA"])
+            ax.grid(True, which="minor", linestyle=":", alpha=GRID["MAJOR_ALPHA"] / 2)
             ax.set_xticks(np.arange(0, 201, 50))
             ax.set_xlim(0, 200)
 
@@ -868,23 +805,19 @@ class MartingaleVisualizer:
                 ncol=2,
                 loc="upper right",
                 bbox_to_anchor=(1.0, 1.02),
-                fontsize=self.vis_config.legend_size * 0.8,
+                fontsize=LEGEND["LEGEND_SIZE"] * 0.8,
                 frameon=True,
                 handlelength=1.5,
                 handletextpad=0.5,
                 columnspacing=1.0,
             )
 
-            ax.tick_params(
-                axis="both", which="major", labelsize=self.vis_config.tick_size
-            )
+            ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
 
         # Set labels only for bottom subplot
-        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size, labelpad=4)
+        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
         for ax in [ax1, ax2]:
-            ax.set_ylabel(
-                "Martingale Value", fontsize=self.vis_config.label_size, labelpad=4
-            )
+            ax.set_ylabel("Martingale Value", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
 
         plt.tight_layout(pad=0.3)
         self._save_figure("overlaid_martingales.png")
@@ -894,10 +827,10 @@ class MartingaleVisualizer:
         # Add threshold line
         ax.axhline(
             y=self.threshold,
-            color=self.vis_config.colors["threshold"],
+            color=COLORS["threshold"],
             linestyle="--",
             alpha=0.7,
-            linewidth=self.vis_config.line_width,
+            linewidth=LS["LINE_WIDTH"],
             label="Threshold",
             zorder=7,
         )
@@ -906,10 +839,10 @@ class MartingaleVisualizer:
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
-                color=self.vis_config.colors["change_point"],
+                color=COLORS["change_point"],
                 linestyle="--",
                 alpha=0.5,
-                linewidth=self.vis_config.grid_width,
+                linewidth=GRID["MAJOR_LINE_WIDTH"],
                 zorder=6,
             )
 
@@ -928,11 +861,11 @@ class MartingaleVisualizer:
                         f"d:{delay}",
                         xy=(detection_idx, self.threshold),
                         xytext=(cp - 10, self.threshold * 1.1),
-                        color=self.vis_config.colors["actual"],
-                        fontsize=self.vis_config.annotation_size,
+                        color=COLORS["actual"],
+                        fontsize=LEGEND["ANNOTATION_SIZE"],
                         arrowprops=dict(
                             arrowstyle="->",
-                            color=self.vis_config.colors["actual"],
+                            color=COLORS["actual"],
                             alpha=0.8,
                             linewidth=1.0,
                             connectionstyle="arc3,rad=-0.2",
@@ -958,12 +891,7 @@ class MartingaleVisualizer:
         if self.shap_values is None or self.feature_names is None:
             return
 
-        fig = plt.figure(
-            figsize=(
-                self.vis_config.double_column_width,
-                self.vis_config.grid_height * 1.6,  # Increased height for two subplots
-            )
-        )
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 1.6))
         gs = GridSpec(2, 1, figure=fig, hspace=0.3)
 
         # Create color map for available features
@@ -994,23 +922,21 @@ class MartingaleVisualizer:
                 horizontalalignment="center",
                 verticalalignment="center",
                 transform=ax2.transAxes,
-                fontsize=self.vis_config.label_size,
+                fontsize=TYPO["LABEL_SIZE"],
             )
-            ax2.set_title("Prediction SHAP Values", fontsize=self.vis_config.title_size)
+            ax2.set_title("Prediction SHAP Values", fontsize=TYPO["TITLE_SIZE"])
 
         # Set common parameters
         for ax in [ax1, ax2]:
             ax.set_xticks(np.arange(0, 201, 50))
             ax.set_xlim(0, 200)
-            ax.tick_params(
-                axis="both", which="major", labelsize=self.vis_config.tick_size
-            )
-            ax.grid(True, linestyle=":", alpha=self.vis_config.grid_alpha * 0.7)
+            ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
+            ax.grid(True, linestyle=":", alpha=GRID["MAJOR_ALPHA"] * 0.7)
 
         # Set labels
-        ax2.set_xlabel("Time", fontsize=self.vis_config.label_size)
+        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])
         for ax in [ax1, ax2]:
-            ax.set_ylabel("SHAP Value", fontsize=self.vis_config.label_size)
+            ax.set_ylabel("SHAP Value", fontsize=TYPO["LABEL_SIZE"])
 
         plt.tight_layout(pad=0.3)
         self._save_figure("shap_values.png")
@@ -1025,9 +951,9 @@ class MartingaleVisualizer:
                 horizontalalignment="center",
                 verticalalignment="center",
                 transform=ax.transAxes,
-                fontsize=self.vis_config.label_size,
+                fontsize=TYPO["LABEL_SIZE"],
             )
-            ax.set_title(title, fontsize=self.vis_config.title_size)
+            ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
             return
 
         # Add vertical "Actual" label
@@ -1036,7 +962,7 @@ class MartingaleVisualizer:
             0.5,
             "Actual",
             transform=ax.transAxes,
-            fontsize=self.vis_config.label_size,
+            fontsize=TYPO["LABEL_SIZE"],
             va="center",
             ha="right",
             rotation=90,
@@ -1049,18 +975,18 @@ class MartingaleVisualizer:
                     shap_values[:, i],
                     label=feature.title(),
                     color=colors[i],
-                    linewidth=self.vis_config.line_width,
-                    alpha=self.vis_config.line_alpha,
+                    linewidth=LS["LINE_WIDTH"],
+                    alpha=LS["LINE_ALPHA"],
                 )
 
         # Add change point markers
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
-                color=self.vis_config.colors["change_point"],
+                color=COLORS["change_point"],
                 linestyle="--",
                 alpha=0.3,
-                linewidth=self.vis_config.grid_width,
+                linewidth=GRID["MAJOR_LINE_WIDTH"],
             )
 
         # Dynamic y-axis range with small margin
@@ -1075,13 +1001,13 @@ class MartingaleVisualizer:
             ax.legend(
                 ncol=2,
                 loc="upper right",
-                fontsize=self.vis_config.legend_size,
+                fontsize=LEGEND["LEGEND_SIZE"],
                 borderaxespad=0.1,
                 handlelength=1.0,
                 columnspacing=0.8,
             )
 
-        ax.set_title(title, fontsize=self.vis_config.title_size)
+        ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
 
     def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""
@@ -1089,8 +1015,10 @@ class MartingaleVisualizer:
         final_filename = f"{self.prefix}{filename}" if self.prefix else filename
         plt.savefig(
             self.output_dir / final_filename,
-            dpi=300,
-            bbox_inches="tight",
-            pad_inches=0.02,
+            dpi=EXPORT["DPI"],
+            bbox_inches=EXPORT["BBOX_INCHES"],
+            pad_inches=EXPORT["PAD_INCHES"],
+            format=EXPORT["FORMAT"],
+            transparent=EXPORT["TRANSPARENT"],
         )
         plt.close()
