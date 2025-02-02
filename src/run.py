@@ -112,11 +112,11 @@ def run_detection(
     # Override for testing
     params.update(
         {
-            "n": 20,
-            "seq_len": 50,
+            "n": 50,
+            "seq_len": 100,
             "min_changes": 1,
             "max_changes": 1,
-            "min_segment": 10,
+            "min_segment": 40,
         }
     )
 
@@ -254,8 +254,8 @@ def run_detection(
     logger.info("Change Point Detection Analysis:")
 
     # Get detections from both streams
-    traditional_changes = detection_result["change_points"]
-    horizon_changes = detection_result.get("horizon_change_points", [])
+    traditional_changes = detection_result["traditional_change_points"]
+    horizon_changes = detection_result["horizon_change_points"]
 
     # Basic detection summary
     logger.info("\nDetection Summary:")
@@ -265,8 +265,8 @@ def run_detection(
 
     # Detailed detection analysis
     if detector.method == "single_view":
-        martingales = detection_result.get("martingales", [])
-        pred_martingales = detection_result.get("prediction_martingales", [])
+        traditional_martingales = detection_result["traditional_martingales"]
+        horizon_martingales = detection_result["horizon_martingales"]
 
         logger.info("\nDetailed Detection Analysis:")
         logger.info("Traditional Martingale:")
@@ -274,7 +274,7 @@ def run_detection(
         if traditional_changes:
             logger.info(f"- Detection times: {traditional_changes}")
             logger.info(
-                f"- Martingale values at detection: {[martingales[i] for i in traditional_changes]}"
+                f"- Martingale values at detection: {[traditional_martingales[i] for i in traditional_changes]}"
             )
 
         logger.info("\nHorizon Martingale:")
@@ -282,228 +282,27 @@ def run_detection(
         if horizon_changes:
             logger.info(f"- Detection times: {horizon_changes}")
             logger.info(
-                f"- Martingale values at detection: {[pred_martingales[i] for i in horizon_changes]}"
+                f"- Martingale values at detection: {[horizon_martingales[i] for i in horizon_changes]}"
             )
-
     else:  # multiview
-        mart_sum = detection_result.get("martingale_sum", [])
-        pred_sum = detection_result.get("prediction_martingale_sum", [])
+        traditional_sum = detection_result["traditional_sum_martingales"]
+        horizon_sum = detection_result["horizon_sum_martingales"]
 
         logger.info("\nDetailed Detection Analysis:")
-        logger.info("Traditional Martingale (Sum):")
+        logger.info("Traditional Martingale:")
         logger.info(f"- Number of detections: {len(traditional_changes)}")
         if traditional_changes:
             logger.info(f"- Detection times: {traditional_changes}")
             logger.info(
-                f"- Sum martingale values at detection: {[mart_sum[i] for i in traditional_changes]}"
+                f"- Sum martingale values at detection: {[traditional_sum[i] for i in traditional_changes]}"
             )
 
-        logger.info("\nHorizon Martingale (Sum):")
+        logger.info("\nHorizon Martingale:")
         logger.info(f"- Number of detections: {len(horizon_changes)}")
         if horizon_changes:
             logger.info(f"- Detection times: {horizon_changes}")
             logger.info(
-                f"- Sum martingale values at detection: {[pred_sum[i] for i in horizon_changes]}"
-            )
-
-    # Detection Delay Analysis
-    logger.info("\nDetection Delay Analysis:")
-    for tcp in true_change_points:
-        logger.info(f"\nAnalyzing true change point at t={tcp}:")
-
-        # Traditional delays
-        trad_delays = [d - tcp for d in traditional_changes if d >= tcp]
-        if trad_delays:
-            min_delay = min(trad_delays)
-            detection_time = tcp + min_delay
-            logger.info(f"Traditional Martingale:")
-            logger.info(f"- Detected after {min_delay} steps (at t={detection_time})")
-            if detector.method == "single_view":
-                logger.info(f"- Detection value: {martingales[detection_time]:.4f}")
-            else:
-                logger.info(f"- Detection value: {mart_sum[detection_time]:.4f}")
-        else:
-            logger.info("Traditional Martingale: No detection")
-
-        # Horizon delays
-        horizon_delays = [d - tcp for d in horizon_changes if d >= tcp]
-        if horizon_delays:
-            min_delay = min(horizon_delays)
-            detection_time = tcp + min_delay
-            logger.info(f"Horizon Martingale:")
-            logger.info(f"- Detected after {min_delay} steps (at t={detection_time})")
-            if detector.method == "single_view":
-                logger.info(
-                    f"- Detection value: {pred_martingales[detection_time]:.4f}"
-                )
-            else:
-                logger.info(f"- Detection value: {pred_sum[detection_time]:.4f}")
-        else:
-            logger.info("Horizon Martingale: No detection")
-
-    # Early/Late Detection Analysis
-    logger.info("\nEarly/Late Detection Analysis:")
-    for cp in sorted(set(traditional_changes + horizon_changes)):
-        trad_detected = cp in traditional_changes
-        horizon_detected = cp in horizon_changes
-
-        if trad_detected and horizon_detected:
-            logger.info(f"Time t={cp}: Detected by both martingales")
-        elif trad_detected:
-            logger.info(f"Time t={cp}: Detected only by traditional martingale")
-        elif horizon_detected:
-            logger.info(f"Time t={cp}: Detected only by horizon martingale")
-
-    logger.info("-" * 50)
-
-    # Add detailed logging of detection results
-    logger.info("-" * 50)
-    logger.info("Detection Results Analysis:")
-
-    # Log basic detection results
-    logger.info(f"Detection result keys: {detection_result.keys()}")
-    logger.info(
-        f"Number of change points detected: {len(detection_result.get('change_points', []))}"
-    )
-    logger.info(
-        f"Change points detected at: {detection_result.get('change_points', [])}"
-    )
-
-    # Log martingale sequences
-    if detector.method == "single_view":
-        logger.info("\nSingle-view Martingale Analysis:")
-        martingales = detection_result.get("martingales", [])
-        pred_martingales = detection_result.get("prediction_martingales", [])
-        logger.info(
-            f"Traditional martingale sequence length: {len(martingales) if martingales is not None else 0}"
-        )
-        logger.info(
-            f"Prediction martingale sequence length: {len(pred_martingales) if pred_martingales is not None else 0}"
-        )
-
-        # Log final values
-        final_trad = martingales[-1] if martingales and len(martingales) > 0 else "N/A"
-        final_pred = (
-            pred_martingales[-1]
-            if pred_martingales and len(pred_martingales) > 0
-            else "N/A"
-        )
-        logger.info(f"Final traditional martingale value: {final_trad}")
-        logger.info(f"Final prediction martingale value: {final_pred}")
-    else:  # multiview
-        logger.info("\nMultiview Martingale Analysis:")
-        mart_sum = detection_result.get("martingale_sum", [])
-        mart_avg = detection_result.get("martingale_avg", [])
-        indiv_marts = detection_result.get("individual_martingales", [])
-
-        logger.info(
-            f"Martingale sum sequence length: {len(mart_sum) if mart_sum is not None else 0}"
-        )
-        logger.info(
-            f"Martingale avg sequence length: {len(mart_avg) if mart_avg is not None else 0}"
-        )
-        logger.info(
-            f"Individual martingales count: {len(indiv_marts) if indiv_marts is not None else 0}"
-        )
-
-        # Log prediction martingales
-        pred_sum = detection_result.get("prediction_martingale_sum", [])
-        pred_avg = detection_result.get("prediction_martingale_avg", [])
-        pred_indiv = detection_result.get("prediction_individual_martingales", [])
-
-        logger.info(
-            f"Prediction martingale sum sequence length: {len(pred_sum) if pred_sum is not None else 0}"
-        )
-        logger.info(
-            f"Prediction martingale avg sequence length: {len(pred_avg) if pred_avg is not None else 0}"
-        )
-        logger.info(
-            f"Prediction individual martingales count: {len(pred_indiv) if pred_indiv is not None else 0}"
-        )
-
-    # Log strangeness and p-values
-    logger.info("\nStrangeness and P-value Analysis:")
-    logger.info(
-        f"Traditional strangeness sequence length: {len(detection_result.get('strangeness', []))}"
-    )
-    # Fix p-values length reporting
-    pvalues_length = (
-        len(detection_result["pvalues"])
-        if detection_result["pvalues"] is not None
-        else 0
-    )
-    logger.info(f"Traditional p-values sequence length: {pvalues_length}")
-
-    if "prediction_strangeness" in detection_result:
-        logger.info(
-            f"Prediction strangeness sequence length: {len(detection_result['prediction_strangeness'])}"
-        )
-    if "prediction_pvalues" in detection_result:
-        logger.info(
-            f"Prediction p-values sequence length: {len(detection_result['prediction_pvalues'])}"
-        )
-
-    # Log feature information if available
-    if "features_raw" in detection_result:
-        logger.info("\nFeature Information:")
-        logger.info(
-            f"Raw features sequence length: {len(detection_result['features_raw'])}"
-        )
-    if "features_numeric" in detection_result:
-        logger.info(
-            f"Numeric features sequence length: {len(detection_result['features_numeric'])}"
-        )
-        if len(detection_result["features_numeric"]) > 0:
-            logger.info(
-                f"Feature vector dimension: {detection_result['features_numeric'][0].shape}"
-            )
-
-    logger.info("-" * 50)
-
-    # After getting detection results, add this analysis:
-    logger.info("\nDetection Time Analysis:")
-    if detector.method == "single_view":
-        martingales = detection_result.get("martingales", [])
-        pred_martingales = detection_result.get("prediction_martingales", [])
-
-        # Find when each martingale crosses threshold
-        trad_detections = [i for i, m in enumerate(martingales) if m >= threshold]
-        pred_detections = [i for i, m in enumerate(pred_martingales) if m >= threshold]
-
-        logger.info("Traditional Martingale Detections:")
-        logger.info(f"- Detection times: {trad_detections}")
-        if trad_detections:
-            logger.info(
-                f"- Values at detection: {[martingales[i] for i in trad_detections]}"
-            )
-
-        logger.info("\nHorizon Martingale Detections:")
-        logger.info(f"- Detection times: {pred_detections}")
-        if pred_detections:
-            logger.info(
-                f"- Values at detection: {[pred_martingales[i] for i in pred_detections]}"
-            )
-
-    else:  # multiview
-        mart_sum = detection_result.get("martingale_sum", [])
-        pred_sum = detection_result.get("prediction_martingale_sum", [])
-
-        # Find when each martingale crosses threshold
-        trad_detections = [i for i, m in enumerate(mart_sum) if m >= threshold]
-        pred_detections = [i for i, m in enumerate(pred_sum) if m >= threshold]
-
-        logger.info("Traditional Martingale (Sum) Detections:")
-        logger.info(f"- Detection times: {trad_detections}")
-        if trad_detections:
-            logger.info(
-                f"- Values at detection: {[mart_sum[i] for i in trad_detections]}"
-            )
-
-        logger.info("\nHorizon Martingale (Sum) Detections:")
-        logger.info(f"- Detection times: {pred_detections}")
-        if pred_detections:
-            logger.info(
-                f"- Values at detection: {[pred_sum[i] for i in pred_detections]}"
+                f"- Sum martingale values at detection: {[horizon_sum[i] for i in horizon_changes]}"
             )
 
     # Compare with true change points
@@ -513,7 +312,7 @@ def run_detection(
 
         for tcp in true_change_points:
             # Traditional delays
-            trad_delays = [d - tcp for d in trad_detections if d >= tcp]
+            trad_delays = [d - tcp for d in traditional_changes if d >= tcp]
             if trad_delays:
                 logger.info(
                     f"Traditional detection delay for change at t={tcp}: {min(trad_delays)} steps"
@@ -522,7 +321,7 @@ def run_detection(
                 logger.info(f"Traditional martingale did not detect change at t={tcp}")
 
             # Prediction delays
-            pred_delays = [d - tcp for d in pred_detections if d >= tcp]
+            pred_delays = [d - tcp for d in horizon_changes if d >= tcp]
             if pred_delays:
                 logger.info(
                     f"Horizon detection delay for change at t={tcp}: {min(pred_delays)} steps"
@@ -530,137 +329,46 @@ def run_detection(
             else:
                 logger.info(f"Horizon martingale did not detect change at t={tcp}")
 
-    # # ========================================================================== #
-    # # =================== STEP 6: Create Visualizations ============================ #
-    # # ========================================================================== #
-    # logger.info("\nCreating visualizations...")
-    # output_dir = f"examples/{model_name}"
-    # os.makedirs(output_dir, exist_ok=True)
-
-    # # Create visualizations
-    # logger.info("Creating visualizations...")
-    # n_points = min(4, len(graphs))  # Show at most 4 graphs
-    # fig = plt.figure(
-    #     figsize=(FD["single_column_width"], FD["standard_height"] * n_points / 2),
-    #     constrained_layout=True,
-    # )
-    # gs = GridSpec(n_points, 2, figure=fig)
-
-    # # Initialize visualizer
-    # viz = NetworkVisualizer()
-
-    # # Plot graphs at different time points
-    # for i in range(n_points):
-    #     t = i * (len(graphs) // n_points)
-    #     graph = adjacency_to_graph(graphs[t])
-    #     node_color = "red" if t in true_change_points else "lightblue"
-
-    #     # Plot network
-    #     ax1 = fig.add_subplot(gs[i, 0])
-    #     viz.plot_network(graph, ax=ax1, title=f"t={t}", layout="spring", node_color=node_color)
-
-    #     # Plot adjacency matrix
-    #     ax2 = fig.add_subplot(gs[i, 1])
-    #     viz.plot_adjacency(graphs[t], ax=ax2, title=f"Adjacency Matrix (t={t})")
-
-    # # Save the figure
-    # output_dir = Path(output_dir)
-    # plt.savefig(output_dir / f"{model_name}_network.png", dpi=300, bbox_inches="tight")
-    # plt.close()
-
-    # # Plot martingale statistics
-    # if detector.method == "single_view":
-    #     martingale_viz = MartingaleVisualizer()
-    #     fig = plt.figure(figsize=(FD["double_column_width"], FD["standard_height"]))
-    #     martingale_viz.plot_martingales(
-    #         detection_result,
-    #         true_change_points=true_change_points,
-    #         title=f"Martingale Evolution ({model_name})",
-    #         fig=fig,
-    #     )
-    #     plt.savefig(output_dir / f"{model_name}_martingales.png", dpi=300, bbox_inches="tight")
-    #     plt.close()
-
-    # ========================================================================== #
-    # =================== STEP 7: Return Complete Results ======================== #
-    # ========================================================================== #
+    # Return complete results
     results = {
         "true_change_points": true_change_points,
         "model_name": model_name,
         "params": params,
-        "detected_changes": detection_result["change_points"],
-        # Feature information
-        "pvalues": detection_result.get("pvalues", []),  # Fixed key name
-        "strangeness": detection_result.get("strangeness", []),
-        "features_raw": features_raw,  # Use original features
-        "features_numeric": features_numeric,  # Use original features
-        # Prediction data
+        "features_raw": features_raw,
+        "features_numeric": features_numeric,
         "predicted_graphs": predicted_graphs,
         "predictor_states": predictor.get_state(),
-        # Additional prediction statistics
-        "prediction_pvalues": detection_result.get("prediction_pvalues", []),
-        "prediction_strangeness": detection_result.get("prediction_strangeness", []),
     }
 
-    # Add method-specific results
+    # Add method-specific detection results
     if detector.method == "single_view":
         results.update(
             {
-                "martingales": detection_result.get("martingales", []),
-                "prediction_martingales": detection_result.get(
-                    "prediction_martingales", []
-                ),
-                "traditional_delays": [
-                    d - tcp
-                    for tcp in true_change_points
-                    for d in detection_result["change_points"]
-                    if d >= tcp
-                ],
-                "traditional_detection_times": detection_result["change_points"],
-                "prediction_delays": [
-                    d - tcp
-                    for tcp in true_change_points
-                    for d in detection_result.get("horizon_change_points", [])
-                    if d >= tcp
-                ],
-                "prediction_detection_times": detection_result.get(
-                    "horizon_change_points", []
-                ),
+                "traditional_change_points": traditional_changes,
+                "horizon_change_points": horizon_changes,
+                "traditional_martingales": detection_result["traditional_martingales"],
+                "horizon_martingales": detection_result["horizon_martingales"],
             }
         )
     else:  # multiview
         results.update(
             {
-                "martingale_sum": detection_result.get("martingale_sum", []),
-                "martingale_avg": detection_result.get("martingale_avg", []),
-                "individual_martingales": detection_result.get(
-                    "individual_martingales", []
-                ),
-                "prediction_martingale_sum": detection_result.get(
-                    "prediction_martingale_sum", []
-                ),
-                "prediction_martingale_avg": detection_result.get(
-                    "prediction_martingale_avg", []
-                ),
-                "prediction_individual_martingales": detection_result.get(
-                    "prediction_individual_martingales", []
-                ),
-                "traditional_delays": [
-                    d - tcp
-                    for tcp in true_change_points
-                    for d in detection_result["change_points"]
-                    if d >= tcp
+                "traditional_change_points": traditional_changes,
+                "horizon_change_points": horizon_changes,
+                "traditional_sum_martingales": detection_result[
+                    "traditional_sum_martingales"
                 ],
-                "traditional_detection_times": detection_result["change_points"],
-                "prediction_delays": [
-                    d - tcp
-                    for tcp in true_change_points
-                    for d in detection_result.get("horizon_change_points", [])
-                    if d >= tcp
+                "traditional_avg_martingales": detection_result[
+                    "traditional_avg_martingales"
                 ],
-                "prediction_detection_times": detection_result.get(
-                    "horizon_change_points", []
-                ),
+                "horizon_sum_martingales": detection_result["horizon_sum_martingales"],
+                "horizon_avg_martingales": detection_result["horizon_avg_martingales"],
+                "individual_traditional_martingales": detection_result[
+                    "individual_traditional_martingales"
+                ],
+                "individual_horizon_martingales": detection_result[
+                    "individual_horizon_martingales"
+                ],
             }
         )
 

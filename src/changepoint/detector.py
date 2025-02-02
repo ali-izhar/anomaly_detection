@@ -5,9 +5,7 @@
 from typing import List, Dict, Any, Optional, Callable, Union
 import logging
 import numpy as np
-import networkx as nx
 
-# Import the modular betting functions; by default, we use the power martingale.
 from .betting import (
     power_martingale,
     exponential_martingale,
@@ -20,7 +18,7 @@ from .martingale import compute_martingale, multiview_martingale_test
 
 logger = logging.getLogger(__name__)
 
-# Mapping of betting function names to their implementations
+# Mapping of betting function names to their implementations.
 BETTING_FUNCTIONS = {
     "power": power_martingale,
     "exponential": exponential_martingale,
@@ -36,21 +34,20 @@ class ChangePointDetector:
     the martingale framework derived from conformal prediction.
 
     Main Steps:
-    1. Compute a strangeness measure for new points (or sets of points).
-    2. Convert strangeness to a p-value using a nonparametric, rank-based method.
-    3. Update a martingale using a chosen betting function:
-         M_n = M_(n-1) * (update factor based on p-value)
-    4. If the martingale exceeds a threshold, report a change point.
+      1. Compute a strangeness measure for new points.
+      2. Convert strangeness to a p-value via a nonparametric rank-based method.
+      3. Update a martingale using a chosen betting function.
+      4. Report a change point if the martingale exceeds a threshold.
 
     Attributes:
-        method (str): The martingale method to use ('single_view' or 'multiview').
-        threshold (float): Detection threshold for martingale.
+        martingale_method (str): The martingale method to use ('single_view' or 'multiview').
+        threshold (float): Detection threshold for the martingale.
         epsilon (float): Sensitivity parameter for martingale updates.
         random_state (int): Seed for reproducibility.
         feature_set (str): Which feature set to use.
         batch_size (int): Batch size for multiview processing.
         max_martingale (float): Early stopping threshold for multiview.
-        reset (bool): Whether to reset after detection in single view.
+        reset (bool): Whether to reset after detection (for single view).
         max_window (int): Maximum window size for strangeness computation.
     """
 
@@ -70,7 +67,6 @@ class ChangePointDetector:
     ):
         """Initialize the detector with specified parameters."""
         self.method = martingale_method
-
         self.history_size = history_size
         self.threshold = threshold
         self.epsilon = epsilon
@@ -81,16 +77,14 @@ class ChangePointDetector:
         self.reset = reset
         self.max_window = max_window
 
-        # Handle betting function selection
+        # Handle betting function selection.
         if isinstance(betting_func, str):
             if betting_func not in BETTING_FUNCTIONS:
-
                 raise ValueError(
                     f"Unknown betting function '{betting_func}'. "
                     f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
                 )
             self.betting_func = BETTING_FUNCTIONS[betting_func]
-
         else:
             self.betting_func = betting_func
 
@@ -105,11 +99,11 @@ class ChangePointDetector:
             data: np.ndarray of shape (n_samples, n_features)
             predicted_data: Optional[np.ndarray] of shape (n_predictions, horizon, n_features)
         """
-        logger.info("Detector Input Dimensions:")
-        logger.info(f"- Main sequence shape (TxF): {data.shape}")
+        logger.debug("Detector Input Dimensions:")
+        logger.debug(f"  Main sequence shape (TxF): {data.shape}")
         if predicted_data is not None:
-            logger.info(f"- Predicted sequence shape (T'xHxF): {predicted_data.shape}")
-        logger.info("-" * 50)
+            logger.debug(f"  Predicted sequence shape (T'xHxF): {predicted_data.shape}")
+        logger.debug("-" * 50)
 
         if self.method == "single_view":
             return self.detect_changes(
@@ -124,23 +118,23 @@ class ChangePointDetector:
                 self.betting_func,
             )
         elif self.method == "multiview":
-            # Split each feature into a separate view for multiview detection
+            # Split each feature into a separate view for multiview detection.
             views = [data[:, i : i + 1] for i in range(data.shape[1])]
-            logger.info("Multiview Processing:")
-            logger.info(f"- Number of views: {len(views)}")
-            logger.info(f"- Each view shape (Tx1): {views[0].shape}")
+            logger.debug("Multiview Processing:")
+            logger.debug(f"  Number of views: {len(views)}")
+            logger.debug(f"  Each view shape (Tx1): {views[0].shape}")
 
-            # Split predicted features into views if available
+            # Split predicted features into views if available.
             predicted_views = None
             if predicted_data is not None:
                 predicted_views = [
                     predicted_data[..., i : i + 1]
                     for i in range(predicted_data.shape[-1])
                 ]
-                logger.info(
-                    f"- Each predicted view shape (T'xHx1): {predicted_views[0].shape}"
+                logger.debug(
+                    f"  Each predicted view shape (T'xHx1): {predicted_views[0].shape}"
                 )
-            logger.info("-" * 50)
+            logger.debug("-" * 50)
 
             return self.detect_changes_multiview(
                 views,
@@ -154,8 +148,8 @@ class ChangePointDetector:
                 self.random_state,
                 self.betting_func,
             )
-
-        raise ValueError(f"Invalid method: {self.method}")
+        else:
+            raise ValueError(f"Invalid method: {self.method}")
 
     def detect_changes(
         self,
@@ -172,24 +166,23 @@ class ChangePointDetector:
         ] = power_martingale,
     ) -> Dict[str, Any]:
         """Detect change points in single-view sequential data."""
-        logger.info("Single-view Detection:")
-        logger.info(f"- Input sequence shape: {data.shape}")
+        logger.debug("Single-view Detection:")
+        logger.debug(f"  Input sequence shape: {data.shape}")
         if predicted_data is not None:
-            logger.info(f"- Predicted sequence shape: {predicted_data.shape}")
-        logger.info(f"- History size: {history_size}")
-        logger.info(f"- Window size: {max_window if max_window else 'None'}")
-        logger.info("-" * 50)
+            logger.debug(f"  Predicted sequence shape: {predicted_data.shape}")
+        logger.debug(f"  History size: {history_size}")
+        logger.debug(f"  Window size: {max_window if max_window else 'None'}")
+        logger.debug("-" * 50)
 
         if data.size == 0:
             raise ValueError("Empty data sequence")
 
-        # Convert predicted_data to list-of-lists if provided
-        pred_data_list = None
-        if predicted_data is not None:
-            pred_data_list = predicted_data.tolist()
+        # Convert predicted_data to list-of-lists if provided.
+        pred_data_list = predicted_data.tolist() if predicted_data is not None else None
 
+        # Call the compute_martingale function.
         results = compute_martingale(
-            data=data.tolist(),  # Convert only at the last moment
+            data=data.tolist(),
             predicted_data=pred_data_list,
             threshold=threshold,
             epsilon=epsilon,
@@ -200,15 +193,12 @@ class ChangePointDetector:
             betting_func=betting_func,
         )
 
+        # Return only the keys that were output from the martingale function.
         return {
-            "change_points": results["change_points"],
+            "traditional_change_points": results["traditional_change_points"],
             "horizon_change_points": results["horizon_change_points"],
-            "pvalues": results["pvalues"],
-            "strangeness": results["strangeness"],
-            "martingales": results["martingales"],
-            "prediction_martingales": results.get("prediction_martingales"),
-            "prediction_pvalues": results.get("prediction_pvalues"),
-            "prediction_strangeness": results.get("prediction_strangeness"),
+            "traditional_martingales": results["traditional_martingales"],
+            "horizon_martingales": results.get("horizon_martingales"),
         }
 
     def detect_changes_multiview(
@@ -226,29 +216,32 @@ class ChangePointDetector:
             Callable[[float, float, float], float]
         ] = power_martingale,
     ) -> Dict[str, Any]:
-        """Detect change points in multi-view sequential data."""
-        logger.info("Multiview Detection Processing:")
-        logger.info(f"- Number of views: {len(data)}")
-        logger.info(f"- Each view shape: {data[0].shape}")
+        """Detect change points in multiview sequential data."""
+        logger.debug("Multiview Detection Processing:")
+        logger.debug(f"  Number of views: {len(data)}")
+        logger.debug(f"  Each view shape: {data[0].shape}")
         if predicted_data:
-            logger.info(f"- Number of predicted views: {len(predicted_data)}")
-            logger.info(f"- Each predicted view shape: {predicted_data[0].shape}")
-        logger.info(f"- History size: {history_size}")
-        logger.info(f"- Window size: {max_window if max_window else 'None'}")
-        logger.info(f"- Batch size: {batch_size}")
-        logger.info("-" * 50)
+            logger.debug(f"  Number of predicted views: {len(predicted_data)}")
+            logger.debug(f"  Each predicted view shape: {predicted_data[0].shape}")
+        logger.debug(f"  History size: {history_size}")
+        logger.debug(f"  Window size: {max_window if max_window else 'None'}")
+        logger.debug(f"  Batch size: {batch_size}")
+        logger.debug("-" * 50)
 
         if not isinstance(data, list) or len(data) == 0:
             raise ValueError("Data must be a non-empty list of views")
 
-        # Convert each view's data to list format
+        # Convert each view's data to list format.
         data_lists = [view.tolist() for view in data]
 
-        # Convert predicted data if provided
-        pred_data_lists = None
-        if predicted_data is not None:
-            pred_data_lists = [view.tolist() for view in predicted_data]
+        # Convert predicted data if provided.
+        pred_data_lists = (
+            [view.tolist() for view in predicted_data]
+            if predicted_data is not None
+            else None
+        )
 
+        # Call the multiview martingale test function.
         results = multiview_martingale_test(
             data=data_lists,
             predicted_data=pred_data_lists,
@@ -256,25 +249,21 @@ class ChangePointDetector:
             epsilon=epsilon,
             history_size=history_size,
             window_size=max_window,
-            early_stop_threshold=max_martingale,
             batch_size=batch_size,
             random_state=random_state,
             betting_func=betting_func,
         )
 
+        # Return only the keys that were output from the multiview martingale function.
         return {
-            "change_points": results["change_points"],
+            "traditional_change_points": results["traditional_change_points"],
             "horizon_change_points": results["horizon_change_points"],
-            "pvalues": results["pvalues"],
-            "strangeness": results["strangeness"],
-            "martingale_sum": results["martingale_sum"],
-            "martingale_avg": results["martingale_avg"],
-            "individual_martingales": results["individual_martingales"],
-            "prediction_pvalues": results.get("prediction_pvalues"),
-            "prediction_strangeness": results.get("prediction_strangeness"),
-            "prediction_martingale_sum": results.get("prediction_martingale_sum"),
-            "prediction_martingale_avg": results.get("prediction_martingale_avg"),
-            "prediction_individual_martingales": results.get(
-                "prediction_individual_martingales"
-            ),
+            "traditional_sum_martingales": results["traditional_sum_martingales"],
+            "traditional_avg_martingales": results["traditional_avg_martingales"],
+            "horizon_sum_martingales": results["horizon_sum_martingales"],
+            "horizon_avg_martingales": results["horizon_avg_martingales"],
+            "individual_traditional_martingales": results[
+                "individual_traditional_martingales"
+            ],
+            "individual_horizon_martingales": results["individual_horizon_martingales"],
         }
