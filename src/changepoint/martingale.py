@@ -5,6 +5,10 @@
 - Traditional martingale: uses the current observation and previous history.
 - Horizon martingale: uses the current observation and multiple predicted future states,
   along with the previous history.
+
+Reset Strategy:
+- Traditional martingale resets to 1.0 immediately after detecting a change.
+- Horizon martingale only resets when traditional martingale confirms a change.
 """
 
 from typing import List, Dict, Any, Optional, Callable
@@ -141,7 +145,6 @@ def compute_martingale(
             # --- Horizon Martingale Update ---
             new_horizon = None
             if predicted_data is not None and i >= history_size:
-
                 # Use predictions only after accumulating enough history.
                 pred_idx = i - history_size
 
@@ -150,7 +153,6 @@ def compute_martingale(
 
                 # Loop over all horizon predictions at the current prediction index.
                 for h in range(len(predicted_data[pred_idx])):
-
                     # Compute strangeness for the predicted state.
                     if len(window) == 0:
                         pred_s_vals = [0.0]
@@ -174,26 +176,32 @@ def compute_martingale(
                         f"Horizon martingale detected change at t={i}: {new_horizon:.4f} > {threshold}"
                     )
                     horizon_change_points.append(i)
+
             elif predicted_data is not None:
                 new_horizon = prev_trad
 
-            # --- Reset or Update the History ---
+            # --- Reset Logic (Hybrid Approach) ---
             if detected_trad:
-                # Reset ONLY on traditional martingale detection.
-                window = []  # Clear window after detection.
-                saved_traditional.append(new_trad)  # Store detection value.
-                traditional_martingale.append(
-                    1.0
-                )  # Reset running value for next iteration.
+                # On traditional detection:
+                # 1. Reset traditional martingale to 1.0
+                # 2. Reset horizon martingale to 1.0 (hybrid approach)
+                # 3. Clear window for fresh start
+                window = []  # Clear window after detection
+                saved_traditional.append(new_trad)  # Store detection value
+                traditional_martingale.append(1.0)  # Reset for next iteration
+                if new_horizon is not None:
+                    saved_horizon.append(new_horizon)
+                    horizon_martingale.append(
+                        1.0
+                    )  # Reset horizon on traditional detection
             else:
+                # No detection: update windows and continue martingale sequences
                 window.append(point)
                 saved_traditional.append(new_trad)
                 traditional_martingale.append(new_trad)
-
-            # Always update the horizon martingale if computed.
-            if new_horizon is not None:
-                saved_horizon.append(new_horizon)
-                horizon_martingale.append(new_horizon)
+                if new_horizon is not None:
+                    saved_horizon.append(new_horizon)
+                    horizon_martingale.append(new_horizon)  # Continue horizon sequence
 
             # Log state every 10 timesteps.
             if i > 0 and i % 10 == 0:
@@ -244,6 +252,12 @@ def multiview_martingale_test(
          M_total(n) = sum_{j=1}^{d} M_j(n)
          M_avg(n) = M_total(n) / d
     A change is declared if M_total(n) exceeds the threshold.
+
+    Reset Strategy:
+    - Traditional martingales reset to 1.0 immediately after total traditional martingale detects a change.
+    - Horizon martingales only reset when traditional martingale confirms a change.
+      This hybrid approach maintains the horizon martingales' predictive power while
+      preventing excessive consecutive detections.
 
     Returns a dictionary with:
       - "traditional_change_points": List[int] indices where the aggregated traditional martingale exceeded the threshold.
@@ -357,9 +371,9 @@ def multiview_martingale_test(
                 pred_idx = i - history_size
                 for j in range(num_features):
                     # Start with the same previous value as traditional martingale
-                    prev_val = traditional_martingales[j][
+                    prev_trad = traditional_martingales[j][
                         -2
-                    ]  # Use value before current update
+                    ]  # Use traditional value before current update
                     horizon_factor = 1.0
 
                     # Loop over each prediction for feature j.
@@ -375,15 +389,19 @@ def multiview_martingale_test(
                             pred_pv = get_pvalue(pred_s_val, random_state=random_state)
                             horizon_factor *= betting_func(1.0, pred_pv, epsilon)
 
-                    # Use same previous value as traditional martingale
-                    new_horizon_val = prev_val * horizon_factor
+                    # Update horizon martingale value using traditional previous value
+                    new_horizon_val = (
+                        prev_trad * horizon_factor
+                    )  # Start from traditional value
                     new_horizon.append(new_horizon_val)
-                    horizon_martingales[j].append(new_horizon_val)
 
+                # Compute aggregated horizon martingale
                 total_horizon = sum(new_horizon)
                 avg_horizon = total_horizon / num_features
                 horizon_sum.append(total_horizon)
                 horizon_avg.append(avg_horizon)
+
+                # Check for horizon martingale detection
                 if total_horizon > threshold:
                     logger.info(
                         f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {threshold}"
@@ -395,20 +413,26 @@ def multiview_martingale_test(
                 horizon_sum.append(total_horizon)
                 horizon_avg.append(avg_horizon)
 
-            # Check for traditional martingale detection and reset windows AFTER both martingales are updated
+            # --- Reset Logic (Hybrid Approach) ---
             if total_traditional > threshold:
                 logger.info(
                     f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {threshold}"
                 )
                 traditional_change_points.append(i)
-                # Reset history and traditional martingale for all features
+                # Reset both traditional and horizon martingales for all features
                 for j in range(num_features):
-                    windows[j] = []
-                    traditional_martingales[j][-1] = 1.0
+                    windows[j] = []  # Clear windows
+                    traditional_martingales[j].append(1.0)  # Reset traditional
+                    horizon_martingales[j].append(
+                        1.0
+                    )  # Reset horizon (hybrid approach)
             else:
-                # Only append to windows if no detection
+                # No detection: update windows and continue martingale sequences
                 for j in range(num_features):
                     windows[j].append(data[j][i])
+                    traditional_martingales[j].append(new_traditional[j])
+                    if predicted_data is not None and i >= history_size:
+                        horizon_martingales[j].append(new_horizon[j])
 
             if i > 0 and i % 10 == 0:
                 logger.debug(
