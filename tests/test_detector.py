@@ -34,59 +34,18 @@ def get_full_model_name(alias: str) -> str:
     return REVERSE_ALIASES.get(alias, alias)
 
 
-def extract_numeric_features(feature_dict: dict) -> np.ndarray:
-    """Extract numeric features from feature dictionary in a consistent order."""
-    # Extract basic metrics
-    degrees = feature_dict.get("degrees", [])
-    avg_degree = np.mean(degrees) if degrees else 0.0
-    density = feature_dict.get("density", 0.0)
-    clustering = feature_dict.get("clustering", [])
-    avg_clustering = np.mean(clustering) if clustering else 0.0
-
-    # Extract centrality metrics
-    betweenness = feature_dict.get("betweenness", [])
-    avg_betweenness = np.mean(betweenness) if betweenness else 0.0
-    eigenvector = feature_dict.get("eigenvector", [])
-    avg_eigenvector = np.mean(eigenvector) if eigenvector else 0.0
-    closeness = feature_dict.get("closeness", [])
-    avg_closeness = np.mean(closeness) if closeness else 0.0
-
-    # Extract spectral metrics
-    singular_values = feature_dict.get("singular_values", [])
-    largest_sv = max(singular_values) if singular_values else 0.0
-    laplacian_eigenvalues = feature_dict.get("laplacian_eigenvalues", [])
-    smallest_nonzero_le = (
-        min(x for x in laplacian_eigenvalues if x > 1e-10)
-        if laplacian_eigenvalues
-        else 0.0
-    )
-
-    return np.array(
-        [
-            avg_degree,
-            density,
-            avg_clustering,
-            avg_betweenness,
-            avg_eigenvector,
-            avg_closeness,
-            largest_sv,
-            smallest_nonzero_le,
-        ]
-    )
-
-
 @pytest.fixture
 def feature_names():
     """Get list of feature names used in detection."""
     return [
-        "degree",
+        "mean_degree",
         "density",
-        "clustering",
-        "betweenness",
-        "eigenvector",
-        "closeness",
-        "singular_value",
-        "laplacian",
+        "mean_clustering",
+        "mean_betweenness",
+        "mean_eigenvector",
+        "mean_closeness",
+        "max_singular_value",
+        "min_nonzero_laplacian",
     ]
 
 
@@ -112,9 +71,12 @@ class TestChangePointDetection:
         features_numeric = []
         for adj_matrix in graphs:
             graph = nx.from_numpy_array(adj_matrix)
-            feature_dict = feature_extractor.get_features(graph)
-            numeric_features = extract_numeric_features(feature_dict)
-            features_numeric.append(numeric_features)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            # Convert to array in consistent order
+            feature_vector = np.array(
+                [numeric_features[name] for name in feature_names]
+            )
+            features_numeric.append(feature_vector)
 
         data = np.array(features_numeric)
 
@@ -171,9 +133,12 @@ class TestChangePointDetection:
         features_numeric = []
         for adj_matrix in graphs:
             graph = nx.from_numpy_array(adj_matrix)
-            feature_dict = feature_extractor.get_features(graph)
-            numeric_features = extract_numeric_features(feature_dict)
-            features_numeric.append(numeric_features)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            # Convert to array in consistent order
+            feature_vector = np.array(
+                [numeric_features[name] for name in feature_names]
+            )
+            features_numeric.append(feature_vector)
 
         data = np.array(features_numeric)
 
@@ -219,9 +184,12 @@ class TestChangePointDetection:
         features_numeric = []
         for adj_matrix in graphs:
             graph = nx.from_numpy_array(adj_matrix)
-            feature_dict = feature_extractor.get_features(graph)
-            numeric_features = extract_numeric_features(feature_dict)
-            features_numeric.append(numeric_features)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            # Convert to array in consistent order
+            feature_vector = np.array(
+                [numeric_features[name] for name in feature_names]
+            )
+            features_numeric.append(feature_vector)
 
         data = np.array(features_numeric)
 
@@ -251,7 +219,7 @@ class TestChangePointDetection:
             # Detection should be within reasonable delay
             assert avg_error <= 25, f"Average detection delay ({avg_error}) too high"
 
-    def test_parameter_sensitivity(self):
+    def test_parameter_sensitivity(self, feature_names):
         """Test sensitivity to detector parameters."""
         # Setup
         model = "ba"  # Use BA model for parameter sensitivity test
@@ -269,9 +237,12 @@ class TestChangePointDetection:
         features_numeric = []
         for adj_matrix in graphs:
             graph = nx.from_numpy_array(adj_matrix)
-            feature_dict = feature_extractor.get_features(graph)
-            numeric_features = extract_numeric_features(feature_dict)
-            features_numeric.append(numeric_features)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            # Convert to array in consistent order
+            feature_vector = np.array(
+                [numeric_features[name] for name in feature_names]
+            )
+            features_numeric.append(feature_vector)
 
         data = np.array(features_numeric)
 

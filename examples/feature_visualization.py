@@ -77,18 +77,15 @@ def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
     key_points = [0] + change_points + [len(graphs) - 1]
     n_points = len(key_points)
 
-    fig, axes = plt.subplots(
-        n_points,
-        2,
-        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
-    )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Network States",
-        fontsize=viz.TITLE_SIZE,
-        y=0.98,
-    )
+    # Create figure for network states
+    fig = plt.figure()
+    title = f"{model_name.replace('_', ' ').title()} Network States"
 
+    # Plot each key point
     for i, time_idx in enumerate(key_points):
+        # Create a new figure for each time point
+        plt.figure()
+
         # Prepare node colors for SBM
         node_color = None
         if model_alias == "sbm":
@@ -97,44 +94,26 @@ def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
             for j, size in enumerate(block_sizes):
                 node_color.extend([f"C{j}"] * size)
 
-        # Plot network state
-        viz.plot_network(
-            graphs[time_idx],
-            ax=axes[i, 0],
-            title=f"Network State at t={time_idx}"
-            + (" (Change Point)" if time_idx in change_points else ""),
-            layout="spring",
-            node_color=node_color,
+        # Create visualization with both network and adjacency matrix
+        state_title = f"Network State at t={time_idx}" + (
+            " (Change Point)" if time_idx in change_points else ""
+        )
+        viz.plot_network_with_adjacency(
+            graphs[time_idx], title=state_title, layout="spring", node_color=node_color
         )
 
-        # Plot adjacency matrix
-        viz.plot_adjacency(
-            graphs[time_idx], ax=axes[i, 1], title=f"Adjacency Matrix at t={time_idx}"
-        )
+        # Save each state visualization
+        state_file = os.path.join(output_dir, f"{model_name}_state_{time_idx}.png")
+        plt.savefig(state_file, bbox_inches="tight", dpi=300)
+        plt.close()
 
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
-    plt.savefig(
-        os.path.join(output_dir, f"{model_name}_states.png"),
-        bbox_inches="tight",
-        dpi=300,
-    )
-    plt.close()
-
-    # Plot feature evolution
     print("Creating feature evolution plots...")
+    # Plot feature evolution
     fig, _ = viz.plot_all_features(features, change_points=change_points, n_cols=2)
 
-    plt.suptitle(
-        f"{model_name.replace('_', ' ').title()} Feature Evolution",
-        fontsize=viz.TITLE_SIZE,
-        y=0.98,
-    )
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
-    plt.savefig(
-        os.path.join(output_dir, f"{model_name}_features.png"),
-        bbox_inches="tight",
-        dpi=300,
-    )
+    # Save feature evolution plot
+    feature_file = os.path.join(output_dir, f"{model_name}_features.png")
+    plt.savefig(feature_file, bbox_inches="tight", dpi=300)
     plt.close()
 
     print(f"Done! Visualizations have been saved to {output_dir}/")

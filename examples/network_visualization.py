@@ -79,15 +79,9 @@ def visualize_network(model_alias: str, output_dir: str = "examples"):
     result = generator.generate_sequence(params)
     adj_matrix = result["graphs"][0]  # This is a numpy array
 
-    # Create visualization
-    fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT / 2)
-    )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Network",
-        fontsize=viz.TITLE_SIZE,
-        y=0.95,
-    )
+    # Create figure with two subplots
+    fig = plt.figure()
+    title = f"{model_name.replace('_', ' ').title()} Network"
 
     # Prepare node colors for SBM
     node_color = None
@@ -97,15 +91,12 @@ def visualize_network(model_alias: str, output_dir: str = "examples"):
         for i, size in enumerate(block_sizes):
             node_color.extend([f"C{i}"] * size)
 
-    # Plot network
-    viz.plot_network(
-        adj_matrix, ax=ax1, title="Network View", layout="spring", node_color=node_color
+    # Create visualization with both network and adjacency matrix
+    viz.plot_network_with_adjacency(
+        adj_matrix, title=title, layout="spring", node_color=node_color, fig=fig
     )
 
-    # Plot adjacency matrix
-    viz.plot_adjacency(adj_matrix, ax=ax2, title="Adjacency Matrix")
-
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+    # Save the figure
     output_file = os.path.join(output_dir, f"{model_name}_network.png")
     plt.savefig(output_file, bbox_inches="tight", dpi=300)
     plt.close()

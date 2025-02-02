@@ -13,6 +13,13 @@ import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
+from ..configs.plotting import (
+    FIGURE_DIMENSIONS as FD,
+    TYPOGRAPHY as TYPO,
+    LINE_STYLE as LS,
+    COLORS,
+    get_network_style,
+)
 from .utils import graph_to_adjacency, adjacency_to_graph
 
 logger = logging.getLogger(__name__)
@@ -20,49 +27,6 @@ logger = logging.getLogger(__name__)
 
 class NetworkVisualizer:
     """Visualizer for network graphs, adjacency matrices, and features."""
-
-    SINGLE_COLUMN_WIDTH = 5.5  # inches, standard for single column
-    DOUBLE_COLUMN_WIDTH = 7.2  # inches, standard for double column
-    STANDARD_HEIGHT = 4.0  # inches
-    GRID_HEIGHT = 6.0  # inches for grid layouts
-    GRID_SPACING = 0.3  # spacing between subplots
-
-    # Typography
-    TITLE_SIZE = 10
-    LABEL_SIZE = 8
-    TICK_SIZE = 6
-    LEGEND_SIZE = 7
-    ANNOTATION_SIZE = 6
-
-    # Line styling
-    LINE_WIDTH = 1.0
-    LINE_ALPHA = 0.8
-    GRID_ALPHA = 0.2
-    GRID_WIDTH = 0.5
-
-    # Colors
-    COLORS = {
-        "actual": "#1f77b4",
-        "predicted": "#ff7f0e",
-        "average": "#2ca02c",
-        "pred_avg": "#d62728",
-        "change_point": "red",
-        "threshold": "#17becf",
-    }
-
-    DEFAULT_STYLE = {
-        "node_size": 150,
-        "node_color": COLORS["actual"],
-        "edge_color": "#7f7f7f",
-        "font_size": TICK_SIZE,
-        "width": LINE_WIDTH * 0.8,
-        "alpha": LINE_ALPHA,
-        "cmap": "viridis",
-        "with_labels": True,
-        "arrows": False,
-        "label_offset": 0.1,
-        "dpi": 300,
-    }
 
     LAYOUTS = {
         "spring": nx.spring_layout,
@@ -76,9 +40,7 @@ class NetworkVisualizer:
     def __init__(self, style: Dict = None):
         """Initialize visualizer with custom style."""
         plt.style.use("seaborn-v0_8-paper")  # Use paper style as base
-        self.style = self.DEFAULT_STYLE.copy()
-        if style:
-            self.style.update(style)
+        self.style = get_network_style(style)
 
     def plot_adjacency(
         self,
@@ -90,7 +52,7 @@ class NetworkVisualizer:
         """Plot adjacency matrix as heatmap."""
         if ax is None:
             fig, ax = plt.subplots(
-                figsize=(self.SINGLE_COLUMN_WIDTH / 2, self.STANDARD_HEIGHT / 2)
+                figsize=(FD["SINGLE_COLUMN_WIDTH"] / 2, FD["STANDARD_HEIGHT"] / 2)
             )
         else:
             fig = ax.figure
@@ -103,9 +65,9 @@ class NetworkVisualizer:
                 "Empty Graph",
                 ha="center",
                 va="center",
-                fontsize=self.TICK_SIZE,
+                fontsize=TYPO["TICK_SIZE"],
             )
-            ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
+            ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
             ax.set_xticks([])
             ax.set_yticks([])
             return fig, ax
@@ -119,13 +81,13 @@ class NetworkVisualizer:
             annot=show_values,
             fmt=".0f" if show_values else "",
             cbar=False,  # Remove colorbar
-            annot_kws={"size": self.ANNOTATION_SIZE} if show_values else {},
+            annot_kws={"size": TYPO["ANNOTATION_SIZE"]} if show_values else {},
         )
 
-        ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
-        ax.set_xlabel("Node", fontsize=self.LABEL_SIZE, labelpad=2)
-        ax.set_ylabel("Node", fontsize=self.LABEL_SIZE, labelpad=2)
-        ax.tick_params(labelsize=self.TICK_SIZE, pad=1)
+        ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
+        ax.set_xlabel("Node", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.set_ylabel("Node", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.tick_params(labelsize=TYPO["TICK_SIZE"], pad=1)
 
         return fig, ax
 
@@ -158,7 +120,7 @@ class NetworkVisualizer:
         """
         if ax is None:
             fig, ax = plt.subplots(
-                figsize=(self.SINGLE_COLUMN_WIDTH / 2, self.STANDARD_HEIGHT / 2)
+                figsize=(FD["SINGLE_COLUMN_WIDTH"] / 2, FD["STANDARD_HEIGHT"] / 2)
             )
         else:
             fig = ax.figure
@@ -177,9 +139,9 @@ class NetworkVisualizer:
                 "Empty Graph",
                 ha="center",
                 va="center",
-                fontsize=self.TICK_SIZE,
+                fontsize=TYPO["TICK_SIZE"],
             )
-            ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
+            ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
             ax.set_xticks([])
             ax.set_yticks([])
             return fig, ax
@@ -212,7 +174,7 @@ class NetworkVisualizer:
             font_size=self.style.get("font_size", 8),
         )
 
-        ax.set_title(title, fontsize=self.TITLE_SIZE, pad=4)
+        ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
         ax.set_xticks([])
         ax.set_yticks([])
         return fig, ax
@@ -232,7 +194,7 @@ class NetworkVisualizer:
         fig, axes = plt.subplots(
             n_rows,
             n_cols,
-            figsize=(self.SINGLE_COLUMN_WIDTH, self.STANDARD_HEIGHT * n_rows / 2),
+            figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * n_rows / 2),
             squeeze=False,
         )
         axes = axes.flatten()
@@ -325,7 +287,7 @@ class NetworkVisualizer:
         """Plot evolution of a network feature."""
         if ax is None:
             fig, ax = plt.subplots(
-                figsize=(self.SINGLE_COLUMN_WIDTH / 2, self.STANDARD_HEIGHT / 2)
+                figsize=(FD["SINGLE_COLUMN_WIDTH"] / 2, FD["STANDARD_HEIGHT"] / 2)
             )
         else:
             fig = ax.figure
@@ -337,9 +299,11 @@ class NetworkVisualizer:
                 "No Features",
                 ha="center",
                 va="center",
-                fontsize=self.TICK_SIZE,
+                fontsize=TYPO["TICK_SIZE"],
             )
-            ax.set_title(title or "Feature Evolution", fontsize=self.TITLE_SIZE, pad=4)
+            ax.set_title(
+                title or "Feature Evolution", fontsize=TYPO["TITLE_SIZE"], pad=4
+            )
             return fig, ax
 
         # Extract feature values
@@ -360,9 +324,9 @@ class NetworkVisualizer:
                 time,
                 mean_values,
                 label=feature_name,  # Only show feature name in legend
-                color=self.COLORS["actual"],
-                alpha=self.LINE_ALPHA,
-                linewidth=self.LINE_WIDTH,
+                color=COLORS["actual"],
+                alpha=LS["LINE_ALPHA"],
+                linewidth=LS["LINE_WIDTH"],
             )
 
             # Add std bands without legend entry
@@ -370,7 +334,7 @@ class NetworkVisualizer:
                 time,
                 np.array(mean_values) - np.array(std_values),
                 np.array(mean_values) + np.array(std_values),
-                color=self.COLORS["actual"],
+                color=COLORS["actual"],
                 alpha=0.1,
             )
         else:
@@ -379,9 +343,9 @@ class NetworkVisualizer:
             ax.plot(
                 values,
                 label=feature_name,
-                color=self.COLORS["actual"],
-                alpha=self.LINE_ALPHA,
-                linewidth=self.LINE_WIDTH,
+                color=COLORS["actual"],
+                alpha=LS["LINE_ALPHA"],
+                linewidth=LS["LINE_WIDTH"],
             )
 
         # Mark change points
@@ -389,26 +353,26 @@ class NetworkVisualizer:
             for cp in change_points:
                 ax.axvline(
                     cp,
-                    color=self.COLORS["change_point"],
+                    color=COLORS["change_point"],
                     linestyle="--",
                     alpha=0.5,
-                    linewidth=self.LINE_WIDTH * 0.8,
+                    linewidth=LS["LINE_WIDTH"] * 0.8,
                 )
 
         ax.set_title(
             title or f"{feature_name.replace('_', ' ').title()}",
-            fontsize=self.TITLE_SIZE,
+            fontsize=TYPO["TITLE_SIZE"],
             pad=4,
         )
-        ax.set_xlabel("Time", fontsize=self.LABEL_SIZE, labelpad=2)
-        ax.set_ylabel("Value", fontsize=self.LABEL_SIZE, labelpad=2)
-        ax.tick_params(labelsize=self.TICK_SIZE, pad=1)
-        ax.grid(True, alpha=self.GRID_ALPHA, linewidth=self.GRID_WIDTH)
+        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.tick_params(labelsize=TYPO["TICK_SIZE"], pad=1)
+        ax.grid(True, alpha=LS["GRID_ALPHA"], linewidth=LS["GRID_WIDTH"])
 
         # Configure legend
         if ax.get_legend():
             ax.legend(
-                fontsize=self.LEGEND_SIZE,
+                fontsize=TYPO["LEGEND_SIZE"],
                 framealpha=0.8,
                 borderaxespad=0.2,
                 handlelength=1.0,
@@ -427,7 +391,7 @@ class NetworkVisualizer:
         """Plot evolution of all network features."""
         if not features:
             fig, ax = plt.subplots(
-                figsize=(self.SINGLE_COLUMN_WIDTH / 2, self.STANDARD_HEIGHT / 2)
+                figsize=(FD["SINGLE_COLUMN_WIDTH"] / 2, FD["STANDARD_HEIGHT"] / 2)
             )
             ax.text(
                 0.5,
@@ -435,7 +399,7 @@ class NetworkVisualizer:
                 "No Features",
                 ha="center",
                 va="center",
-                fontsize=self.TICK_SIZE,
+                fontsize=TYPO["TICK_SIZE"],
             )
             ax.set_xticks([])
             ax.set_yticks([])
@@ -447,7 +411,7 @@ class NetworkVisualizer:
         n_rows = (n_features + n_cols - 1) // n_cols
 
         if figsize is None:
-            figsize = (self.SINGLE_COLUMN_WIDTH, self.STANDARD_HEIGHT * n_rows / 1.5)
+            figsize = (FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * n_rows / 1.5)
 
         fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
         if n_features == 1:
@@ -469,3 +433,46 @@ class NetworkVisualizer:
 
         plt.tight_layout(pad=0.5, h_pad=0.8, w_pad=0.8)
         return fig, axes.tolist()
+
+    def plot_network_with_adjacency(
+        self,
+        adj_matrix: np.ndarray,
+        title: str = None,
+        layout: str = "spring",
+        node_color: Union[str, List[str]] = None,
+        fig: plt.Figure = None,
+    ) -> None:
+        """Plot network visualization alongside its adjacency matrix.
+
+        Args:
+            adj_matrix: Adjacency matrix of the network
+            title: Title for the overall figure
+            layout: Network layout algorithm ('spring', 'circular', 'random', 'shell')
+            node_color: Color(s) for network nodes
+            fig: Optional matplotlib figure to plot on. If None, creates new figure.
+        """
+        if fig is None:
+            fig = plt.figure(figsize=(12, 5))
+
+        # Create two subplots
+        gs = fig.add_gridspec(1, 2)
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1])
+
+        # Plot network
+        self.plot_network(
+            adj_matrix,
+            ax=ax1,
+            title="Network View",
+            layout=layout,
+            node_color=node_color,
+        )
+
+        # Plot adjacency matrix
+        self.plot_adjacency(adj_matrix, ax=ax2, title="Adjacency Matrix")
+
+        if title:
+            fig.suptitle(title, y=1.05)
+
+        # Adjust layout
+        plt.tight_layout()

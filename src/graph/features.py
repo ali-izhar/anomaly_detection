@@ -38,6 +38,17 @@ class BaseFeatureExtractor(ABC):
         """Return empty feature values for an empty graph."""
         return {name: [] for name in self.feature_names}
 
+    @abstractmethod
+    def extract_numeric(self, graph: nx.Graph) -> Dict[str, float]:
+        """Extract numeric summary features from graph.
+
+        Args:
+            graph: Input graph
+        Returns:
+            Dict mapping feature names to single numeric values
+        """
+        pass
+
 
 class BasicMetricsExtractor(BaseFeatureExtractor):
     """Extracts basic network metrics (degrees, density, clustering)."""
@@ -74,6 +85,30 @@ class BasicMetricsExtractor(BaseFeatureExtractor):
             "degrees": degrees,
             "density": density,
             "clustering": clustering,
+        }
+
+    def extract_numeric(self, graph: nx.Graph) -> Dict[str, float]:
+        """Extract numeric summary features for basic metrics.
+
+        Args:
+            graph: Input graph
+        Returns:
+            Dict with numeric summaries:
+            - mean_degree: Average node degree
+            - density: Graph density
+            - mean_clustering: Average clustering coefficient
+        """
+        raw_features = self.extract(graph)
+        return {
+            "mean_degree": (
+                np.mean(raw_features["degrees"]) if raw_features["degrees"] else 0.0
+            ),
+            "density": raw_features["density"],
+            "mean_clustering": (
+                np.mean(raw_features["clustering"])
+                if raw_features["clustering"]
+                else 0.0
+            ),
         }
 
 
@@ -124,6 +159,34 @@ class CentralityMetricsExtractor(BaseFeatureExtractor):
             "closeness": closeness,
         }
 
+    def extract_numeric(self, graph: nx.Graph) -> Dict[str, float]:
+        """Extract numeric summary features for centrality metrics.
+
+        Args:
+            graph: Input graph
+        Returns:
+            Dict with numeric summaries:
+            - mean_betweenness: Average betweenness centrality
+            - mean_eigenvector: Average eigenvector centrality
+            - mean_closeness: Average closeness centrality
+        """
+        raw_features = self.extract(graph)
+        return {
+            "mean_betweenness": (
+                np.mean(raw_features["betweenness"])
+                if raw_features["betweenness"]
+                else 0.0
+            ),
+            "mean_eigenvector": (
+                np.mean(raw_features["eigenvector"])
+                if raw_features["eigenvector"]
+                else 0.0
+            ),
+            "mean_closeness": (
+                np.mean(raw_features["closeness"]) if raw_features["closeness"] else 0.0
+            ),
+        }
+
 
 class SpectralMetricsExtractor(BaseFeatureExtractor):
     """Extracts spectral metrics from adjacency and Laplacian matrices."""
@@ -167,6 +230,29 @@ class SpectralMetricsExtractor(BaseFeatureExtractor):
             "laplacian_eigenvalues": laplacian_eigenvalues,
         }
 
+    def extract_numeric(self, graph: nx.Graph) -> Dict[str, float]:
+        """Extract numeric summary features for spectral metrics.
+
+        Args:
+            graph: Input graph
+        Returns:
+            Dict with numeric summaries:
+            - max_singular_value: Largest singular value
+            - min_nonzero_laplacian: Smallest non-zero Laplacian eigenvalue
+        """
+        raw_features = self.extract(graph)
+        return {
+            "max_singular_value": (
+                max(raw_features["singular_values"])
+                if raw_features["singular_values"]
+                else 0.0
+            ),
+            "min_nonzero_laplacian": min(
+                (x for x in raw_features["laplacian_eigenvalues"] if x > 1e-10),
+                default=0.0,
+            ),
+        }
+
 
 class NetworkFeatureExtractor:
     """Main class for extracting network features."""
@@ -208,6 +294,29 @@ class NetworkFeatureExtractor:
         for ftype in feature_types:
             if ftype in self.extractors:
                 features.update(self.extractors[ftype].extract(graph))
+            else:
+                logger.warning(f"Unknown feature type: {ftype}")
+
+        return features
+
+    def get_numeric_features(
+        self, graph: nx.Graph, feature_types: List[str] = None
+    ) -> Dict[str, float]:
+        """Extract numeric summary features from graph.
+
+        Args:
+            graph: Input graph
+            feature_types: List of feature types to extract (default: all)
+        Returns:
+            Dict mapping feature names to single numeric values
+        """
+        if feature_types is None:
+            feature_types = self.available_features
+
+        features = {}
+        for ftype in feature_types:
+            if ftype in self.extractors:
+                features.update(self.extractors[ftype].extract_numeric(graph))
             else:
                 logger.warning(f"Unknown feature type: {ftype}")
 

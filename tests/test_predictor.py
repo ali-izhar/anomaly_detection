@@ -19,7 +19,7 @@ from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
 from src.predictor.factory import PredictorFactory
-from src.metrics.feature_metrics import (
+from src.graph.metrics import (
     compute_feature_metrics,
     compute_feature_distribution_metrics,
     FeatureMetrics,
