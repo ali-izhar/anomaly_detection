@@ -48,23 +48,27 @@ def strangeness_point(
     np.ndarray
         A 1D array of shape (N,) containing the minimum distance (strangeness) for each point.
     """
-    # Validate input data.
+    # --- Input Validation ---
+
+    # Check if the provided data is None or an empty sequence.
     if data is None or len(data) == 0:
         logger.error("Empty data sequence")
         raise ValueError("Empty data sequence")
 
-    # Set random seed for reproducibility, if provided.
+    # Set the random seed for reproducibility if random_state is provided.
     if random_state is not None:
         np.random.seed(random_state)
         random.seed(random_state)
 
-    # Convert data to a numpy array.
+    # Convert the input data to a numpy array to ensure consistent processing.
     data_array = np.array(data)
     if data_array.size == 0:
         logger.error("Data array has zero size after np.array conversion")
         raise ValueError("Empty data sequence")
 
-    # Validate dimensions
+    # --- Data Dimension Handling ---
+
+    # Check if the data has either 2 or 3 dimensions.
     if data_array.ndim not in [2, 3]:
         logger.error(
             f"Invalid data dimensions: {data_array.ndim}D. Expected 2D or 3D array."
@@ -73,18 +77,21 @@ def strangeness_point(
             f"Invalid data dimensions: {data_array.ndim}D. Expected 2D or 3D array."
         )
 
-    # Log input dimensions
-    logger.debug("Input data dimensions:")
-    logger.debug(f"- Original shape: {data_array.shape}")
+    # Log the original shape of the input data.
+    logger.debug(f"Input data dimensions. Original shape: {data_array.shape}")
 
-    # If data is 3D (e.g., (N, something, d)), flatten the extra dimension.
+    # If the data is 3D (for example, (N, something, d)), flatten the extra dimension
+    # so that the data becomes a 2D array of shape (N * something, d).
     if data_array.ndim == 3:
-        original_shape = data_array.shape
         data_array = data_array.reshape(-1, data_array.shape[-1])
-        logger.debug(f"- Reshaped to: {data_array.shape}")
+        logger.debug(f"Reshaped to: {data_array.shape}")
 
-    # Validate reshaped dimensions
+    # --- Post-Reshape Validations ---
+
+    # Unpack the shape of the (now 2D) data: N points with d features.
     N, d = data_array.shape
+
+    # Ensure there are at least as many points as the number of clusters.
     if N < n_clusters:
         logger.error(
             f"Number of points ({N}) must be >= number of clusters ({n_clusters})"
@@ -93,23 +100,33 @@ def strangeness_point(
             f"Number of points ({N}) must be >= number of clusters ({n_clusters})"
         )
 
+    # The feature dimension must be non-zero.
     if d == 0:
         logger.error("Feature dimension cannot be zero")
         raise ValueError("Feature dimension cannot be zero")
 
-    # Choose MiniBatchKMeans if batch_size is provided and data is large.
+    # --- Clustering Model Selection ---
+
+    # If a batch_size is provided and the number of points exceeds the batch size,
+    # use MiniBatchKMeans for more efficient clustering on large datasets.
     if batch_size is not None and N > batch_size:
         model = MiniBatchKMeans(
             n_clusters=n_clusters, batch_size=batch_size, random_state=random_state
         )
     else:
+        # Otherwise, use the standard KMeans clustering.
         model = KMeans(n_clusters=n_clusters, n_init="auto", random_state=random_state)
+
+    # Fit the clustering model to the data.
     model.fit(data_array)
 
-    # Compute distances from each point to each cluster center using the specified metric.
+    # --- Distance Computation ---
+
+    # Compute the distances from each data point to every cluster center using the
+    # specified distance metric.
     distances = compute_cluster_distances(data_array, model, distance_measure, p)
 
-    # Validate distances shape
+    # Validate that the resulting distance matrix has the expected shape (N, n_clusters).
     if distances.shape != (N, n_clusters):
         logger.error(
             f"Invalid distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
@@ -118,10 +135,12 @@ def strangeness_point(
             f"Invalid distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
         )
 
-    # The strangeness for each point is the minimum distance to any of the cluster centers.
+    # --- Strangeness Computation ---
+
+    # For each point, compute its strangeness as the minimum distance to any cluster center.
     strangeness_scores = distances.min(axis=1)
 
-    # Validate output shape
+    # Validate the output shape to be a 1D array with one entry per data point.
     if strangeness_scores.shape != (N,):
         logger.error(
             f"Invalid output shape: {strangeness_scores.shape}. Expected: ({N},)"
@@ -155,26 +174,41 @@ def get_pvalue(strangeness: List[float], random_state: Optional[int] = None) -> 
     float
         The conformal p-value.
     """
-    # Validate the strangeness list or array.
+    # --- Input Validation ---
+
+    # Check if the strangeness input is a numpy array.
     if isinstance(strangeness, np.ndarray):
+        # Ensure the numpy array is not empty.
         if strangeness.size == 0:
             logger.error("Empty numpy array provided for strangeness computation")
             raise ValueError("Strangeness sequence cannot be empty")
     else:
+        # If it is a list, ensure it is not empty.
         if not strangeness:
             logger.error("Empty list provided for strangeness computation")
             raise ValueError("Strangeness sequence cannot be empty")
 
+    # Set random seeds for reproducibility if random_state is provided.
     if random_state is not None:
         np.random.seed(random_state)
         random.seed(random_state)
 
-    # Generate a random tie-breaker from Uniform(0,1).
+    # --- p-value Computation Using Vovk's Tie-Breaking ---
+
+    # Generate a random number theta from Uniform(0,1) to break ties.
     theta = random.uniform(0, 1)
+
+    # The current (new) strangeness value is the last element in the sequence.
     current = strangeness[-1]
 
-    # Count how many values are strictly larger and how many are equal to the current.
+    # Count the number of points with strangeness strictly larger than the current value.
     num_larger = sum(s > current for s in strangeness)
+
+    # Count the number of points with strangeness equal to the current value.
     num_equal = sum(s == current for s in strangeness)
+
+    # Compute the p-value using the formula:
+    # p = ( (# of points with strangeness > current) + theta * (# with strangeness == current) ) / total number of points.
     pvalue = (num_larger + theta * num_equal) / len(strangeness)
+
     return pvalue

@@ -7,8 +7,8 @@ import logging
 import numpy as np
 import networkx as nx
 
-# Import the modular bitting functions; by default, we use the power martingale.
-from .bitting import power_martingale, exponential_martingale, mixture_martingale
+# Import the modular betting functions; by default, we use the power martingale.
+from .betting import power_martingale, exponential_martingale, mixture_martingale
 from .martingale import compute_martingale, multiview_martingale_test
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class ChangePointDetector:
     Main Steps:
     1. Compute a strangeness measure for new points (or sets of points).
     2. Convert strangeness to a p-value using a nonparametric, rank-based method.
-    3. Update a martingale using a chosen bitting function:
+    3. Update a martingale using a chosen betting function:
          M_n = M_(n-1) * (update factor based on p-value)
     4. If the martingale exceeds a threshold, report a change point.
 
@@ -49,7 +49,7 @@ class ChangePointDetector:
         max_martingale: Optional[float] = None,
         reset: bool = True,
         max_window: Optional[int] = None,
-        bitting_func: Optional[
+        betting_func: Optional[
             Callable[[float, float, float], float]
         ] = power_martingale,
     ):
@@ -64,7 +64,7 @@ class ChangePointDetector:
         self.max_martingale = max_martingale
         self.reset = reset
         self.max_window = max_window
-        self.bitting_func = bitting_func
+        self.betting_func = betting_func
 
     def run(
         self,
@@ -93,7 +93,7 @@ class ChangePointDetector:
                 self.reset,
                 self.max_window,
                 self.random_state,
-                self.bitting_func,
+                self.betting_func,
             )
         elif self.method == "multiview":
             # Split each feature into a separate view for multiview detection
@@ -124,7 +124,7 @@ class ChangePointDetector:
                 self.max_martingale,
                 self.batch_size,
                 self.random_state,
-                self.bitting_func,
+                self.betting_func,
             )
 
         raise ValueError(f"Invalid method: {self.method}")
@@ -139,7 +139,7 @@ class ChangePointDetector:
         reset: bool = True,
         max_window: Optional[int] = None,
         random_state: Optional[int] = None,
-        bitting_func: Optional[
+        betting_func: Optional[
             Callable[[float, float, float], float]
         ] = power_martingale,
     ) -> Dict[str, Any]:
@@ -169,7 +169,7 @@ class ChangePointDetector:
             reset=reset,
             window_size=max_window,
             random_state=random_state,
-            bitting_func=bitting_func,
+            betting_func=betting_func,
         )
 
         return {
@@ -194,7 +194,7 @@ class ChangePointDetector:
         max_martingale: Optional[float] = None,
         batch_size: Optional[int] = None,
         random_state: Optional[int] = None,
-        bitting_func: Optional[
+        betting_func: Optional[
             Callable[[float, float, float], float]
         ] = power_martingale,
     ) -> Dict[str, Any]:
@@ -231,7 +231,7 @@ class ChangePointDetector:
             early_stop_threshold=max_martingale,
             batch_size=batch_size,
             random_state=random_state,
-            bitting_func=bitting_func,
+            betting_func=betting_func,
         )
 
         return {

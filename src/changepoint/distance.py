@@ -41,36 +41,36 @@ def compute_cluster_distances(
     np.ndarray
         A (N x n_clusters) array of distances.
     """
-    # Validate input dimensions
+    # Ensure that the input data is a numpy array.
     if not isinstance(data_array, np.ndarray):
         logger.error("data_array must be a numpy array")
         raise TypeError("data_array must be a numpy array")
 
+    # Check that the data array is two-dimensional.
     if data_array.ndim != 2:
         logger.error(f"Invalid data dimensions: {data_array.ndim}D. Expected 2D array.")
         raise ValueError(
             f"Invalid data dimensions: {data_array.ndim}D. Expected 2D array."
         )
 
+    # Unpack the shape of the data array: N points with d features each.
     N, d = data_array.shape
+
+    # Retrieve cluster centers from the clustering model.
     centers = model.cluster_centers_
     n_clusters, d_centers = centers.shape
 
-    # Validate cluster centers dimensions
+    # Validate that the feature dimensions of the data and the cluster centers match.
     if d != d_centers:
         logger.error(f"Feature dimension mismatch: data ({d}) != centers ({d_centers})")
         raise ValueError(
             f"Feature dimension mismatch: data ({d}) != centers ({d_centers})"
         )
 
-    logger.debug("Input dimensions:")
-    logger.debug(f"- Data shape: {data_array.shape}")
-    logger.debug(f"- Cluster centers shape: {centers.shape}")
-
-    # For Euclidean distance, use the clustering model's efficient transform.
+    # === Euclidean Distance ===
+    # For Euclidean distance, we take advantage of the model's efficient transform method.
     if distance_measure == "euclidean":
         distances = model.transform(data_array)
-        # Validate output shape
         if distances.shape != (N, n_clusters):
             logger.error(
                 f"Invalid euclidean distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
@@ -80,9 +80,9 @@ def compute_cluster_distances(
             )
         return distances
 
-    # Global Mahalanobis distance
+    # === Mahalanobis Distance ===
     elif distance_measure == "mahalanobis":
-        # Compute global covariance matrix over the data.
+        # Compute the global covariance matrix over all data points.
         cov = np.cov(data_array, rowvar=False)
         if cov.shape != (d, d):
             logger.error(
@@ -92,7 +92,7 @@ def compute_cluster_distances(
                 f"Invalid covariance matrix shape: {cov.shape}. Expected: ({d}, {d})"
             )
 
-        # Use the pseudo-inverse to handle cases where the covariance matrix is singular.
+        # Compute the pseudo-inverse of the covariance matrix to handle singular cases.
         inv_cov = np.linalg.pinv(cov)
         if inv_cov.shape != (d, d):
             logger.error(
@@ -102,9 +102,12 @@ def compute_cluster_distances(
                 f"Invalid inverse covariance matrix shape: {inv_cov.shape}. Expected: ({d}, {d})"
             )
 
+        # Initialize an array to store distances from each point to each cluster center.
         distances = np.zeros((N, n_clusters))
+        # Compute the Mahalanobis distance for every point-center pair.
         for i in range(N):
             for j in range(n_clusters):
+                # Calculate the difference vector between the point and the cluster center.
                 diff = data_array[i] - centers[j]
                 if diff.shape != (d,):
                     logger.error(
@@ -113,13 +116,16 @@ def compute_cluster_distances(
                     raise ValueError(
                         f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
                     )
+                # Compute the Mahalanobis distance using the quadratic form.
                 distances[i, j] = np.sqrt(diff @ inv_cov @ diff)
 
         return distances
 
-    # Manhattan distance (L1 norm)
+    # === Manhattan Distance (L1 Norm) ===
     elif distance_measure == "manhattan":
+        # Initialize the distances array.
         distances = np.zeros((N, n_clusters))
+        # Compute L1 distance (sum of absolute differences) for each point-center pair.
         for i in range(N):
             for j in range(n_clusters):
                 diff = data_array[i] - centers[j]
@@ -131,12 +137,14 @@ def compute_cluster_distances(
                         f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
                     )
                 distances[i, j] = np.sum(np.abs(diff))
-
         return distances
 
-    # Cosine distance: 1 - cosine similarity
+    # === Cosine Distance ===
+    # Cosine distance is defined as 1 minus the cosine similarity.
     elif distance_measure == "cosine":
+        # Initialize an array for the cosine distances.
         distances = np.zeros((N, n_clusters))
+        # Iterate over every point and cluster center.
         for i in range(N):
             for j in range(n_clusters):
                 if data_array[i].shape != (d,) or centers[j].shape != (d,):
@@ -147,22 +155,27 @@ def compute_cluster_distances(
                         f"Invalid vector shapes: data {data_array[i].shape}, center {centers[j].shape}. Expected: ({d},)"
                     )
 
+                # Compute the dot product between the data point and the cluster center.
                 numerator = np.dot(data_array[i], centers[j])
+                # Compute the norms of the data point and the cluster center.
                 norm_i = np.linalg.norm(data_array[i])
                 norm_j = np.linalg.norm(centers[j])
 
-                # Prevent division by zero.
+                # Handle potential division by zero by setting cosine similarity to zero.
                 if norm_i == 0 or norm_j == 0:
                     cosine_similarity = 0
                 else:
                     cosine_similarity = numerator / (norm_i * norm_j)
+                # Cosine distance is 1 minus the cosine similarity.
                 distances[i, j] = 1 - cosine_similarity
 
         return distances
 
-    # Minkowski distance
+    # === Minkowski Distance ===
     elif distance_measure == "minkowski":
+        # Initialize an array to hold the Minkowski distances.
         distances = np.zeros((N, n_clusters))
+        # Calculate the Minkowski distance (of order p) for each point-center pair.
         for i in range(N):
             for j in range(n_clusters):
                 diff = data_array[i] - centers[j]
@@ -173,6 +186,7 @@ def compute_cluster_distances(
                     raise ValueError(
                         f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
                     )
+                # Minkowski distance: sum(|diff|^p) raised to the power of 1/p.
                 distances[i, j] = np.sum(np.abs(diff) ** p) ** (1.0 / p)
 
         return distances

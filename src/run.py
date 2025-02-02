@@ -29,7 +29,7 @@ from src.predictor.factory import PredictorFactory
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.graph.visualizer import NetworkVisualizer
 from src.graph.features import NetworkFeatureExtractor
-from src.graph.utils import adjacency_to_graph, extract_numeric_features
+from src.graph.utils import adjacency_to_graph
 
 # Setup logging with debug level
 logger = logging.getLogger(__name__)
