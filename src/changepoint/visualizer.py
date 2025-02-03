@@ -378,6 +378,9 @@ class MartingaleVisualizer:
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
 
+        # Track crossing points for annotations
+        crossing_points = []
+
         if self.method == "multiview":
             # Plot traditional martingales
             sum_martingale = combined_results.get("martingales_sum")
@@ -396,6 +399,20 @@ class MartingaleVisualizer:
                     alpha=LS["LINE_ALPHA"],
                     zorder=10,
                 )
+                # Find threshold crossings for traditional sum martingale
+                for i in range(1, len(sum_martingale)):
+                    if (
+                        sum_martingale[i] > self.threshold
+                        and sum_martingale[i - 1] <= self.threshold
+                    ):
+                        crossing_points.append(
+                            {
+                                "x": i,
+                                "y": sum_martingale[i],
+                                "color": COLORS["actual"],
+                                "label": f"t={i}",
+                            }
+                        )
 
             if (
                 avg_martingale is not None
@@ -434,6 +451,20 @@ class MartingaleVisualizer:
                     alpha=LS["LINE_ALPHA"],
                     zorder=9,
                 )
+                # Find threshold crossings for prediction sum martingale
+                for i in range(1, len(pred_sum_martingale)):
+                    if (
+                        pred_sum_martingale[i] > self.threshold
+                        and pred_sum_martingale[i - 1] <= self.threshold
+                    ):
+                        crossing_points.append(
+                            {
+                                "x": time_points[i],
+                                "y": pred_sum_martingale[i],
+                                "color": COLORS["predicted"],
+                                "label": f"t={time_points[i]}",
+                            }
+                        )
 
             if (
                 pred_avg_martingale is not None
@@ -474,6 +505,37 @@ class MartingaleVisualizer:
                 alpha=0.2,  # Reduced alpha
                 linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
                 zorder=4,
+            )
+
+        # Add arrows for threshold crossings
+        arrow_props = dict(
+            arrowstyle="->", linewidth=1, shrinkA=0, shrinkB=0, color="black", alpha=0.7
+        )
+
+        for point in crossing_points:
+            # Add arrow
+            ax.annotate(
+                "",
+                xy=(point["x"], self.threshold),  # Arrow tip at threshold
+                xytext=(
+                    point["x"],
+                    point["y"] + 5,
+                ),  # Arrow start above the crossing point
+                arrowprops=arrow_props,
+                zorder=15,
+            )
+            # Add text label
+            ax.annotate(
+                point["label"],
+                xy=(point["x"], point["y"] + 7),  # Position text above arrow
+                xytext=(0, 0),  # No offset
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=TYPO["ANNOTATION_SIZE"],
+                color=point["color"],
+                weight="bold",
+                zorder=16,
             )
 
         # Grid settings
