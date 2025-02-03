@@ -260,65 +260,6 @@ class GraphChangeDetection:
     ):
         """Create visualizations of the results."""
         logger.info("Creating visualizations")
-
-        # Log martingale lengths and parameters
-        logger.info("Martingale Analysis:")
-        logger.info("-" * 50)
-        logger.info("Parameters:")
-        logger.info(
-            f"History size: {self.config['model']['predictor']['config']['n_history']}"
-        )
-        logger.info(
-            f"Prediction horizon: {self.config['detection']['prediction_horizon']}"
-        )
-        logger.info("-" * 50)
-
-        if self.config["model"]["type"] == "multiview":
-            # Traditional martingales
-            trad_sum = detection_result.get("traditional_sum_martingales", [])
-            trad_avg = detection_result.get("traditional_avg_martingales", [])
-            trad_individual = detection_result.get(
-                "individual_traditional_martingales", []
-            )
-
-            # Horizon martingales
-            horizon_sum = detection_result.get("horizon_sum_martingales", [])
-            horizon_avg = detection_result.get("horizon_avg_martingales", [])
-            horizon_individual = detection_result.get(
-                "individual_horizon_martingales", []
-            )
-
-            logger.info("Multiview Martingale Lengths:")
-            logger.info(f"Traditional Sum Martingale: {len(trad_sum)}")
-            logger.info(f"Traditional Avg Martingale: {len(trad_avg)}")
-            logger.info(f"Horizon Sum Martingale: {len(horizon_sum)}")
-            logger.info(f"Horizon Avg Martingale: {len(horizon_avg)}")
-
-            if trad_individual:
-                logger.info("\nIndividual Feature Martingales:")
-                for i, feature in enumerate(self.config["features"]):
-                    if i < len(trad_individual):
-                        trad_len = len(trad_individual[i])
-                        horizon_len = (
-                            len(horizon_individual[i])
-                            if horizon_individual and i < len(horizon_individual)
-                            else 0
-                        )
-                        logger.info(f"{feature}:")
-                        logger.info(f"  - Traditional: {trad_len}")
-                        logger.info(f"  - Horizon: {horizon_len}")
-        else:
-            # Single view martingales
-            trad = detection_result.get("traditional_martingales", [])
-            horizon = detection_result.get("horizon_martingales", [])
-
-            logger.info("Single-view Martingale Lengths:")
-            logger.info(f"Traditional Martingale: {len(trad)}")
-            logger.info(f"Horizon Martingale: {len(horizon)}")
-
-        logger.info("-" * 50)
-
-        # Create visualizer
         output_config = self.config["output"]
         visualizer = MartingaleVisualizer(
             martingales=detection_result,

@@ -58,24 +58,55 @@ class MartingaleVisualizer:
         # Process martingales into a format suitable for plotting
         self.martingales = self._process_martingales(martingales)
 
+        # Initialize SHAP values
+        self.shap_values = None
+        self.feature_names = None
+        self.prediction_shap_values = None
+
         # Compute SHAP values if needed
-        if not skip_shap:
+        if not skip_shap and method == "multiview":
             try:
-                sequence_length = len(
-                    next(iter(self.martingales.values()))["martingales"]
-                )
-                model = CustomThresholdModel(threshold=threshold)
-                self.shap_values, self.feature_names = (
-                    model.compute_martingale_shap_values(
-                        martingales=self.martingales,
-                        change_points=change_points,
-                        sequence_length=sequence_length,
-                        threshold=threshold,
-                    )
-                )
-            except (ValueError, KeyError):
+                # Get sequence length from combined martingales
+                sequence_length = len(self.martingales["combined"]["martingales_sum"])
+
+                # Get feature names
+                self.feature_names = [
+                    "mean_degree",
+                    "density",
+                    "mean_clustering",
+                    "mean_betweenness",
+                    "mean_eigenvector",
+                    "mean_closeness",
+                    "max_singular_value",
+                    "min_nonzero_laplacian",
+                ]
+
+                # Prepare data for SHAP computation
+                traditional_data = []
+                prediction_data = []
+
+                for feature in self.feature_names:
+                    if feature in self.martingales:
+                        trad_vals = self.martingales[feature]["martingales"]
+                        pred_vals = self.martingales[feature].get(
+                            "prediction_martingales", []
+                        )
+
+                        traditional_data.append(trad_vals)
+                        if len(pred_vals) > 0:
+                            prediction_data.append(pred_vals)
+
+                # Convert to numpy arrays and transpose to get (time, features) shape
+                if traditional_data:
+                    self.shap_values = np.array(traditional_data).T
+                if prediction_data:
+                    self.prediction_shap_values = np.array(prediction_data).T
+
+            except (ValueError, KeyError) as e:
+                print(f"Warning: Could not compute SHAP values: {str(e)}")
                 self.shap_values = None
                 self.feature_names = None
+                self.prediction_shap_values = None
 
         # Set paper-style parameters
         plt.style.use("seaborn-v0_8-paper")
@@ -165,13 +196,13 @@ class MartingaleVisualizer:
             self._plot_feature_martingales()
             self._plot_overlaid_martingales()
 
-        # Only create SHAP plot if we have SHAP values and it's multiview
-        if (
-            self.method == "multiview"
-            and self.shap_values is not None
-            and self.feature_names is not None
-        ):
-            self._plot_shap_values()
+            # Plot SHAP values if available and not explicitly skipped
+            if (
+                not self.skip_shap
+                and hasattr(self, "shap_values")
+                and self.shap_values is not None
+            ):
+                self._plot_shap_values()
 
     def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots."""
@@ -697,7 +728,10 @@ class MartingaleVisualizer:
 
         # Plot prediction SHAP values if available (bottom subplot)
         ax2 = fig.add_subplot(gs[1])
-        if hasattr(self, "prediction_shap_values"):
+        if (
+            hasattr(self, "prediction_shap_values")
+            and self.prediction_shap_values is not None
+        ):
             self._plot_shap_subplot(
                 ax2,
                 self.prediction_shap_values,
@@ -724,12 +758,15 @@ class MartingaleVisualizer:
             ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
             ax.grid(True, linestyle=":", alpha=GRID["MAJOR_ALPHA"] * 0.7)
 
-        # Set labels
-        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])
-        for ax in [ax1, ax2]:
-            ax.set_ylabel("SHAP Value", fontsize=TYPO["LABEL_SIZE"])
+            # Add threshold and change points
+            self._add_threshold_and_changes(ax)
 
-        plt.tight_layout(pad=0.3)
+        # Set labels
+        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+        for ax in [ax1, ax2]:
+            ax.set_ylabel("SHAP Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+
+        plt.tight_layout(pad=0.1)  # Tighter layout
         self._save_figure("shap_values.png")
 
     def _plot_shap_subplot(self, ax, shap_values, feature_names, colors, title):
@@ -747,24 +784,12 @@ class MartingaleVisualizer:
             ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
             return
 
-        # Add vertical "Actual" label
-        ax.text(
-            -0.1,
-            0.5,
-            "Actual",
-            transform=ax.transAxes,
-            fontsize=TYPO["LABEL_SIZE"],
-            va="center",
-            ha="right",
-            rotation=90,
-        )
-
         # Plot SHAP values for each feature
         for i, feature in enumerate(feature_names):
             if i < shap_values.shape[1]:  # Only plot if we have values for this feature
                 ax.plot(
                     shap_values[:, i],
-                    label=feature.replace("_", " ").title(),
+                    label=feature.replace("mean_", "").replace("_", " ").title(),
                     color=colors[i],
                     linewidth=LS["LINE_WIDTH"],
                     alpha=LS["LINE_ALPHA"],
@@ -776,9 +801,18 @@ class MartingaleVisualizer:
                 x=cp,
                 color=COLORS["change_point"],
                 linestyle="--",
-                alpha=0.3,
-                linewidth=GRID["MAJOR_LINE_WIDTH"],
+                alpha=0.2,  # Reduced alpha
+                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
             )
+
+        # Add threshold line
+        ax.axhline(
+            y=0,  # SHAP values are centered around 0
+            color=COLORS["threshold"],
+            linestyle="--",
+            alpha=0.2,  # Reduced alpha
+            linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
+        )
 
         # Dynamic y-axis range with small margin
         if isinstance(shap_values, (list, np.ndarray)) and len(shap_values) > 0:
@@ -791,11 +825,13 @@ class MartingaleVisualizer:
         if len(ax.get_lines()) > 0:  # Only add legend if we have plotted lines
             ax.legend(
                 ncol=2,
-                loc=LEGEND["LOCATION"],
-                fontsize=TYPO["LEGEND_SIZE"],
-                borderaxespad=LEGEND["BORDER_PAD"],
+                loc="upper right",
+                fontsize=TYPO["LEGEND_SIZE"] * 0.8,
+                frameon=True,
                 handlelength=LEGEND["HANDLE_LENGTH"],
+                handletextpad=0.2,
                 columnspacing=LEGEND["COLUMN_SPACING"],
+                borderaxespad=0.1,
             )
 
         ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
