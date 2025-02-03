@@ -49,11 +49,11 @@ features:
 
 # Output configuration
 output:
-  directory: "results"  # Output directory for results
+  directory: "src/results"  # Output directory for results
   prefix: ""  # Prefix for output files
   save_predictions: true  # Save predicted graphs
   save_features: true  # Save extracted features
   save_martingales: true  # Save martingale values
   visualization:
-    enabled: false  # Enable result visualization
+    enabled: true  # Enable result visualization
     skip_shap: false  # Include SHAP value analysis

@@ -82,53 +82,65 @@ class GraphChangeDetection:
         )
 
     def run(self) -> Dict[str, Any]:
-        """Run the complete detection pipeline.
-
-        Returns:
-            Dictionary containing all results
-        """
+        """Run the complete detection pipeline."""
         logger.info(f"Starting {self.config['name']} pipeline")
         logger.info(f"Description: {self.config['description']}")
 
         try:
-            # Step 1: Initialize components
+            # -------------------------------------------------- #
+            # ----------- Step 1: Initialize components -------- #
+            # -------------------------------------------------- #
             predictor = self._init_predictor()
             generator = self._init_generator()
             detector = self._init_detector()
 
-            # Step 2: Generate graph sequence
+            # -------------------------------------------------- #
+            # ---------- Step 2: Generate graph sequence ------- #
+            # -------------------------------------------------- #
             sequence_result = self._generate_sequence(generator)
             graphs = sequence_result["graphs"]
             true_change_points = sequence_result["change_points"]
 
-            # Step 3: Extract features
+            # -------------------------------------------------- #
+            # ---------- Step 3: Extract features -------------- #
+            # -------------------------------------------------- #
             features_numeric, features_raw = self._extract_features(graphs)
             logger.info(f"Extracted features shape: {features_numeric.shape}")
 
-            # Step 4: Generate predictions
+            # -------------------------------------------------- #
+            # ---------- Step 4: Generate predictions ---------- #
+            # -------------------------------------------------- #
             predicted_graphs = self._generate_predictions(graphs, predictor)
             predicted_features = (
                 self._process_predictions(predicted_graphs)
                 if predicted_graphs
                 else None
             )
+
             if predicted_features is not None:
                 logger.info(f"Generated predictions shape: {predicted_features.shape}")
 
-            # Step 5: Run detection
+            # -------------------------------------------------- #
+            # ---------- Step 5: Run detection ----------------- #
+            # -------------------------------------------------- #
             detection_result = detector.run(
                 data=features_numeric, predicted_data=predicted_features
             )
+
             if detection_result is None:
                 raise RuntimeError("Detection failed to produce results")
 
-            # Step 6: Create visualizations if enabled
+            # -------------------------------------------------- #
+            # ---------- Step 6: Create visualizations --------- #
+            # -------------------------------------------------- #
             if self.config["output"]["visualization"]["enabled"]:
                 self._create_visualizations(
                     detection_result, true_change_points, features_raw
                 )
 
-            # Step 7: Compile and return results
+            # -------------------------------------------------- #
+            # --------- Step 7: Compile and return results ----- #
+            # -------------------------------------------------- #
             results = self._compile_results(
                 sequence_result,
                 features_numeric,
@@ -215,7 +227,6 @@ class GraphChangeDetection:
         horizon = self.config["detection"]["prediction_horizon"]
 
         for t in range(len(graphs)):
-            current = graphs[t]
             history_start = max(0, t - predictor.history_size)
             history = [{"adjacency": g} for g in graphs[history_start:t]]
 
