@@ -371,7 +371,6 @@ def multiview_martingale_test(
                 prev_val = traditional_martingales[j][-1]
                 new_val = betting_func(prev_val, pv, epsilon)
                 new_traditional.append(new_val)
-                individual_traditional[j].append(new_val)
 
             # Aggregate the traditional martingale values.
             total_traditional = sum(new_traditional)
@@ -382,6 +381,9 @@ def multiview_martingale_test(
             # Update the aggregated traditional martingale series.
             for j in range(num_features):
                 traditional_martingales[j].append(new_traditional[j])
+                individual_traditional[j].append(
+                    new_traditional[j]
+                )  # Update individual traditional
 
             # --- Horizon Martingale Update ---
             new_horizon = []
@@ -443,6 +445,9 @@ def multiview_martingale_test(
                 for j in range(num_features):
                     windows[j] = []  # Clear windows
                     traditional_martingales[j].append(1.0)  # Reset traditional
+                    individual_traditional[j].append(
+                        1.0
+                    )  # Reset individual traditional
                     horizon_martingales[j].append(
                         1.0
                     )  # Reset horizon (hybrid approach)
@@ -450,7 +455,6 @@ def multiview_martingale_test(
                 # No detection: update windows and continue martingale sequences
                 for j in range(num_features):
                     windows[j].append(data[j][i])
-                    traditional_martingales[j].append(new_traditional[j])
                     if predicted_data is not None and i >= history_size:
                         horizon_martingales[j].append(new_horizon[j])
 

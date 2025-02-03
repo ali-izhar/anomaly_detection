@@ -230,7 +230,13 @@ class MartingaleVisualizer:
                     isinstance(pred_martingales, (list, np.ndarray))
                     and len(pred_martingales) > 0
                 ):
+                    # Create time points starting from history size
+                    history_size = len(martingales) - len(pred_martingales)
+                    time_points = np.arange(
+                        history_size, history_size + len(pred_martingales)
+                    )
                     ax.plot(
+                        time_points,
                         pred_martingales,
                         color=COLORS["predicted"],
                         linewidth=LS["LINE_WIDTH"],
@@ -361,7 +367,13 @@ class MartingaleVisualizer:
                 and isinstance(pred_sum_martingale, (list, np.ndarray))
                 and len(pred_sum_martingale) > 0
             ):
+                # Create time points starting from history size
+                history_size = len(sum_martingale) - len(pred_sum_martingale)
+                time_points = np.arange(
+                    history_size, history_size + len(pred_sum_martingale)
+                )
                 ax.plot(
+                    time_points,
                     pred_sum_martingale,
                     color=COLORS["predicted"],
                     label="Pred. Sum Mart.",
@@ -375,7 +387,13 @@ class MartingaleVisualizer:
                 and isinstance(pred_avg_martingale, (list, np.ndarray))
                 and len(pred_avg_martingale) > 0
             ):
+                # Use same time points as sum martingale
+                history_size = len(avg_martingale) - len(pred_avg_martingale)
+                time_points = np.arange(
+                    history_size, history_size + len(pred_avg_martingale)
+                )
                 ax.plot(
+                    time_points,
                     pred_avg_martingale,
                     color=COLORS["pred_avg"],
                     label="Pred. Avg Mart.",
@@ -558,7 +576,14 @@ class MartingaleVisualizer:
                     isinstance(pred_martingales, (list, np.ndarray))
                     and len(pred_martingales) > 0
                 ):
+                    # Get traditional martingales to calculate history size
+                    martingales = self.martingales[feature].get("martingales", [])
+                    history_size = len(martingales) - len(pred_martingales)
+                    time_points = np.arange(
+                        history_size, history_size + len(pred_martingales)
+                    )
                     ax2.plot(
+                        time_points,
                         pred_martingales,
                         color=colors[i],
                         label=feature.replace("_", " ").title(),
@@ -574,7 +599,12 @@ class MartingaleVisualizer:
             isinstance(combined_pred_sum, (list, np.ndarray))
             and len(combined_pred_sum) > 0
         ):
+            # Get traditional sum martingale to calculate history size
+            combined_sum = self.martingales["combined"].get("martingales_sum", [])
+            history_size = len(combined_sum) - len(combined_pred_sum)
+            time_points = np.arange(history_size, history_size + len(combined_pred_sum))
             ax2.plot(
+                time_points,
                 combined_pred_sum,
                 color="orange",
                 linestyle="--",
