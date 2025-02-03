@@ -9,6 +9,8 @@ import logging
 import sys
 import yaml
 import numpy as np
+import time
+import os
 
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
@@ -87,6 +89,20 @@ class GraphChangeDetection:
         logger.info(f"Description: {self.config['description']}")
 
         try:
+            # Create timestamped output directory
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            network_type = self.config["model"]["network"]
+            betting_function = self.config["detection"]["betting_function"]
+            predictor_type = self.config["model"]["predictor"]["type"]
+            distance_measure = self.config["detection"]["distance"]["measure"]
+            self.config["output"]["directory"] = os.path.join(
+                self.config["output"]["directory"],
+                f"{network_type}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}",
+            )
+
+            os.makedirs(self.config["output"]["directory"], exist_ok=True)
+            logger.info(f"Output directory: {self.config['output']['directory']}")
+
             # -------------------------------------------------- #
             # ----------- Step 1: Initialize components -------- #
             # -------------------------------------------------- #

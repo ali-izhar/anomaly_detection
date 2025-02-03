@@ -99,7 +99,8 @@ def mixture_martingale(prev_m: float, pvalue: float, epsilons: list) -> float:
         If the provided epsilons list is empty.
     """
     if not epsilons:
-        raise ValueError("epsilons list must not be empty")
+        # Use default epsilon values
+        epsilons = [0.5, 0.6, 0.7, 0.8, 0.9]
     updates = [eps * (pvalue ** (eps - 1)) for eps in epsilons]
     avg_update = sum(updates) / len(updates)
     return prev_m * avg_update
