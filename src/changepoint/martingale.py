@@ -29,6 +29,8 @@ def compute_martingale(
     window_size: Optional[int] = None,
     random_state: Optional[int] = None,
     betting_func: Callable[[float, float, float], float] = None,
+    distance_measure: str = "euclidean",
+    distance_p: float = 2.0,
 ) -> Dict[str, Any]:
     """
     Compute a martingale for online change detection over a univariate data stream using conformal p-values
@@ -62,6 +64,10 @@ def compute_martingale(
     betting_func : callable, optional
         Function to update the martingale. It should accept (prev_m, pvalue, epsilon)
         and return the updated value.
+    distance_measure : str, optional
+        Distance metric to use for strangeness computation.
+    distance_p : float, optional
+        Order parameter for Minkowski distance.
 
     Returns
     -------
@@ -122,7 +128,12 @@ def compute_martingale(
                 # If the window is empty, the strangeness is 0.0.
                 s_vals = [0.0]
             else:
-                s_vals = strangeness_point(window + [point], random_state=random_state)
+                s_vals = strangeness_point(
+                    window + [point],
+                    random_state=random_state,
+                    distance_measure=distance_measure,
+                    p=distance_p,
+                )
 
             # Compute conformal p-value from the strangeness values.
             pvalue = get_pvalue(s_vals, random_state=random_state)
@@ -161,6 +172,8 @@ def compute_martingale(
                         pred_s_vals = strangeness_point(
                             window + [[predicted_data[pred_idx][h]]],
                             random_state=random_state,
+                            distance_measure=distance_measure,
+                            p=distance_p,
                         )
 
                     # Compute the conformal p-value for the predicted state.
@@ -243,6 +256,8 @@ def multiview_martingale_test(
     batch_size: int = 1000,
     random_state: Optional[int] = None,
     betting_func: Callable[[float, float, float], float] = None,
+    distance_measure: str = "euclidean",
+    distance_p: float = 2.0,
 ) -> Dict[str, Any]:
     """
     Compute a multivariate (multiview) martingale test by aggregating evidence across multiple features.
@@ -343,7 +358,10 @@ def multiview_martingale_test(
                     s_vals = [0.0]
                 else:
                     s_vals = strangeness_point(
-                        windows[j] + [data[j][i]], random_state=random_state
+                        windows[j] + [data[j][i]],
+                        random_state=random_state,
+                        distance_measure=distance_measure,
+                        p=distance_p,
                     )
 
                 # Compute p-value for update
@@ -385,6 +403,8 @@ def multiview_martingale_test(
                             pred_s_val = strangeness_point(
                                 windows[j] + [predicted_data[j][pred_idx][h]],
                                 random_state=random_state,
+                                distance_measure=distance_measure,
+                                p=distance_p,
                             )
                             pred_pv = get_pvalue(pred_s_val, random_state=random_state)
                             horizon_factor *= betting_func(1.0, pred_pv, epsilon)

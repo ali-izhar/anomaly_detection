@@ -24,6 +24,17 @@ MODEL_PARAMS = {
 }
 
 
+def get_full_model_name(alias: str) -> str:
+    """Get full model name from alias."""
+    REVERSE_ALIASES = {
+        "ba": "barabasi_albert",
+        "ws": "watts_strogatz",
+        "er": "erdos_renyi",
+        "sbm": "stochastic_block_model",
+    }
+    return REVERSE_ALIASES.get(alias, alias)
+
+
 def load_model_config(
     model_name: str,
 ) -> Union[BAParams, WSParams, ERParams, SBMParams]:

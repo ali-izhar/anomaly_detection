@@ -44,11 +44,11 @@ class ChangePointDetector:
         threshold (float): Detection threshold for the martingale.
         epsilon (float): Sensitivity parameter for martingale updates.
         random_state (int): Seed for reproducibility.
-        feature_set (str): Which feature set to use.
         batch_size (int): Batch size for multiview processing.
-        max_martingale (float): Early stopping threshold for multiview.
         reset (bool): Whether to reset after detection (for single view).
         max_window (int): Maximum window size for strangeness computation.
+        distance_measure (str): Distance metric for strangeness computation.
+        distance_p (float): Order parameter for Minkowski distance.
     """
 
     def __init__(
@@ -58,12 +58,12 @@ class ChangePointDetector:
         threshold: float = 60.0,
         epsilon: float = 0.7,
         random_state: Optional[int] = 42,
-        feature_set: str = "all",
         batch_size: int = 1000,
-        max_martingale: Optional[float] = None,
         reset: bool = True,
         max_window: Optional[int] = None,
         betting_func: Union[str, Callable] = "power",
+        distance_measure: str = "euclidean",
+        distance_p: float = 2.0,
     ):
         """Initialize the detector with specified parameters."""
         self.method = martingale_method
@@ -71,11 +71,11 @@ class ChangePointDetector:
         self.threshold = threshold
         self.epsilon = epsilon
         self.random_state = random_state
-        self.feature_set = feature_set
         self.batch_size = batch_size
-        self.max_martingale = max_martingale
         self.reset = reset
         self.max_window = max_window
+        self.distance_measure = distance_measure
+        self.distance_p = distance_p
 
         # Handle betting function selection.
         if isinstance(betting_func, str):
@@ -107,15 +107,17 @@ class ChangePointDetector:
 
         if self.method == "single_view":
             return self.detect_changes(
-                data,
-                predicted_data,
-                self.threshold,
-                self.epsilon,
-                self.history_size,
-                self.reset,
-                self.max_window,
-                self.random_state,
-                self.betting_func,
+                data=data,
+                predicted_data=predicted_data,
+                threshold=self.threshold,
+                epsilon=self.epsilon,
+                history_size=self.history_size,
+                reset=self.reset,
+                max_window=self.max_window,
+                random_state=self.random_state,
+                betting_func=self.betting_func,
+                distance_measure=self.distance_measure,
+                distance_p=self.distance_p,
             )
         elif self.method == "multiview":
             # Split each feature into a separate view for multiview detection.
@@ -137,16 +139,17 @@ class ChangePointDetector:
             logger.debug("-" * 50)
 
             return self.detect_changes_multiview(
-                views,
-                predicted_views,
-                self.threshold,
-                self.epsilon,
-                self.history_size,
-                self.max_window,
-                self.max_martingale,
-                self.batch_size,
-                self.random_state,
-                self.betting_func,
+                data=views,
+                predicted_data=predicted_views,
+                threshold=self.threshold,
+                epsilon=self.epsilon,
+                history_size=self.history_size,
+                max_window=self.max_window,
+                batch_size=self.batch_size,
+                random_state=self.random_state,
+                betting_func=self.betting_func,
+                distance_measure=self.distance_measure,
+                distance_p=self.distance_p,
             )
         else:
             raise ValueError(f"Invalid method: {self.method}")
@@ -164,6 +167,8 @@ class ChangePointDetector:
         betting_func: Optional[
             Callable[[float, float, float], float]
         ] = power_martingale,
+        distance_measure: str = "euclidean",
+        distance_p: float = 2.0,
     ) -> Dict[str, Any]:
         """Detect change points in single-view sequential data."""
         logger.debug("Single-view Detection:")
@@ -191,6 +196,8 @@ class ChangePointDetector:
             window_size=max_window,
             random_state=random_state,
             betting_func=betting_func,
+            distance_measure=distance_measure,
+            distance_p=distance_p,
         )
 
         # Return only the keys that were output from the martingale function.
@@ -209,12 +216,13 @@ class ChangePointDetector:
         epsilon: float = 0.7,
         history_size: int = 10,
         max_window: Optional[int] = None,
-        max_martingale: Optional[float] = None,
         batch_size: Optional[int] = None,
         random_state: Optional[int] = None,
         betting_func: Optional[
             Callable[[float, float, float], float]
         ] = power_martingale,
+        distance_measure: str = "euclidean",
+        distance_p: float = 2.0,
     ) -> Dict[str, Any]:
         """Detect change points in multiview sequential data."""
         logger.debug("Multiview Detection Processing:")
@@ -252,6 +260,8 @@ class ChangePointDetector:
             batch_size=batch_size,
             random_state=random_state,
             betting_func=betting_func,
+            distance_measure=distance_measure,
+            distance_p=distance_p,
         )
 
         # Return only the keys that were output from the multiview martingale function.

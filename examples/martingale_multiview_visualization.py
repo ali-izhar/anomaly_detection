@@ -25,7 +25,6 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.changepoint.pipeline import MartingalePipeline
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
@@ -278,7 +277,6 @@ def run_visualization(
     threshold: float = 60.0,
     epsilon: float = 0.7,
     batch_size: int = 1000,
-    max_martingale: float = None,
 ):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
@@ -303,7 +301,6 @@ def run_visualization(
         random_state=42,
         feature_set="all",  # Use all features as separate views
         batch_size=batch_size,
-        max_martingale=max_martingale,
         reset=True,
         max_window=None,
     )
@@ -425,12 +422,6 @@ def main():
         default=1000,
         help="Batch size for multiview processing (default: 1000)",
     )
-    parser.add_argument(
-        "--max_martingale",
-        type=float,
-        default=None,
-        help="Early stopping threshold for multiview (default: None)",
-    )
 
     args = parser.parse_args()
     run_visualization(
@@ -438,7 +429,6 @@ def main():
         args.threshold,
         args.epsilon,
         args.batch_size,
-        args.max_martingale,
     )
 
 

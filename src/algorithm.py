@@ -1,223 +1,324 @@
 # src/algorithm.py
 
-"""
-Implements Algorithm 1 from Section 5 of the paper:
-'Faster Structural Change Detection in Dynamic Networks via Statistical Forecasting'
+"""Forecast-based Graph Structural Change Detection Algorithm."""
 
-The algorithm maintains two parallel martingale streams:
-1) M_t (observed): computed on current graph features (equation 14)
-2) Mhat_t (horizon): computed on predicted future graphs (equation 15)
-"""
-
-from collections import deque
-from typing import List, Dict, Any, Optional, Callable, Union
+from pathlib import Path
+from typing import Dict, Any
 
 import logging
+import sys
+import yaml
 import numpy as np
-import networkx as nx
 
-from .changepoint.detector import ChangePointDetector
-from .changepoint.pipeline import MartingalePipeline
-from .changepoint.strangeness import strangeness_point, get_pvalue
-from .graph.features import NetworkFeatureExtractor
-from .predictor.factory import PredictorFactory
-from .predictor.base import BasePredictor
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.changepoint.detector import ChangePointDetector
+from src.changepoint.visualizer import MartingaleVisualizer
+from src.configs import get_config, get_full_model_name
+from src.graph.generator import GraphGenerator
+from src.graph.features import NetworkFeatureExtractor
+from src.graph.utils import adjacency_to_graph
+from src.predictor import PredictorFactory
 
 logger = logging.getLogger(__name__)
 
 
-class Algorithm:
-    pass
+class GraphChangeDetection:
+    """Main algorithm class for graph change point detection."""
 
-
-class ObservedStream:
-    """Handles the observed martingale stream for change detection.
-
-    This class processes the observed network data and maintains a martingale sequence
-    for detecting changes in the observed stream. It uses the MartingalePipeline for
-    feature extraction and change detection."""
-
-    def __init__(
-        self,
-        window_size: int = 50,
-        threshold: float = 60.0,
-        epsilon: float = 0.7,
-        martingale_method: str = "multiview",
-        feature_set: str = "all",
-        batch_size: int = 1000,
-        max_martingale: Optional[float] = None,
-        reset: bool = True,
-        max_window: Optional[int] = None,
-        random_state: Optional[int] = 42,
-    ):
-        """Initialize the observed stream."""
-        self.window_size = window_size
-        self.current_time = 0
-
-        # Initialize pipeline
-        self.pipeline = MartingalePipeline(
-            martingale_method=martingale_method,
-            threshold=threshold,
-            epsilon=epsilon,
-            random_state=random_state,
-            feature_set=feature_set,
-            batch_size=batch_size,
-            max_martingale=max_martingale,
-            reset=reset,
-            max_window=max_window,
-        )
-
-        # Initialize buffers
-        self.data_buffer = deque(maxlen=window_size)
-        self.feature_buffer = deque(maxlen=window_size)
-
-        # Initialize results storage
-        self.martingale_values = []
-        self.change_points = []
-        self.p_values = []
-        self.strangeness_values = []
-        self.features_raw = []
-        self.features_numeric = []
-
-        # For multiview specific results
-        self.martingales_sum = []
-        self.martingales_avg = []
-        self.individual_martingales = []
-
-        # Store parameters
-        self.is_multiview = martingale_method == "multiview"
-        self.threshold = threshold
-
-    def update(
-        self, data: Union[np.ndarray, nx.Graph], data_type: str = "adjacency"
-    ) -> Dict[str, Any]:
-        """Update the stream with new network data.
+    def __init__(self, config_path: str):
+        """Initialize the algorithm with configuration.
 
         Args:
-            data: New network data (adjacency matrix or networkx graph).
-            data_type: Type of input data ('adjacency' or 'graph').
-
-        Returns:
-            Dict containing detection results including:
-                - is_change: Whether a change was detected
-                - martingale: Current martingale value
-                - p_value: Current p-value
-                - change_points: List of all detected change points
-                - features: Extracted features
+            config_path: Path to YAML configuration file
         """
-        # Add data to buffer
-        self.data_buffer.append(data)
-        self.current_time += 1
+        self.config = self._load_config(config_path)
+        self._validate_config()
+        self._setup_logging()
 
-        # Only start detection once we have enough data
-        if len(self.data_buffer) < self.window_size:
-            return self._create_result(is_change=False)
+    def _load_config(self, config_path: str) -> Dict[str, Any]:
+        """Load configuration from YAML file."""
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
 
-        # Run pipeline on current window
-        pipeline_result = self.pipeline.run(
-            data=list(self.data_buffer), data_type=data_type
+    def _validate_config(self):
+        """Validate the loaded configuration."""
+        required_sections = ["model", "detection", "features", "output"]
+        for section in required_sections:
+            if section not in self.config:
+                raise ValueError(f"Missing required configuration section: {section}")
+
+        # Validate model configuration
+        model_config = self.config["model"]
+        if model_config["type"] not in ["multiview", "single_view"]:
+            raise ValueError("Model type must be 'multiview' or 'single_view'")
+        if model_config["network"] not in ["ba", "ws", "er", "sbm"]:
+            raise ValueError("Invalid network model specified")
+
+        # Validate predictor configuration
+        predictor_config = model_config["predictor"]
+        if predictor_config["type"] not in ["adaptive", "auto", "statistical"]:
+            raise ValueError("Invalid predictor type specified")
+
+        # Validate detection configuration
+        det_config = self.config["detection"]
+        if det_config["betting_function"] not in [
+            "power",
+            "exponential",
+            "mixture",
+            "constant",
+            "beta",
+            "kernel",
+        ]:
+            raise ValueError("Invalid betting function specified")
+
+    def _setup_logging(self):
+        """Configure logging."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
 
-        # Store results
-        if self.is_multiview:
-            self.martingale_values.append(pipeline_result["martingales_sum"][-1])
-            self.martingales_sum.append(pipeline_result["martingales_sum"][-1])
-            self.martingales_avg.append(pipeline_result["martingales_avg"][-1])
-            if pipeline_result["individual_martingales"]:
-                self.individual_martingales.append(
-                    [m[-1] for m in pipeline_result["individual_martingales"]]
+    def run(self) -> Dict[str, Any]:
+        """Run the complete detection pipeline.
+
+        Returns:
+            Dictionary containing all results
+        """
+        logger.info(f"Starting {self.config['name']} pipeline")
+        logger.info(f"Description: {self.config['description']}")
+
+        try:
+            # Step 1: Initialize components
+            predictor = self._init_predictor()
+            generator = self._init_generator()
+            detector = self._init_detector()
+
+            # Step 2: Generate graph sequence
+            sequence_result = self._generate_sequence(generator)
+            graphs = sequence_result["graphs"]
+            true_change_points = sequence_result["change_points"]
+
+            # Step 3: Extract features
+            features_numeric, features_raw = self._extract_features(graphs)
+            logger.info(f"Extracted features shape: {features_numeric.shape}")
+
+            # Step 4: Generate predictions
+            predicted_graphs = self._generate_predictions(graphs, predictor)
+            predicted_features = (
+                self._process_predictions(predicted_graphs)
+                if predicted_graphs
+                else None
+            )
+            if predicted_features is not None:
+                logger.info(f"Generated predictions shape: {predicted_features.shape}")
+
+            # Step 5: Run detection
+            detection_result = detector.run(
+                data=features_numeric, predicted_data=predicted_features
+            )
+            if detection_result is None:
+                raise RuntimeError("Detection failed to produce results")
+
+            # Step 6: Create visualizations if enabled
+            if self.config["output"]["visualization"]["enabled"]:
+                self._create_visualizations(
+                    detection_result, true_change_points, features_raw
                 )
-        else:
-            self.martingale_values.append(pipeline_result["martingales"][-1])
 
-        self.p_values.append(pipeline_result["p_values"][-1])
-        self.strangeness_values.append(pipeline_result["strangeness"][-1])
+            # Step 7: Compile and return results
+            results = self._compile_results(
+                sequence_result,
+                features_numeric,
+                features_raw,
+                predicted_graphs,
+                detection_result,
+                predictor,
+            )
 
-        # Store features if available
-        if "features_raw" in pipeline_result:
-            self.features_raw.append(pipeline_result["features_raw"][-1])
-        if "features_numeric" in pipeline_result:
-            self.features_numeric.append(pipeline_result["features_numeric"][-1])
+            logger.info("Pipeline completed successfully")
+            return results
 
-        # Check for change point
-        is_change = False
-        current_mart = self.martingale_values[-1]
+        except Exception as e:
+            logger.error(f"Pipeline failed: {str(e)}")
+            raise
 
-        if current_mart > self.threshold:
-            self.change_points.append(self.current_time)
-            is_change = True
+    def _init_predictor(self):
+        """Initialize the graph predictor."""
+        predictor_config = self.config["model"]["predictor"]
+        logger.info(f"Initializing {predictor_config['type']} predictor")
+        return PredictorFactory.create(
+            predictor_config["type"], predictor_config["config"]
+        )
 
-        return self._create_result(is_change)
+    def _init_generator(self):
+        """Initialize the graph sequence generator."""
+        network_type = self.config["model"]["network"]
+        logger.info(f"Initializing {network_type} graph generator")
+        return GraphGenerator(network_type)
 
-    def _create_result(self, is_change: bool) -> Dict[str, Any]:
-        """Create result dictionary with current state.
+    def _init_detector(self):
+        """Initialize the change point detector."""
+        det_config = self.config["detection"]
+        logger.info(f"Initializing detector with {self.config['model']['type']} method")
 
-        Args:
-            is_change: Whether a change was detected.
+        # Get distance configuration
+        distance_config = det_config.get("distance", {"measure": "euclidean", "p": 2.0})
+        logger.info(f"Using distance measure: {distance_config['measure']}")
 
-        Returns:
-            Dict containing current state and detection results.
-        """
-        result = {
-            "is_change": is_change,
-            "current_time": self.current_time,
-            "change_points": self.change_points,
+        return ChangePointDetector(
+            martingale_method=self.config["model"]["type"],
+            threshold=det_config["threshold"],
+            epsilon=det_config["epsilon"],
+            batch_size=det_config["batch_size"],
+            reset=det_config["reset"],
+            max_window=det_config["max_window"],
+            random_state=42,  # Fixed for reproducibility
+            betting_func=det_config["betting_function"],
+            distance_measure=distance_config["measure"],
+            distance_p=distance_config["p"],
+        )
+
+    def _generate_sequence(self, generator):
+        """Generate the graph sequence using model-specific configuration."""
+        model_name = get_full_model_name(self.config["model"]["network"])
+        logger.info(f"Generating {model_name} graph sequence")
+
+        # Get model-specific configuration
+        model_config = get_config(model_name)
+        return generator.generate_sequence(model_config["params"].__dict__)
+
+    def _extract_features(self, graphs):
+        """Extract features from graph sequence."""
+        logger.info("Extracting graph features")
+        feature_extractor = NetworkFeatureExtractor()
+        features_raw = []
+        features_numeric = []
+
+        for adj_matrix in graphs:
+            graph = adjacency_to_graph(adj_matrix)
+            raw_features = feature_extractor.get_features(graph)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            features_raw.append(raw_features)
+            features_numeric.append(
+                [numeric_features[name] for name in self.config["features"]]
+            )
+
+        return np.array(features_numeric), features_raw
+
+    def _generate_predictions(self, graphs, predictor):
+        """Generate predictions for the graph sequence."""
+        logger.info("Generating graph predictions")
+        predicted_graphs = []
+        horizon = self.config["detection"]["prediction_horizon"]
+
+        for t in range(len(graphs)):
+            current = graphs[t]
+            history_start = max(0, t - predictor.history_size)
+            history = [{"adjacency": g} for g in graphs[history_start:t]]
+
+            if t >= predictor.history_size:
+                predictions = predictor.predict(history, horizon=horizon)
+                predicted_graphs.append(predictions)
+
+        return predicted_graphs
+
+    def _process_predictions(self, predicted_graphs):
+        """Process predictions into feature space."""
+        logger.info("Processing predictions into feature space")
+        feature_extractor = NetworkFeatureExtractor()
+        predicted_features = []
+
+        for predictions in predicted_graphs:
+            timestep_features = []
+            for pred_adj in predictions:
+                graph = adjacency_to_graph(pred_adj)
+                numeric_features = feature_extractor.get_numeric_features(graph)
+                feature_vector = [
+                    numeric_features[name] for name in self.config["features"]
+                ]
+                timestep_features.append(feature_vector)
+            predicted_features.append(timestep_features)
+
+        return np.array(predicted_features)
+
+    def _create_visualizations(
+        self, detection_result, true_change_points, features_raw
+    ):
+        """Create visualizations of the results."""
+        logger.info("Creating visualizations")
+        output_config = self.config["output"]
+        visualizer = MartingaleVisualizer(
+            martingales=detection_result,
+            change_points=true_change_points,
+            threshold=self.config["detection"]["threshold"],
+            epsilon=self.config["detection"]["epsilon"],
+            output_dir=output_config["directory"],
+            prefix=output_config["prefix"],
+            skip_shap=output_config["visualization"]["skip_shap"],
+            method=self.config["model"]["type"],
+        )
+        visualizer.create_visualization()
+
+    def _compile_results(
+        self,
+        sequence_result,
+        features_numeric,
+        features_raw,
+        predicted_graphs,
+        detection_result,
+        predictor,
+    ):
+        """Compile all results into a single dictionary."""
+        logger.info("Compiling results")
+        results = {
+            "true_change_points": sequence_result["change_points"],
+            "model_name": get_full_model_name(self.config["model"]["network"]),
+            "params": self.config,
         }
 
-        # Add latest values if available
-        if self.martingale_values:
-            result["martingale"] = self.martingale_values[-1]
-            result["p_value"] = self.p_values[-1]
-            result["strangeness"] = self.strangeness_values[-1]
-
-            if self.is_multiview:
-                result["martingale_sum"] = self.martingales_sum[-1]
-                result["martingale_avg"] = self.martingales_avg[-1]
-                if self.individual_martingales:
-                    result["individual_martingales"] = self.individual_martingales[-1]
-
-        # Add latest features if available
-        if self.features_raw:
-            result["features_raw"] = self.features_raw[-1]
-        if self.features_numeric:
-            result["features_numeric"] = self.features_numeric[-1]
-
-        return result
-
-    def get_state(self) -> Dict[str, Any]:
-        """Get the current state of the stream.
-
-        Returns:
-            Dict containing the complete state of the stream including:
-                - All martingale sequences
-                - All feature sequences
-                - All change points
-                - Current parameters
-        """
-        state = {
-            "current_time": self.current_time,
-            "change_points": self.change_points,
-            "martingale_values": self.martingale_values,
-            "p_values": self.p_values,
-            "strangeness_values": self.strangeness_values,
-            "features_raw": self.features_raw,
-            "features_numeric": self.features_numeric,
-            "window_size": self.window_size,
-            "threshold": self.threshold,
-            "is_multiview": self.is_multiview,
-        }
-
-        if self.is_multiview:
-            state.update(
+        # Add data if configured to save
+        if self.config["output"]["save_features"]:
+            results.update(
                 {
-                    "martingales_sum": self.martingales_sum,
-                    "martingales_avg": self.martingales_avg,
-                    "individual_martingales": self.individual_martingales,
+                    "features_raw": features_raw,
+                    "features_numeric": features_numeric,
                 }
             )
 
-        return state
+        if self.config["output"]["save_predictions"]:
+            results.update(
+                {
+                    "predicted_graphs": predicted_graphs,
+                    "predictor_states": predictor.get_state(),
+                }
+            )
+
+        if self.config["output"]["save_martingales"]:
+            results.update(detection_result)
+
+        return results
 
 
-class HorizonStream:
-    pass
+def main(config_path: str) -> Dict[str, Any]:
+    """Run the algorithm with the given configuration.
+
+    Args:
+        config_path: Path to YAML configuration file
+
+    Returns:
+        Dictionary containing all results
+    """
+    algorithm = GraphChangeDetection(config_path)
+    return algorithm.run()
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 2:
+        print("Usage: python algorithm.py <config_path>")
+        sys.exit(1)
+    main(sys.argv[1])
