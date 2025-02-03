@@ -85,16 +85,22 @@ class MartingaleVisualizer:
         """Process detector results into a format suitable for plotting."""
         processed = {"combined": {}}
 
+        # Get the sequence length from the combined martingales
+        if self.method == "multiview":
+            seq_len = len(detection_results.get("traditional_sum_martingales", []))
+        else:
+            seq_len = len(detection_results.get("traditional_martingales", []))
+
         if self.method == "multiview":
             # Process multiview results
             processed["combined"].update(
                 {
                     "martingales_sum": detection_results.get(
                         "traditional_sum_martingales", []
-                    ),
+                    )[:seq_len],
                     "martingales_avg": detection_results.get(
                         "traditional_avg_martingales", []
-                    ),
+                    )[:seq_len],
                     "prediction_martingale_sum": detection_results.get(
                         "horizon_sum_martingales", []
                     ),
@@ -125,8 +131,10 @@ class MartingaleVisualizer:
 
             for i, feature in enumerate(features):
                 if i < len(individual_traditional):
+                    # Use actual sequence length
+                    traditional_values = individual_traditional[i][:seq_len]
                     processed[feature] = {
-                        "martingales": individual_traditional[i],
+                        "martingales": traditional_values,
                         "prediction_martingales": (
                             individual_horizon[i] if individual_horizon else None
                         ),
@@ -136,7 +144,9 @@ class MartingaleVisualizer:
             # Process single-view results
             processed["combined"].update(
                 {
-                    "martingales": detection_results.get("traditional_martingales", []),
+                    "martingales": detection_results.get("traditional_martingales", [])[
+                        :seq_len
+                    ],
                     "prediction_martingales": detection_results.get(
                         "horizon_martingales", []
                     ),
@@ -166,7 +176,10 @@ class MartingaleVisualizer:
     def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots."""
         fig = plt.figure(
-            figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2),
+            figsize=(
+                FD["DOUBLE_COLUMN_WIDTH"],
+                FD["GRID_HEIGHT"] * 1.5,
+            ),  # Reduced height
         )
         gs = GridSpec(
             4,
@@ -221,7 +234,7 @@ class MartingaleVisualizer:
                         color=COLORS["actual"],
                         linewidth=LS["LINE_WIDTH"],
                         alpha=LS["LINE_ALPHA"],
-                        label="Trad. Mart.",
+                        label="Trad.",  # Shortened label
                         zorder=10,
                     )
 
@@ -230,7 +243,6 @@ class MartingaleVisualizer:
                     isinstance(pred_martingales, (list, np.ndarray))
                     and len(pred_martingales) > 0
                 ):
-                    # Create time points starting from history size
                     history_size = len(martingales) - len(pred_martingales)
                     time_points = np.arange(
                         history_size, history_size + len(pred_martingales)
@@ -242,85 +254,96 @@ class MartingaleVisualizer:
                         linewidth=LS["LINE_WIDTH"],
                         linestyle="--",
                         alpha=LS["LINE_ALPHA"],
-                        label="Pred. Mart.",
+                        label="Pred.",  # Shortened label
                         zorder=9,
                     )
 
-                # Add change points
+                # Add change points with reduced alpha
                 for cp in self.change_points:
                     ax.axvline(
                         x=cp,
                         color=COLORS["change_point"],
                         linestyle="--",
-                        alpha=0.3,
-                        linewidth=GRID["MAJOR_LINE_WIDTH"],
+                        alpha=0.2,  # Reduced alpha
+                        linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
                         zorder=1,
                     )
 
-                # Add threshold line
+                # Add threshold line with reduced alpha
                 ax.axhline(
                     y=self.threshold,
                     color=COLORS["threshold"],
                     linestyle="--",
-                    alpha=0.3,
-                    linewidth=GRID["MAJOR_LINE_WIDTH"],
+                    alpha=0.2,  # Reduced alpha
+                    linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
                     zorder=2,
                 )
 
                 # Set consistent y-axis limits based on global maximum
-                y_max = max_mart_global * 1.1  # Add 10% margin
-                y_min = -y_max * 0.05  # Small negative range
+                y_max = max_mart_global * 1.05  # Reduced margin
+                y_min = 0  # Start from 0
                 ax.set_ylim(y_min, y_max)
 
                 # Create evenly spaced ticks
-                n_ticks = 6
+                n_ticks = 4  # Reduced number of ticks
                 y_ticks = np.linspace(0, y_max, n_ticks)
                 ax.set_yticks(y_ticks)
                 ax.yaxis.set_major_formatter(
-                    plt.FuncFormatter(
-                        lambda x, p: f"{x:.2f}" if abs(x) < 0.01 else f"{x:.1f}"
-                    )
+                    plt.FuncFormatter(lambda x, p: f"{x:.1f}")  # Simplified format
                 )
 
+            # Simplified title
             ax.set_title(
-                feature.replace("_", " ").title(), fontsize=TYPO["TITLE_SIZE"], pad=3
+                feature.replace("mean_", "").replace("_", " ").title(),
+                fontsize=TYPO["TITLE_SIZE"],
+                pad=1,  # Reduced padding
             )
-            ax.set_xlim(0, 200)
-            ax.set_xticks(np.arange(0, 201, 50))
 
-            if row == 3:
-                ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])
+            # X-axis settings
+            ax.set_xlim(0, 200)
+            ax.set_xticks(np.arange(0, 201, 100))  # Reduced number of ticks
+
+            if row == 3:  # Bottom row
+                ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
             else:
                 ax.set_xticklabels([])
 
-            if col == 0:
-                ax.set_ylabel("Mart. Value", fontsize=TYPO["LABEL_SIZE"])
+            if col == 0:  # Left column
+                ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
 
-            if idx == 0:  # Only show legend in first plot
+            if idx == 0:  # Legend only in first plot
                 ax.legend(
                     fontsize=TYPO["LEGEND_SIZE"],
                     ncol=2,
-                    loc=LEGEND["LOCATION"],
-                    borderaxespad=LEGEND["BORDER_PAD"],
+                    loc="upper right",
+                    borderaxespad=0.1,
                     handlelength=LEGEND["HANDLE_LENGTH"],
                     columnspacing=LEGEND["COLUMN_SPACING"],
                 )
+
+            # Tick parameters
             ax.tick_params(
-                axis="both", which="major", labelsize=TYPO["TICK_SIZE"], pad=2
+                axis="both",
+                which="major",
+                labelsize=TYPO["TICK_SIZE"],
+                pad=1,
+                length=2,
             )
+
+            # Grid settings
             ax.grid(
                 True,
                 linestyle=":",
-                alpha=GRID["MAJOR_ALPHA"] * 0.7,
-                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.8,
+                alpha=GRID["MAJOR_ALPHA"] * 0.5,  # Reduced alpha
+                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
             )
 
-        plt.tight_layout(pad=0.3)
-        self._save_figure("feature_martingales.png")
+        plt.tight_layout(pad=0.1)  # Tighter layout
+        self._save_figure("feature_martingales.png")  # Save as PNG
 
     def _plot_combined_martingales(self) -> None:
-        """Create plot for combined martingales, including both traditional and prediction."""
-        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"]))
+        """Create plot for combined martingales."""
+        fig = plt.figure(figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"]))
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
 
@@ -337,7 +360,7 @@ class MartingaleVisualizer:
                 ax.plot(
                     sum_martingale,
                     color=COLORS["actual"],
-                    label="Sum Mart.",
+                    label="Sum",  # Shortened label
                     linewidth=LS["LINE_WIDTH"],
                     alpha=LS["LINE_ALPHA"],
                     zorder=10,
@@ -351,7 +374,7 @@ class MartingaleVisualizer:
                 ax.plot(
                     avg_martingale,
                     color=COLORS["average"],
-                    label="Avg Mart.",
+                    label="Avg",  # Shortened label
                     linewidth=LS["LINE_WIDTH"],
                     linestyle="--",
                     alpha=LS["LINE_ALPHA"],
@@ -367,7 +390,6 @@ class MartingaleVisualizer:
                 and isinstance(pred_sum_martingale, (list, np.ndarray))
                 and len(pred_sum_martingale) > 0
             ):
-                # Create time points starting from history size
                 history_size = len(sum_martingale) - len(pred_sum_martingale)
                 time_points = np.arange(
                     history_size, history_size + len(pred_sum_martingale)
@@ -376,7 +398,7 @@ class MartingaleVisualizer:
                     time_points,
                     pred_sum_martingale,
                     color=COLORS["predicted"],
-                    label="Pred. Sum Mart.",
+                    label="P.Sum",  # Shortened label
                     linewidth=LS["LINE_WIDTH"],
                     alpha=LS["LINE_ALPHA"],
                     zorder=9,
@@ -387,7 +409,6 @@ class MartingaleVisualizer:
                 and isinstance(pred_avg_martingale, (list, np.ndarray))
                 and len(pred_avg_martingale) > 0
             ):
-                # Use same time points as sum martingale
                 history_size = len(avg_martingale) - len(pred_avg_martingale)
                 time_points = np.arange(
                     history_size, history_size + len(pred_avg_martingale)
@@ -396,75 +417,46 @@ class MartingaleVisualizer:
                     time_points,
                     pred_avg_martingale,
                     color=COLORS["pred_avg"],
-                    label="Pred. Avg Mart.",
+                    label="P.Avg",  # Shortened label
                     linewidth=LS["LINE_WIDTH"],
                     linestyle="--",
                     alpha=LS["LINE_ALPHA"],
                     zorder=7,
                 )
-        else:
-            # Plot single martingale for single-view
-            martingale = combined_results.get("martingales")
-            if (
-                martingale is not None
-                and isinstance(martingale, (list, np.ndarray))
-                and len(martingale) > 0
-            ):
-                ax.plot(
-                    martingale,
-                    color=COLORS["actual"],
-                    label="Martingale",
-                    linewidth=LS["LINE_WIDTH"],
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=10,
-                )
 
-            # Plot prediction martingale if available
-            pred_martingale = combined_results.get("prediction_martingales")
-            if (
-                pred_martingale is not None
-                and isinstance(pred_martingale, (list, np.ndarray))
-                and len(pred_martingale) > 0
-            ):
-                ax.plot(
-                    pred_martingale,
-                    color=COLORS["predicted"],
-                    label="Pred. Mart.",
-                    linewidth=LS["LINE_WIDTH"],
-                    linestyle="--",
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=9,
-                )
-
-        # Add threshold line
+        # Add threshold and change points with reduced visibility
         ax.axhline(
             y=self.threshold,
             color=COLORS["threshold"],
             linestyle="--",
-            alpha=0.7,
-            linewidth=LS["LINE_WIDTH"],
-            label="Threshold",
+            alpha=0.2,  # Reduced alpha
+            linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
+            label="Thresh",  # Shortened label
             zorder=5,
         )
 
-        # Add change points
         for cp in self.change_points:
             ax.axvline(
                 x=cp,
                 color=COLORS["change_point"],
                 linestyle="--",
-                alpha=0.5,
-                linewidth=GRID["MAJOR_LINE_WIDTH"],
+                alpha=0.2,  # Reduced alpha
+                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
                 zorder=4,
             )
 
         # Grid settings
-        ax.grid(True, which="major", linestyle=":", alpha=GRID["MAJOR_ALPHA"])
-        ax.grid(True, which="minor", linestyle=":", alpha=GRID["MAJOR_ALPHA"] / 2)
+        ax.grid(
+            True,
+            which="major",
+            linestyle=":",
+            alpha=GRID["MAJOR_ALPHA"] * 0.5,  # Reduced alpha
+            linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
+        )
 
         # Axis settings
-        ax.set_xticks(np.arange(0, 201, 50))
         ax.set_xlim(0, 200)
+        ax.set_xticks(np.arange(0, 201, 100))  # Reduced number of ticks
 
         # Dynamic y-axis range
         if self.method == "multiview":
@@ -481,35 +473,35 @@ class MartingaleVisualizer:
             max_mart = max(max_mart, np.max(pred_mart_seq))
 
         if max_mart > 0:
-            y_max = max(max_mart + max_mart * 0.25, self.threshold * 1.25)
-            ax.set_ylim(-5, y_max)
-            ax.yaxis.set_major_locator(plt.MultipleLocator(50))
-            ax.yaxis.set_minor_locator(plt.MultipleLocator(25))
+            y_max = max(max_mart * 1.05, self.threshold * 1.05)  # Reduced margin
+            ax.set_ylim(0, y_max)  # Start from 0
+            ax.yaxis.set_major_locator(plt.MaxNLocator(4))  # Reduced number of ticks
 
         # Legend
-        n_cols = (
-            4
-            if isinstance(pred_mart_seq, (list, np.ndarray)) and len(pred_mart_seq) > 0
-            else (3 if self.method == "multiview" else 2)
-        )
         ax.legend(
-            ncol=n_cols,
-            loc=LEGEND["LOCATION"],
-            bbox_to_anchor=(1.0, 1.02),
+            ncol=3,  # Increased columns for compactness
+            loc="upper right",
             fontsize=TYPO["LEGEND_SIZE"],
             frameon=True,
             handlelength=LEGEND["HANDLE_LENGTH"],
-            handletextpad=0.5,
+            handletextpad=0.2,  # Reduced padding
             columnspacing=LEGEND["COLUMN_SPACING"],
+            borderaxespad=0.1,  # Reduced padding
         )
 
         # Labels
-        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
-        ax.set_ylabel("Martingale Value", fontsize=TYPO["LABEL_SIZE"], labelpad=4)
-        ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
+        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+        ax.tick_params(
+            axis="both",
+            which="major",
+            labelsize=TYPO["TICK_SIZE"],
+            pad=1,
+            length=2,
+        )
 
-        plt.tight_layout(pad=0.3)
-        self._save_figure("combined_martingales.png")
+        plt.tight_layout(pad=0.1)  # Tighter layout
+        self._save_figure("combined_martingales.png")  # Save as PNG
 
     def _plot_overlaid_martingales(self) -> None:
         """Create plot overlaying individual feature martingales with combined martingale."""
@@ -625,16 +617,16 @@ class MartingaleVisualizer:
             ax.set_xticks(np.arange(0, 201, 50))
             ax.set_xlim(0, 200)
 
-            # Create two-column legend with slightly smaller font
+            # Create consistent legend positioning for both subplots
             ax.legend(
                 ncol=2,
-                loc=LEGEND["LOCATION"],
-                bbox_to_anchor=(1.0, 1.02),
+                loc="upper right",
                 fontsize=TYPO["LEGEND_SIZE"] * 0.8,
                 frameon=True,
                 handlelength=LEGEND["HANDLE_LENGTH"],
                 handletextpad=0.5,
                 columnspacing=LEGEND["COLUMN_SPACING"],
+                borderaxespad=0.1,  # Consistent padding
             )
 
             ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])

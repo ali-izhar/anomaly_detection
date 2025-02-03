@@ -3,9 +3,9 @@
 # Default configurations for graph models
 
 barabasi_albert:
-  n: 20  # Number of nodes in the graph
-  seq_len: 50  # Total length of the time series
-  min_segment: 20  # Minimum length of each stable segment
+  n: 50  # Number of nodes in the graph
+  seq_len: 200  # Total length of the time series
+  min_segment: 40  # Minimum length of each stable segment
   min_changes: 1  # Minimum number of change points
   max_changes: 2  # Maximum number of change points
   # Initial attachment parameter
@@ -48,9 +48,9 @@ erdos_renyi:
   clustering_std: 0.02  # Standard deviation for clustering coefficient noise
 
 stochastic_block_model:
-  n: 50  # Number of nodes in the graph
-  seq_len: 200  # Total length of the time series
-  min_segment: 40  # Minimum length of each stable segment
+  n: 20  # Number of nodes in the graph
+  seq_len: 50  # Total length of the time series
+  min_segment: 20  # Minimum length of each stable segment
   min_changes: 1  # Minimum number of change points
   max_changes: 2  # Maximum number of change points
   num_blocks: 2  # Number of communities/blocks

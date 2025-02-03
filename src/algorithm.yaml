@@ -8,7 +8,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 # Model configuration
 model:
   type: "multiview"  # or "single_view"
-  network: "ba"  # choices: ["ba", "ws", "er", "sbm"]
+  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
   predictor:
     type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
     config:
