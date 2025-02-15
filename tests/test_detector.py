@@ -91,7 +91,7 @@ class TestChangePointDetection:
         )
 
         # Verify results
-        detected_points = multiview_result["change_points"]
+        detected_points = multiview_result["traditional_change_points"]
         assert len(detected_points) > 0, "Should detect at least one change point"
 
         # Check detection accuracy
@@ -153,7 +153,7 @@ class TestChangePointDetection:
         )
 
         # Verify results
-        detected_points = multiview_result["change_points"]
+        detected_points = multiview_result["traditional_change_points"]
         assert len(detected_points) == 0, "Should not detect any change points"
 
     @pytest.mark.parametrize("model", ["ba", "ws", "er", "sbm"])
@@ -204,7 +204,7 @@ class TestChangePointDetection:
         )
 
         # Verify results
-        detected_points = multiview_result["change_points"]
+        detected_points = multiview_result["traditional_change_points"]
         assert len(detected_points) >= 2, "Should detect at least 2 change points"
 
         # Check detection accuracy
@@ -262,13 +262,17 @@ class TestChangePointDetection:
                 )
 
                 # Basic checks
-                assert "change_points" in result
-                assert "martingales_sum" in result
-                assert "martingales_avg" in result
-                assert "individual_martingales" in result
+                assert "traditional_change_points" in result
+                assert "horizon_change_points" in result
+                assert "traditional_sum_martingales" in result
+                assert "traditional_avg_martingales" in result
+                assert "horizon_sum_martingales" in result
+                assert "horizon_avg_martingales" in result
+                assert "individual_traditional_martingales" in result
+                assert "individual_horizon_martingales" in result
 
                 # Higher threshold should generally mean fewer detections
                 if threshold == 100.0:
                     assert (
-                        len(result["change_points"]) <= len(graphs) * 0.1
+                        len(result["traditional_change_points"]) <= len(graphs) * 0.1
                     ), "High threshold should result in few detections"

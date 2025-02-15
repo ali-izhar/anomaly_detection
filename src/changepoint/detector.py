@@ -216,7 +216,7 @@ class ChangePointDetector:
         epsilon: float = 0.7,
         history_size: int = 10,
         max_window: Optional[int] = None,
-        batch_size: Optional[int] = None,
+        batch_size: Optional[int] = 1000,
         random_state: Optional[int] = None,
         betting_func: Optional[
             Callable[[float, float, float], float]

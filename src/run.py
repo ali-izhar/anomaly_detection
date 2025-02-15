@@ -229,7 +229,6 @@ def run_detection(
         threshold=threshold,
         epsilon=epsilon,
         random_state=random_state,
-        feature_set="all",
         batch_size=batch_size,
         reset=reset,
         max_window=max_window,
