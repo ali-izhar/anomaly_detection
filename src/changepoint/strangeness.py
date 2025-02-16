@@ -3,6 +3,7 @@
 """Strangeness computation for change point detection."""
 
 from typing import List, Optional, Union, Any
+
 import logging
 import numpy as np
 import random

@@ -2,7 +2,7 @@
 
 """Visualizer for changepoint analysis results."""
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ class MartingaleVisualizer:
         martingales: Dict[str, Any],
         change_points: List[int],
         threshold: float,
-        epsilon: float,
+        betting_config: Dict[str, Any],
         output_dir: str = "results",
         prefix: str = "",
         skip_shap: bool = False,
@@ -41,7 +41,8 @@ class MartingaleVisualizer:
             martingales: Dictionary containing martingale results from detector
             change_points: List of true change points
             threshold: Detection threshold
-            epsilon: Sensitivity parameter
+            betting_config: Dictionary containing betting function configuration
+                          with format: {"function": str, "params": Dict[str, Any]}
             output_dir: Directory to save visualizations
             prefix: Prefix for output files
             skip_shap: Whether to skip SHAP value plots
@@ -49,11 +50,14 @@ class MartingaleVisualizer:
         """
         self.change_points = change_points
         self.threshold = threshold
-        self.epsilon = epsilon
+        self.betting_config = betting_config
         self.output_dir = output_dir
         self.prefix = prefix
         self.skip_shap = skip_shap
         self.method = method
+
+        # Get betting function parameters for visualization
+        self.betting_params = self._get_betting_params()
 
         # Process martingales into a format suitable for plotting
         self.martingales = self._process_martingales(martingales)
@@ -111,6 +115,29 @@ class MartingaleVisualizer:
         # Set paper-style parameters
         plt.style.use("seaborn-v0_8-paper")
         plt.rcParams.update(get_matplotlib_rc_params())
+
+    def _get_betting_params(self) -> Dict[str, Any]:
+        """Extract relevant betting parameters for visualization."""
+        function = self.betting_config["function"]
+        params = self.betting_config["params"].get(function, {})
+
+        # Create a formatted string of parameters for visualization
+        param_str = ""
+        if function == "power":
+            param_str = f"ε={params.get('epsilon', 0.7)}"
+        elif function == "exponential":
+            param_str = f"λ={params.get('lambda', 1.0)}"
+        elif function == "mixture":
+            epsilons = params.get("epsilons", [0.5, 0.6, 0.7, 0.8, 0.9])
+            param_str = f"ε={min(epsilons)}-{max(epsilons)}"
+        elif function == "beta":
+            param_str = f"α={params.get('alpha', 0.5)}, β={params.get('beta', 1.5)}"
+        elif function == "kernel":
+            param_str = f"bw={params.get('bandwidth', 0.1)}"
+        elif function == "constant":
+            param_str = "fixed"
+
+        return {"function": function, "params": params, "param_str": param_str}
 
     def _process_martingales(self, detection_results: Dict[str, Any]) -> Dict[str, Any]:
         """Process detector results into a format suitable for plotting."""
@@ -191,6 +218,9 @@ class MartingaleVisualizer:
         # Always plot combined martingales
         self._plot_combined_martingales()
 
+        # Create detection analysis plots
+        self._plot_detection_analysis()
+
         # Only create feature plots for multiview results with individual martingales
         if self.method == "multiview" and len(self.martingales) > 1:
             self._plot_feature_martingales()
@@ -204,14 +234,86 @@ class MartingaleVisualizer:
             ):
                 self._plot_shap_values()
 
+    def _plot_detection_analysis(self) -> None:
+        """Create detailed detection analysis visualization."""
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"]))
+        gs = GridSpec(1, 2, figure=fig)
+
+        # Left subplot: Traditional Martingale Analysis
+        ax1 = fig.add_subplot(gs[0, 0])
+        self._plot_detection_subplot(
+            ax1, "traditional", "Traditional Martingale Analysis"
+        )
+
+        # Right subplot: Horizon Martingale Analysis
+        ax2 = fig.add_subplot(gs[0, 1])
+        self._plot_detection_subplot(ax2, "horizon", "Horizon Martingale Analysis")
+
+        plt.tight_layout()
+        self._save_figure("detection_analysis.png")
+
+    def _plot_detection_subplot(self, ax, mart_type: str, title: str) -> None:
+        """Helper method to plot detection analysis for a specific martingale type."""
+        if mart_type == "traditional":
+            changes = self.martingales["combined"].get("traditional_change_points", [])
+            if self.method == "multiview":
+                values = self.martingales["combined"].get("martingales_sum", [])
+            else:
+                values = self.martingales["combined"].get("martingales", [])
+        else:  # horizon
+            changes = self.martingales["combined"].get("horizon_change_points", [])
+            if self.method == "multiview":
+                values = self.martingales["combined"].get(
+                    "prediction_martingale_sum", []
+                )
+            else:
+                values = self.martingales["combined"].get("horizon_martingales", [])
+
+        # Plot martingale values
+        if values is not None and len(values) > 0:
+            ax.plot(values, color=COLORS["actual"], label="Martingale")
+
+            # Mark detection points
+            for cp in changes:
+                ax.plot(
+                    cp,
+                    values[cp],
+                    "ro",
+                    markersize=10,
+                    label="Detection" if cp == changes[0] else "",
+                )
+                ax.annotate(
+                    f"t={cp}",
+                    (cp, values[cp]),
+                    xytext=(10, 10),
+                    textcoords="offset points",
+                )
+
+        # Add threshold line
+        ax.axhline(
+            y=self.threshold,
+            color=COLORS["threshold"],
+            linestyle="--",
+            label="Threshold",
+        )
+
+        ax.set_title(title)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Value")
+        ax.legend()
+        ax.grid(True)
+
     def _plot_feature_martingales(self) -> None:
         """Create grid of individual feature martingale plots."""
-        fig = plt.figure(
-            figsize=(
-                FD["DOUBLE_COLUMN_WIDTH"],
-                FD["GRID_HEIGHT"] * 1.5,
-            ),  # Reduced height
-        )
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 1.5))
+
+        # Add betting function info to figure suptitle
+        title = f"Feature Martingales ({self.betting_config['function'].title()}"
+        if self.betting_params["param_str"]:
+            title += f", {self.betting_params['param_str']}"
+        title += ")"
+        fig.suptitle(title, fontsize=TYPO["TITLE_SIZE"])
+
         gs = GridSpec(
             4,
             2,
@@ -377,6 +479,13 @@ class MartingaleVisualizer:
         fig = plt.figure(figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"]))
         ax = fig.add_subplot(111)
         combined_results = self.martingales["combined"]
+
+        # Add betting function info to title
+        title = f"Martingale Values ({self.betting_config['function'].title()}"
+        if self.betting_params["param_str"]:
+            title += f", {self.betting_params['param_str']}"
+        title += ")"
+        ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
 
         # Track crossing points for annotations
         crossing_points = []
@@ -770,102 +879,40 @@ class MartingaleVisualizer:
                     margin = (y_max - y_min) * 0.1
                     ax.set_ylim(y_min - margin, y_max + margin)
 
-    def _plot_shap_values(self) -> None:
-        """Create plot for SHAP values with two subplots: traditional and prediction."""
-        if self.shap_values is None or self.feature_names is None:
-            return
-
-        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 1.6))
-        gs = GridSpec(2, 1, figure=fig, hspace=0.3)
-
-        # Create color map for available features
-        n_features = len(self.feature_names)
-        colors = plt.cm.tab10(np.linspace(0, 1, n_features))
-
-        # Plot traditional SHAP values (top subplot)
-        ax1 = fig.add_subplot(gs[0])
-        self._plot_shap_subplot(
-            ax1, self.shap_values, self.feature_names, colors, "Traditional SHAP Values"
-        )
-
-        # Plot prediction SHAP values if available (bottom subplot)
-        ax2 = fig.add_subplot(gs[1])
-        if (
-            hasattr(self, "prediction_shap_values")
-            and self.prediction_shap_values is not None
-        ):
-            self._plot_shap_subplot(
-                ax2,
-                self.prediction_shap_values,
-                self.feature_names,
-                colors,
-                "Prediction SHAP Values",
-            )
-        else:
-            ax2.text(
-                0.5,
-                0.5,
-                "No prediction SHAP values available",
-                horizontalalignment="center",
-                verticalalignment="center",
-                transform=ax2.transAxes,
-                fontsize=TYPO["LABEL_SIZE"],
-            )
-            ax2.set_title("Prediction SHAP Values", fontsize=TYPO["TITLE_SIZE"])
-
-        # Set common parameters
-        for ax in [ax1, ax2]:
-            ax.set_xticks(np.arange(0, 201, 50))
-            ax.set_xlim(0, 200)
-            ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
-            ax.grid(True, linestyle=":", alpha=GRID["MAJOR_ALPHA"] * 0.7)
-
-            # Add threshold and change points
-            self._add_threshold_and_changes(ax)
-
-        # Set labels
-        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-        for ax in [ax1, ax2]:
-            ax.set_ylabel("SHAP Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-
-        plt.tight_layout(pad=0.1)  # Tighter layout
-        self._save_figure("shap_values.png")
-
-    def _plot_shap_subplot(self, ax, shap_values, feature_names, colors, title):
-        """Helper method to plot SHAP values in a subplot."""
-        if not isinstance(shap_values, (list, np.ndarray)) or len(shap_values) == 0:
-            ax.text(
-                0.5,
-                0.5,
-                "No SHAP values available",
-                horizontalalignment="center",
-                verticalalignment="center",
-                transform=ax.transAxes,
-                fontsize=TYPO["LABEL_SIZE"],
-            )
-            ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
-            return
-
-        # Plot SHAP values for each feature
-        for i, feature in enumerate(feature_names):
-            if i < shap_values.shape[1]:  # Only plot if we have values for this feature
-                ax.plot(
-                    shap_values[:, i],
-                    label=feature.replace("mean_", "").replace("_", " ").title(),
-                    color=colors[i],
-                    linewidth=LS["LINE_WIDTH"],
-                    alpha=LS["LINE_ALPHA"],
+    def _plot_shap_subplot(
+        self, ax, shap_values, feature_names, colors, title, is_prediction=False
+    ):
+        """Plot SHAP values for a single subplot."""
+        # Get history size for prediction offset
+        history_size = 0
+        if is_prediction:
+            # Calculate history size from martingales
+            feature = feature_names[0]  # Use first feature to get history size
+            if feature in self.martingales:
+                martingales = self.martingales[feature].get("martingales", [])
+                pred_martingales = self.martingales[feature].get(
+                    "prediction_martingales", []
                 )
+                if len(martingales) > 0 and len(pred_martingales) > 0:
+                    history_size = len(martingales) - len(pred_martingales)
 
-        # Add change point markers
-        for cp in self.change_points:
-            ax.axvline(
-                x=cp,
-                color=COLORS["change_point"],
-                linestyle="--",
-                alpha=0.2,  # Reduced alpha
-                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
-            )
+        # Plot each feature's SHAP values
+        for i, feature in enumerate(feature_names):
+            if i < len(colors):
+                time_points = np.arange(len(shap_values))
+                if is_prediction:
+                    time_points = np.arange(
+                        history_size, history_size + len(shap_values)
+                    )
+
+                ax.plot(
+                    time_points,
+                    shap_values[:, i],
+                    label=feature.replace("_", " ").title(),
+                    color=colors[i],
+                    alpha=0.7,
+                    linewidth=1.0,
+                )
 
         # Add threshold line
         ax.axhline(
@@ -897,6 +944,73 @@ class MartingaleVisualizer:
             )
 
         ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
+
+    def _plot_shap_values(self) -> None:
+        """Create plot for SHAP values with two subplots: traditional and prediction."""
+        if self.shap_values is None or self.feature_names is None:
+            return
+
+        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 1.6))
+        gs = GridSpec(2, 1, figure=fig, hspace=0.3)
+
+        # Create color map for available features
+        n_features = len(self.feature_names)
+        colors = plt.cm.tab10(np.linspace(0, 1, n_features))
+
+        # Plot traditional SHAP values (top subplot)
+        ax1 = fig.add_subplot(gs[0])
+        self._plot_shap_subplot(
+            ax1,
+            self.shap_values,
+            self.feature_names,
+            colors,
+            "Traditional SHAP Values",
+            is_prediction=False,
+        )
+
+        # Plot prediction SHAP values if available (bottom subplot)
+        ax2 = fig.add_subplot(gs[1])
+        if (
+            hasattr(self, "prediction_shap_values")
+            and self.prediction_shap_values is not None
+        ):
+            self._plot_shap_subplot(
+                ax2,
+                self.prediction_shap_values,
+                self.feature_names,
+                colors,
+                "Prediction SHAP Values",
+                is_prediction=True,
+            )
+        else:
+            ax2.text(
+                0.5,
+                0.5,
+                "No prediction SHAP values available",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax2.transAxes,
+                fontsize=TYPO["LABEL_SIZE"],
+            )
+            ax2.set_title("Prediction SHAP Values", fontsize=TYPO["TITLE_SIZE"])
+
+        # Set common parameters
+        for ax in [ax1, ax2]:
+            ax.set_xticks(np.arange(0, 201, 50))
+            ax.set_xlim(0, 200)
+            ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
+            ax.grid(True, linestyle=":", alpha=GRID["MAJOR_ALPHA"] * 0.7)
+
+            # Add threshold and change points
+            self._add_threshold_and_changes(ax)
+
+        # Set labels
+        ax2.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+        for ax in [ax1, ax2]:
+            ax.set_ylabel("SHAP Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
+
+        plt.tight_layout(pad=0.1)  # Tighter layout
+        self._save_figure("shap_values.png")
 
     def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""

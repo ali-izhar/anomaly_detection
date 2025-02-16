@@ -47,7 +47,9 @@ def exponential_martingale(prev_m: float, pvalue: float, lambd: float = 1.0) -> 
     Update function for an exponential martingale.
 
     Uses the update rule:
-        M_n = M_(n-1) * exp(-lambd * pvalue)
+        M_n = M_(n-1) * exp(-lambd * pvalue) / normalization
+    where normalization = (1 - exp(-lambd)) / lambd ensures the betting function
+    integrates to 1 over [0,1].
 
     This betting rule emphasizes rapid growth when the p-value is small.
 
@@ -65,7 +67,8 @@ def exponential_martingale(prev_m: float, pvalue: float, lambd: float = 1.0) -> 
     float
         The updated martingale value.
     """
-    return prev_m * np.exp(-lambd * pvalue)
+    normalization = (1 - np.exp(-lambd)) / lambd  # Integral of exp(-λp) from 0 to 1
+    return prev_m * np.exp(-lambd * pvalue) / normalization
 
 
 def mixture_martingale(prev_m: float, pvalue: float, epsilons: list) -> float:
@@ -177,9 +180,10 @@ def kernel_density_martingale(
 
     This function estimates a density for p-values using a Gaussian kernel density estimator (KDE)
     on a list of previous p-values (typically from a sliding window). The estimated density at the
-    current p-value is then used as the betting factor. The KDE is normalized so that its integral
-    over [0, 1] is (approximately) 1. Note that this naive implementation does not correct for
-    boundary effects at 0 and 1.
+    current p-value is then used as the betting factor. The KDE is normalized to ensure its integral
+    over [0, 1] is exactly 1 by:
+    1. Using reflection of points at boundaries to handle boundary effects
+    2. Normalizing the density by numerical integration over [0,1]
 
     Parameters
     ----------
@@ -202,17 +206,30 @@ def kernel_density_martingale(
     If the past_pvalues list is empty, this function returns the previous martingale value
     unchanged (equivalent to betting with a uniform density of 1).
     """
-    # If no past p-values are available, we default to a uniform betting factor of 1.
     if not past_pvalues:
         return prev_m
 
-    # Convert the list to a numpy array for compatibility with gaussian_kde.
+    # Convert the list to a numpy array
     past_array = np.array(past_pvalues)
-    # Create the KDE estimator using the specified bandwidth.
-    # Note: gaussian_kde uses 'scott' or 'silverman' rules by default; here we specify a fixed bandwidth.
-    kde = gaussian_kde(past_array, bw_method=bandwidth)
-    # Evaluate the estimated density at the current pvalue.
-    density = kde.evaluate(pvalue)[0]
-    # Update the martingale value by multiplying with the density.
-    # Under the null hypothesis (uniform p-values), the density estimate should be close to 1.
+
+    # Reflect points at boundaries to handle boundary effects
+    reflected = np.concatenate(
+        [
+            -past_array,  # Reflect left of 0
+            past_array,  # Original points
+            2 - past_array,  # Reflect right of 1
+        ]
+    )
+
+    # Create KDE with reflected points
+    kde = gaussian_kde(reflected, bw_method=bandwidth)
+
+    # Normalize the density to integrate to 1 over [0,1]
+    x = np.linspace(0, 1, 1000)
+    density_vals = kde.evaluate(x)
+    normalization = np.trapz(density_vals, x)  # Numerical integration
+
+    # Evaluate normalized density at pvalue
+    density = kde.evaluate(pvalue)[0] / normalization
+
     return prev_m * density

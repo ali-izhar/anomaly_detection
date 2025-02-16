@@ -3,6 +3,7 @@
 """Distance computation utilities for change point detection."""
 
 from typing import Union
+
 import logging
 import numpy as np
 from sklearn.cluster import KMeans, MiniBatchKMeans
@@ -82,7 +83,19 @@ def compute_cluster_distances(
 
     # === Mahalanobis Distance ===
     elif distance_measure == "mahalanobis":
-        # Compute the global covariance matrix over all data points.
+        # For single-feature data, use variance instead of covariance matrix
+        if d == 1:
+            # Compute variance, adding small constant to avoid division by zero
+            var = np.var(data_array, axis=0) + 1e-8
+            distances = np.zeros((N, n_clusters))
+            for i in range(N):
+                for j in range(n_clusters):
+                    diff = data_array[i] - centers[j]
+                    distances[i, j] = np.sqrt(np.sum((diff**2) / var))
+            return distances
+
+        # For multi-feature data, use full covariance matrix
+        # Compute the global covariance matrix over all data points
         cov = np.cov(data_array, rowvar=False)
         if cov.shape != (d, d):
             logger.error(
@@ -92,7 +105,10 @@ def compute_cluster_distances(
                 f"Invalid covariance matrix shape: {cov.shape}. Expected: ({d}, {d})"
             )
 
-        # Compute the pseudo-inverse of the covariance matrix to handle singular cases.
+        # Add small constant to diagonal to ensure matrix is invertible
+        cov = cov + np.eye(d) * 1e-8
+
+        # Compute the pseudo-inverse of the covariance matrix to handle singular cases
         inv_cov = np.linalg.pinv(cov)
         if inv_cov.shape != (d, d):
             logger.error(
@@ -188,6 +204,26 @@ def compute_cluster_distances(
                     )
                 # Minkowski distance: sum(|diff|^p) raised to the power of 1/p.
                 distances[i, j] = np.sum(np.abs(diff) ** p) ** (1.0 / p)
+
+        return distances
+
+    # === Chebyshev Distance (L∞ norm) ===
+    elif distance_measure == "chebyshev":
+        # Initialize an array to hold the Chebyshev distances.
+        distances = np.zeros((N, n_clusters))
+        # Calculate the Chebyshev distance (maximum absolute difference) for each point-center pair.
+        for i in range(N):
+            for j in range(n_clusters):
+                diff = data_array[i] - centers[j]
+                if diff.shape != (d,):
+                    logger.error(
+                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
+                    )
+                    raise ValueError(
+                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
+                    )
+                # Chebyshev distance: max(|diff|)
+                distances[i, j] = np.max(np.abs(diff))
 
         return distances
 
