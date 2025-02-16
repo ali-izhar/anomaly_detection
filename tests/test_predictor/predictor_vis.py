@@ -1,4 +1,4 @@
-# tests/test_predictor/predictor.py
+# tests/test_predictor/predictor_vis.py
 
 """Use all predictors on the same graph network (ba, sbm, er, ws) to compare their performance."""
 
