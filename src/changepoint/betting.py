@@ -13,8 +13,7 @@ so that under the null hypothesis (p-values are uniformly distributed) the proce
 remains a martingale.
 """
 
-from typing import List, Dict, Any, Callable, TypedDict, Union
-
+from typing import List, Dict, Any, Callable, TypedDict
 
 import numpy as np
 from scipy.stats import beta, gaussian_kde

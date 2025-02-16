@@ -11,16 +11,16 @@ Reset Strategy:
 - Horizon martingale only resets when traditional martingale confirms a change.
 """
 
-from typing import List, Dict, Any, Optional, TypedDict, Union, Callable
+from typing import List, Dict, Any, Optional
 
 import logging
 import numpy as np
 
-from .strangeness import strangeness_point, get_pvalue
 from .betting import (
     BettingFunctionConfig,
     get_betting_function,
 )
+from .strangeness import strangeness_point, get_pvalue
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,7 @@ def compute_martingale(
     reset: bool = True,
     window_size: Optional[int] = None,
     random_state: Optional[int] = None,
-    betting_func_config: BettingFunctionConfig = {
-        "name": "power",
-        "params": {"epsilon": 0.7},
-    },
+    betting_func_config: BettingFunctionConfig = None,
     distance_measure: str = "euclidean",
     distance_p: float = 2.0,
 ) -> Dict[str, Any]:
@@ -82,7 +79,6 @@ def compute_martingale(
          - "horizon_martingales": np.ndarray of horizon martingale values (if predictions are provided).
     """
 
-    # Get the betting function with its configuration
     betting_function = get_betting_function(betting_func_config)
 
     logger.debug("Single-view Martingale Input Dimensions:")
@@ -257,10 +253,7 @@ def multiview_martingale_test(
     window_size: Optional[int] = None,
     batch_size: int = 1000,
     random_state: Optional[int] = None,
-    betting_func_config: BettingFunctionConfig = {
-        "name": "power",
-        "params": {"epsilon": 0.7},
-    },
+    betting_func_config: BettingFunctionConfig = None,
     distance_measure: str = "euclidean",
     distance_p: float = 2.0,
 ) -> Dict[str, Any]:
@@ -302,7 +295,6 @@ def multiview_martingale_test(
         A dictionary with change points and martingale values.
     """
 
-    # Get the betting function with its configuration
     betting_function = get_betting_function(betting_func_config)
 
     logger.debug("Multiview Martingale Input Dimensions:")

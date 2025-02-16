@@ -10,7 +10,6 @@ import numpy as np
 from .martingale import (
     compute_martingale,
     multiview_martingale_test,
-    BettingFunctionConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +46,7 @@ class ChangePointDetector:
         batch_size: int = 1000,
         reset: bool = True,
         max_window: Optional[int] = None,
-        betting_func_config: Optional[BettingFunctionConfig] = None,
+        betting_func_config: Optional[Any] = None,
         distance_measure: str = "euclidean",
         distance_p: float = 2.0,
     ):
@@ -66,8 +65,11 @@ class ChangePointDetector:
         if betting_func_config is None:
             betting_func_config = {
                 "name": "power",
-                "params": {"epsilon": 0.7},  # Default epsilon value
+                "params": {"epsilon": 0.7},
             }
+            logger.debug(
+                f"No betting function config provided. Using default: {betting_func_config}"
+            )
         self.betting_func_config = betting_func_config
 
     def run(
