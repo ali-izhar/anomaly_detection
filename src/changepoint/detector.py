@@ -7,7 +7,11 @@ from typing import Dict, Any, Optional
 import logging
 import numpy as np
 
-from .martingale import compute_martingale, multiview_martingale_test
+from .martingale import (
+    compute_martingale,
+    multiview_martingale_test,
+    BettingFunctionConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +29,13 @@ class ChangePointDetector:
     Attributes:
         martingale_method (str): The martingale method to use ('single_view' or 'multiview').
         threshold (float): Detection threshold for the martingale.
-        epsilon (float): Sensitivity parameter for martingale updates.
         random_state (int): Seed for reproducibility.
         batch_size (int): Batch size for multiview processing.
         reset (bool): Whether to reset after detection (for single view).
         max_window (int): Maximum window size for strangeness computation.
         distance_measure (str): Distance metric for strangeness computation.
         distance_p (float): Order parameter for Minkowski distance.
+        betting_func_config (BettingFunctionConfig): Configuration for the betting function.
     """
 
     def __init__(
@@ -39,12 +43,11 @@ class ChangePointDetector:
         martingale_method: str = "multiview",
         history_size: int = 10,
         threshold: float = 60.0,
-        epsilon: float = 0.7,
         random_state: Optional[int] = 42,
         batch_size: int = 1000,
         reset: bool = True,
         max_window: Optional[int] = None,
-        betting_func: str = "power",
+        betting_func_config: Optional[BettingFunctionConfig] = None,
         distance_measure: str = "euclidean",
         distance_p: float = 2.0,
     ):
@@ -52,14 +55,20 @@ class ChangePointDetector:
         self.method = martingale_method
         self.history_size = history_size
         self.threshold = threshold
-        self.epsilon = epsilon
         self.random_state = random_state
         self.batch_size = batch_size
         self.reset = reset
         self.max_window = max_window
         self.distance_measure = distance_measure
         self.distance_p = distance_p
-        self.betting_func = betting_func
+
+        # Set default betting function config if none provided
+        if betting_func_config is None:
+            betting_func_config = {
+                "name": "power",
+                "params": {"epsilon": 0.7},  # Default epsilon value
+            }
+        self.betting_func_config = betting_func_config
 
     def run(
         self,
@@ -92,12 +101,11 @@ class ChangePointDetector:
                 data=data.tolist(),
                 predicted_data=pred_data_list,
                 threshold=self.threshold,
-                epsilon=self.epsilon,
                 history_size=self.history_size,
                 reset=self.reset,
                 window_size=self.max_window,
                 random_state=self.random_state,
-                betting_func=self.betting_func,
+                betting_func_config=self.betting_func_config,
                 distance_measure=self.distance_measure,
                 distance_p=self.distance_p,
             )
@@ -144,12 +152,11 @@ class ChangePointDetector:
                 data=data_lists,
                 predicted_data=pred_data_lists,
                 threshold=self.threshold,
-                epsilon=self.epsilon,
                 history_size=self.history_size,
                 window_size=self.max_window,
                 batch_size=self.batch_size,
                 random_state=self.random_state,
-                betting_func=self.betting_func,
+                betting_func_config=self.betting_func_config,
                 distance_measure=self.distance_measure,
                 distance_p=self.distance_p,
             )

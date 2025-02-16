@@ -11,44 +11,32 @@ Reset Strategy:
 - Horizon martingale only resets when traditional martingale confirms a change.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TypedDict, Union, Callable
 
 import logging
 import numpy as np
 
 from .strangeness import strangeness_point, get_pvalue
 from .betting import (
-    power_martingale,
-    exponential_martingale,
-    mixture_martingale,
-    constant_martingale,
-    beta_martingale,
-    kernel_density_martingale,
+    BettingFunctionConfig,
+    get_betting_function,
 )
 
 logger = logging.getLogger(__name__)
-
-# Mapping of betting function names to their implementations.
-BETTING_FUNCTIONS = {
-    "power": power_martingale,
-    "exponential": exponential_martingale,
-    "mixture": mixture_martingale,
-    "constant": constant_martingale,
-    "beta": beta_martingale,
-    "kernel": kernel_density_martingale,
-}
 
 
 def compute_martingale(
     data: List[Any],
     predicted_data: List[np.ndarray],
     threshold: float,
-    epsilon: float,
     history_size: int,
     reset: bool = True,
     window_size: Optional[int] = None,
     random_state: Optional[int] = None,
-    betting_func: str = "power",
+    betting_func_config: BettingFunctionConfig = {
+        "name": "power",
+        "params": {"epsilon": 0.7},
+    },
     distance_measure: str = "euclidean",
     distance_p: float = 2.0,
 ) -> Dict[str, Any]:
@@ -61,8 +49,6 @@ def compute_martingale(
       2. Horizon martingale: uses the current observation plus all predicted future states (horizon)
          together with the history.
 
-    The martingale update is performed using the provided 'betting_func' (which, for example, can be the power martingale update).
-
     Parameters
     ----------
     data : List[Any]
@@ -71,8 +57,6 @@ def compute_martingale(
         List of predicted feature vectors for future timesteps. Each prediction should have the same shape as a data row.
     threshold : float
         Detection threshold (> 0). A change is reported if the martingale exceeds this value.
-    epsilon : float
-        Sensitivity parameter in (0,1); smaller values make the martingale more sensitive.
     history_size : int
         Minimum number of observations to accumulate before using predictions.
     reset : bool, optional
@@ -81,9 +65,8 @@ def compute_martingale(
         Maximum number of recent observations to keep in the history window.
     random_state : int, optional
         Random seed for reproducibility.
-    betting_func : callable, optional
-        Function to update the martingale. It should accept (prev_m, pvalue, epsilon)
-        and return the updated value.
+    betting_func_config : BettingFunctionConfig, optional
+        Configuration for the betting function.
     distance_measure : str, optional
         Distance metric to use for strangeness computation.
     distance_p : float, optional
@@ -99,13 +82,8 @@ def compute_martingale(
          - "horizon_martingales": np.ndarray of horizon martingale values (if predictions are provided).
     """
 
-    # Get the betting function implementation
-    if betting_func not in BETTING_FUNCTIONS:
-        raise ValueError(
-            f"Unknown betting function '{betting_func}'. "
-            f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
-        )
-    betting_function = BETTING_FUNCTIONS[betting_func]
+    # Get the betting function with its configuration
+    betting_function = get_betting_function(betting_func_config)
 
     logger.debug("Single-view Martingale Input Dimensions:")
     logger.debug(f"  Sequence length: {len(data)}")
@@ -117,15 +95,12 @@ def compute_martingale(
     logger.debug("-" * 50)
 
     # ------- Input Validation -------
-    if not 0 < epsilon < 1:
-        logger.error(f"Invalid epsilon value: {epsilon}")
-        raise ValueError("Epsilon must be in (0,1)")
     if threshold <= 0:
         logger.error(f"Invalid threshold value: {threshold}")
         raise ValueError("Threshold must be positive")
 
     logger.debug(
-        f"Starting martingale computation with epsilon={epsilon}, threshold={threshold}, window_size={window_size}"
+        f"Starting martingale computation with threshold={threshold}, window_size={window_size}"
     )
 
     # ------- Initialize Storage -------
@@ -170,7 +145,7 @@ def compute_martingale(
             prev_trad = traditional_martingale[-1]
 
             # Update the traditional martingale using the betting function.
-            new_trad = betting_function(prev_trad, pvalue, epsilon)
+            new_trad = betting_function(prev_trad, pvalue)
 
             # Check if a change has been detected in the traditional martingale.
             detected_trad = False
@@ -208,7 +183,7 @@ def compute_martingale(
                     pred_pvalue = get_pvalue(pred_s_vals, random_state=random_state)
 
                     # Update the product factor.
-                    horizon_update_factor *= betting_function(1.0, pred_pvalue, epsilon)
+                    horizon_update_factor *= betting_function(1.0, pred_pvalue)
 
                 # Update the horizon martingale using the same previous traditional value.
                 new_horizon = prev_trad * horizon_update_factor
@@ -278,12 +253,14 @@ def multiview_martingale_test(
     data: List[List[Any]],
     predicted_data: List[List[np.ndarray]],
     threshold: float,
-    epsilon: float,
     history_size: int,
     window_size: Optional[int] = None,
     batch_size: int = 1000,
     random_state: Optional[int] = None,
-    betting_func: str = "power",
+    betting_func_config: BettingFunctionConfig = {
+        "name": "power",
+        "params": {"epsilon": 0.7},
+    },
     distance_measure: str = "euclidean",
     distance_p: float = 2.0,
 ) -> Dict[str, Any]:
@@ -296,30 +273,37 @@ def multiview_martingale_test(
          M_avg(n) = M_total(n) / d
     A change is declared if M_total(n) exceeds the threshold.
 
-    Reset Strategy:
-    - Traditional martingales reset to 1.0 immediately after total traditional martingale detects a change.
-    - Horizon martingales only reset when traditional martingale confirms a change.
-      This hybrid approach maintains the horizon martingales' predictive power while
-      preventing excessive consecutive detections.
+    Parameters
+    ----------
+    data : List[List[Any]]
+        List of feature sequences to monitor.
+    predicted_data : List[List[np.ndarray]]
+        List of predicted feature vectors for each feature.
+    threshold : float
+        Detection threshold (> 0). A change is reported if the martingale exceeds this value.
+    history_size : int
+        Minimum number of observations to accumulate before using predictions.
+    window_size : int, optional
+        Maximum number of recent observations to keep in the history window.
+    batch_size : int, optional
+        Size of batches for processing (default: 1000).
+    random_state : int, optional
+        Random seed for reproducibility.
+    betting_func_config : BettingFunctionConfig, optional
+        Configuration for the betting function.
+    distance_measure : str, optional
+        Distance metric to use for strangeness computation.
+    distance_p : float, optional
+        Order parameter for Minkowski distance.
 
-    Returns a dictionary with:
-      - "traditional_change_points": List[int] indices where the aggregated traditional martingale exceeded the threshold.
-      - "horizon_change_points": List[int] indices where the aggregated horizon martingale exceeded the threshold.
-      - "traditional_sum_martingales": Time series of the sum (over features) of traditional martingale values.
-      - "traditional_avg_martingales": Time series of the average (over features) of traditional martingale values.
-      - "horizon_sum_martingales": Time series of the sum (over features) of horizon martingale values.
-      - "horizon_avg_martingales": Time series of the average (over features) of horizon martingale values.
-      - "individual_traditional_martingales": List of individual traditional martingale series per feature.
-      - "individual_horizon_martingales": List of individual horizon martingale series per feature.
+    Returns
+    -------
+    Dict[str, Any]
+        A dictionary with change points and martingale values.
     """
 
-    # Get the betting function implementation
-    if betting_func not in BETTING_FUNCTIONS:
-        raise ValueError(
-            f"Unknown betting function '{betting_func}'. "
-            f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
-        )
-    betting_function = BETTING_FUNCTIONS[betting_func]
+    # Get the betting function with its configuration
+    betting_function = get_betting_function(betting_func_config)
 
     logger.debug("Multiview Martingale Input Dimensions:")
     logger.debug(f"  Number of features: {len(data)}")
@@ -336,19 +320,17 @@ def multiview_martingale_test(
     if not data or not data[0]:
         logger.error("Empty data sequence provided")
         raise ValueError("Empty data sequence")
-    if not 0 < epsilon < 1:
-        logger.error(f"Invalid epsilon value: {epsilon}")
-        raise ValueError("Epsilon must be in (0,1)")
     if threshold <= 0:
         logger.error(f"Invalid threshold value: {threshold}")
         raise ValueError("Threshold must be positive")
 
+    logger.debug(
+        f"Starting multiview martingale test with {len(data)} features, num_samples={len(data[0])}, threshold={threshold}"
+    )
+
     # ------- Initialize Storage -------
     num_features = len(data)
     num_samples = len(data[0])
-    logger.debug(
-        f"Starting multiview martingale test with {num_features} features, num_samples={num_samples}, threshold={threshold}, epsilon={epsilon}"
-    )
 
     # Initialize per-feature history windows and individual traditional martingale series.
     windows = [[] for _ in range(num_features)]
@@ -405,7 +387,7 @@ def multiview_martingale_test(
 
                 # Update the traditional martingale using the betting function.
                 prev_val = traditional_martingales[j][-1]
-                new_val = betting_function(prev_val, pv, epsilon)
+                new_val = betting_function(prev_val, pv)
                 new_traditional.append(new_val)
 
             # Aggregate the traditional martingale values.
@@ -445,7 +427,7 @@ def multiview_martingale_test(
                                 p=distance_p,
                             )
                             pred_pv = get_pvalue(pred_s_val, random_state=random_state)
-                            horizon_factor *= betting_function(1.0, pred_pv, epsilon)
+                            horizon_factor *= betting_function(1.0, pred_pv)
 
                     # Update horizon martingale value using traditional previous value
                     new_horizon_val = (

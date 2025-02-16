@@ -84,10 +84,9 @@ class TestChangePointDetection:
         cpd = ChangePointDetector(
             martingale_method="multiview",
             threshold=60.0,
-            epsilon=0.7,
             max_window=None,
             random_state=42,
-            betting_func="power",
+            betting_func_config={"name": "power", "params": {"epsilon": 0.7}},
         )
         multiview_result = cpd.run(
             data=data,
@@ -150,9 +149,9 @@ class TestChangePointDetection:
         cpd = ChangePointDetector(
             martingale_method="multiview",
             threshold=100.0,
-            epsilon=0.7,
             max_window=None,
             random_state=42,
+            betting_func_config={"name": "power", "params": {"epsilon": 0.7}},
         )
         multiview_result = cpd.run(
             data=data,
@@ -204,9 +203,9 @@ class TestChangePointDetection:
         cpd = ChangePointDetector(
             martingale_method="multiview",
             threshold=60.0,
-            epsilon=0.7,
             max_window=None,
             random_state=42,
+            betting_func_config={"name": "power", "params": {"epsilon": 0.7}},
         )
         multiview_result = cpd.run(
             data=data,
@@ -257,20 +256,22 @@ class TestChangePointDetection:
         data = np.array(features_numeric)
 
         # Test different parameter combinations
-        cpd = ChangePointDetector(
-            martingale_method="multiview",
-            threshold=60.0,
-            epsilon=0.7,
-            max_window=None,
-            random_state=42,
-        )
         thresholds = [20.0, 60.0, 100.0]
         epsilons = [0.3, 0.7, 0.9]
 
         for threshold in thresholds:
             for epsilon in epsilons:
-                cpd.threshold = threshold
-                cpd.epsilon = epsilon
+                # Create detector with current parameters
+                cpd = ChangePointDetector(
+                    martingale_method="multiview",
+                    threshold=threshold,
+                    max_window=None,
+                    random_state=42,
+                    betting_func_config={
+                        "name": "power",
+                        "params": {"epsilon": epsilon},
+                    },
+                )
                 result = cpd.run(
                     data=data,
                     predicted_data=None,
