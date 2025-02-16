@@ -106,27 +106,47 @@ class ChangePointDetector:
         logger.debug("-" * 50)
 
         if self.method == "single_view":
-            return self.detect_changes(
-                data=data,
-                predicted_data=predicted_data,
+            if data.size == 0:
+                raise ValueError("Empty data sequence")
+
+            # Convert predicted_data to list-of-lists if provided
+            pred_data_list = (
+                predicted_data.tolist() if predicted_data is not None else None
+            )
+
+            # Call the compute_martingale function
+            results = compute_martingale(
+                data=data.tolist(),
+                predicted_data=pred_data_list,
                 threshold=self.threshold,
                 epsilon=self.epsilon,
                 history_size=self.history_size,
                 reset=self.reset,
-                max_window=self.max_window,
+                window_size=self.max_window,
                 random_state=self.random_state,
                 betting_func=self.betting_func,
                 distance_measure=self.distance_measure,
                 distance_p=self.distance_p,
             )
+
+            return {
+                "traditional_change_points": results["traditional_change_points"],
+                "horizon_change_points": results["horizon_change_points"],
+                "traditional_martingales": results["traditional_martingales"],
+                "horizon_martingales": results.get("horizon_martingales"),
+            }
+
         elif self.method == "multiview":
-            # Split each feature into a separate view for multiview detection.
+            # Split each feature into a separate view for multiview detection
             views = [data[:, i : i + 1] for i in range(data.shape[1])]
             logger.debug("Multiview Processing:")
             logger.debug(f"  Number of views: {len(views)}")
             logger.debug(f"  Each view shape (Tx1): {views[0].shape}")
 
-            # Split predicted features into views if available.
+            if not views:
+                raise ValueError("Data must be a non-empty list of views")
+
+            # Split predicted features into views if available
             predicted_views = None
             if predicted_data is not None:
                 predicted_views = [
@@ -138,142 +158,43 @@ class ChangePointDetector:
                 )
             logger.debug("-" * 50)
 
-            return self.detect_changes_multiview(
-                data=views,
-                predicted_data=predicted_views,
+            # Convert data to list format
+            data_lists = [view.tolist() for view in views]
+            pred_data_lists = (
+                [view.tolist() for view in predicted_views]
+                if predicted_views is not None
+                else None
+            )
+
+            # Call the multiview martingale test function
+            results = multiview_martingale_test(
+                data=data_lists,
+                predicted_data=pred_data_lists,
                 threshold=self.threshold,
                 epsilon=self.epsilon,
                 history_size=self.history_size,
-                max_window=self.max_window,
+                window_size=self.max_window,
                 batch_size=self.batch_size,
                 random_state=self.random_state,
                 betting_func=self.betting_func,
                 distance_measure=self.distance_measure,
                 distance_p=self.distance_p,
             )
+
+            return {
+                "traditional_change_points": results["traditional_change_points"],
+                "horizon_change_points": results["horizon_change_points"],
+                "traditional_sum_martingales": results["traditional_sum_martingales"],
+                "traditional_avg_martingales": results["traditional_avg_martingales"],
+                "horizon_sum_martingales": results["horizon_sum_martingales"],
+                "horizon_avg_martingales": results["horizon_avg_martingales"],
+                "individual_traditional_martingales": results[
+                    "individual_traditional_martingales"
+                ],
+                "individual_horizon_martingales": results[
+                    "individual_horizon_martingales"
+                ],
+            }
+
         else:
             raise ValueError(f"Invalid method: {self.method}")
-
-    def detect_changes(
-        self,
-        data: np.ndarray,
-        predicted_data: Optional[np.ndarray] = None,
-        threshold: float = 60.0,
-        epsilon: float = 0.7,
-        history_size: int = 10,
-        reset: bool = True,
-        max_window: Optional[int] = None,
-        random_state: Optional[int] = None,
-        betting_func: Optional[
-            Callable[[float, float, float], float]
-        ] = power_martingale,
-        distance_measure: str = "euclidean",
-        distance_p: float = 2.0,
-    ) -> Dict[str, Any]:
-        """Detect change points in single-view sequential data."""
-        logger.debug("Single-view Detection:")
-        logger.debug(f"  Input sequence shape: {data.shape}")
-        if predicted_data is not None:
-            logger.debug(f"  Predicted sequence shape: {predicted_data.shape}")
-        logger.debug(f"  History size: {history_size}")
-        logger.debug(f"  Window size: {max_window if max_window else 'None'}")
-        logger.debug("-" * 50)
-
-        if data.size == 0:
-            raise ValueError("Empty data sequence")
-
-        # Convert predicted_data to list-of-lists if provided.
-        pred_data_list = predicted_data.tolist() if predicted_data is not None else None
-
-        # Call the compute_martingale function.
-        results = compute_martingale(
-            data=data.tolist(),
-            predicted_data=pred_data_list,
-            threshold=threshold,
-            epsilon=epsilon,
-            history_size=history_size,
-            reset=reset,
-            window_size=max_window,
-            random_state=random_state,
-            betting_func=betting_func,
-            distance_measure=distance_measure,
-            distance_p=distance_p,
-        )
-
-        # Return only the keys that were output from the martingale function.
-        return {
-            "traditional_change_points": results["traditional_change_points"],
-            "horizon_change_points": results["horizon_change_points"],
-            "traditional_martingales": results["traditional_martingales"],
-            "horizon_martingales": results.get("horizon_martingales"),
-        }
-
-    def detect_changes_multiview(
-        self,
-        data: List[np.ndarray],
-        predicted_data: Optional[List[np.ndarray]] = None,
-        threshold: float = 60.0,
-        epsilon: float = 0.7,
-        history_size: int = 10,
-        max_window: Optional[int] = None,
-        batch_size: Optional[int] = 1000,
-        random_state: Optional[int] = None,
-        betting_func: Optional[
-            Callable[[float, float, float], float]
-        ] = power_martingale,
-        distance_measure: str = "euclidean",
-        distance_p: float = 2.0,
-    ) -> Dict[str, Any]:
-        """Detect change points in multiview sequential data."""
-        logger.debug("Multiview Detection Processing:")
-        logger.debug(f"  Number of views: {len(data)}")
-        logger.debug(f"  Each view shape: {data[0].shape}")
-        if predicted_data:
-            logger.debug(f"  Number of predicted views: {len(predicted_data)}")
-            logger.debug(f"  Each predicted view shape: {predicted_data[0].shape}")
-        logger.debug(f"  History size: {history_size}")
-        logger.debug(f"  Window size: {max_window if max_window else 'None'}")
-        logger.debug(f"  Batch size: {batch_size}")
-        logger.debug("-" * 50)
-
-        if not isinstance(data, list) or len(data) == 0:
-            raise ValueError("Data must be a non-empty list of views")
-
-        # Convert each view's data to list format.
-        data_lists = [view.tolist() for view in data]
-
-        # Convert predicted data if provided.
-        pred_data_lists = (
-            [view.tolist() for view in predicted_data]
-            if predicted_data is not None
-            else None
-        )
-
-        # Call the multiview martingale test function.
-        results = multiview_martingale_test(
-            data=data_lists,
-            predicted_data=pred_data_lists,
-            threshold=threshold,
-            epsilon=epsilon,
-            history_size=history_size,
-            window_size=max_window,
-            batch_size=batch_size,
-            random_state=random_state,
-            betting_func=betting_func,
-            distance_measure=distance_measure,
-            distance_p=distance_p,
-        )
-
-        # Return only the keys that were output from the multiview martingale function.
-        return {
-            "traditional_change_points": results["traditional_change_points"],
-            "horizon_change_points": results["horizon_change_points"],
-            "traditional_sum_martingales": results["traditional_sum_martingales"],
-            "traditional_avg_martingales": results["traditional_avg_martingales"],
-            "horizon_sum_martingales": results["horizon_sum_martingales"],
-            "horizon_avg_martingales": results["horizon_avg_martingales"],
-            "individual_traditional_martingales": results[
-                "individual_traditional_martingales"
-            ],
-            "individual_horizon_martingales": results["individual_horizon_martingales"],
-        }

@@ -81,13 +81,17 @@ class TestChangePointDetection:
         data = np.array(features_numeric)
 
         # Run detector
-        cpd = ChangePointDetector()
-        multiview_result = cpd.detect_changes_multiview(
-            data=[data[:, i : i + 1] for i in range(data.shape[1])],
+        cpd = ChangePointDetector(
+            martingale_method="multiview",
             threshold=60.0,
             epsilon=0.7,
             max_window=None,
             random_state=42,
+            betting_func="power",
+        )
+        multiview_result = cpd.run(
+            data=data,
+            predicted_data=None,
         )
 
         # Verify results
@@ -143,13 +147,16 @@ class TestChangePointDetection:
         data = np.array(features_numeric)
 
         # Run detector with high threshold to avoid false positives
-        cpd = ChangePointDetector()
-        multiview_result = cpd.detect_changes_multiview(
-            data=[data[:, i : i + 1] for i in range(data.shape[1])],
-            threshold=100.0,  # High threshold
+        cpd = ChangePointDetector(
+            martingale_method="multiview",
+            threshold=100.0,
             epsilon=0.7,
             max_window=None,
             random_state=42,
+        )
+        multiview_result = cpd.run(
+            data=data,
+            predicted_data=None,
         )
 
         # Verify results
@@ -194,13 +201,16 @@ class TestChangePointDetection:
         data = np.array(features_numeric)
 
         # Run detector
-        cpd = ChangePointDetector()
-        multiview_result = cpd.detect_changes_multiview(
-            data=[data[:, i : i + 1] for i in range(data.shape[1])],
+        cpd = ChangePointDetector(
+            martingale_method="multiview",
             threshold=60.0,
             epsilon=0.7,
             max_window=None,
             random_state=42,
+        )
+        multiview_result = cpd.run(
+            data=data,
+            predicted_data=None,
         )
 
         # Verify results
@@ -247,18 +257,23 @@ class TestChangePointDetection:
         data = np.array(features_numeric)
 
         # Test different parameter combinations
-        cpd = ChangePointDetector()
+        cpd = ChangePointDetector(
+            martingale_method="multiview",
+            threshold=60.0,
+            epsilon=0.7,
+            max_window=None,
+            random_state=42,
+        )
         thresholds = [20.0, 60.0, 100.0]
         epsilons = [0.3, 0.7, 0.9]
 
         for threshold in thresholds:
             for epsilon in epsilons:
-                result = cpd.detect_changes_multiview(
-                    data=[data[:, i : i + 1] for i in range(data.shape[1])],
-                    threshold=threshold,
-                    epsilon=epsilon,
-                    max_window=None,
-                    random_state=42,
+                cpd.threshold = threshold
+                cpd.epsilon = epsilon
+                result = cpd.run(
+                    data=data,
+                    predicted_data=None,
                 )
 
                 # Basic checks
