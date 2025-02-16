@@ -1,3 +1,5 @@
+# tests/test_changepoint/test_detector.py
+
 """Tests for change point detection using the martingale framework.
 
 This module contains comprehensive tests for the change point detector,

@@ -1,3 +1,5 @@
+# tests/test_changepoint/test_strangeness.py
+
 """Tests for strangeness computation in the changepoint detection module.
 
 This module contains comprehensive tests for strangeness measures and p-value

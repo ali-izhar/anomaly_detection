@@ -1,3 +1,5 @@
+# tests/test_changepoint/test_martingale.py
+
 """Tests for martingale computation in change point detection.
 
 This module contains comprehensive tests for both single-view and multiview

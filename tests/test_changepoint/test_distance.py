@@ -1,3 +1,5 @@
+# tests/test_changepoint/test_distance.py
+
 """Tests for distance computation utilities in the changepoint detection module.
 
 This module contains comprehensive tests for all distance metrics and their

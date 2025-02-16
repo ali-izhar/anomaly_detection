@@ -2,18 +2,44 @@
 
 """Threshold-based classifier for change point detection in graph sequences.
 
-This module defines:
-1. A simple classifier that uses a fixed decision rule:
-    y = 1[sum_i x_i > τ]
-   where x_i are the feature values and τ is the decision threshold.
+This module implements a threshold-based classifier for detecting change points in
+graph sequences using a fixed decision rule. The classifier is designed to work with
+both single-view and multiview martingale sequences and provides SHAP-based
+explanations for detected changes.
 
-2. SHAP analysis functionality to explain:
-   - Which features contribute most to detected changes
-   - How martingale values from different features influence detection
+Mathematical Framework:
+---------------------
+1. Decision Rule:
+   For a feature vector x ∈ ℝᵈ, the classifier predicts:
+   y = 1[∑ᵢ xᵢ > τ]
+   where τ is the decision threshold.
+
+2. Probability Estimation:
+   P(change) = ∑ᵢ xᵢ / (∑ᵢ xᵢ + τ)
+   This provides a continuous score in [0,1] for SHAP analysis.
+
+3. SHAP Analysis:
+   - Feature-level: Which graph properties contribute to changes
+   - Martingale-level: How different views influence detection
+
+Properties:
+----------
+1. Interpretable decision boundary
+2. Fast computation (linear in feature dimension)
+3. No parameter estimation required
+4. Compatible with scikit-learn API
+5. Supports both hard and soft predictions
+
+References:
+----------
+[1] Lundberg, S. M., & Lee, S. I. (2017). "A Unified Approach to Interpreting Model
+    Predictions." Advances in Neural Information Processing Systems 30.
+[2] Ribeiro, M. T., et al. (2016). "Why Should I Trust You?: Explaining the
+    Predictions of Any Classifier." KDD '16.
 """
 
-from typing import List, Dict, Any, Tuple
-
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
 import logging
 import numpy as np
 import shap
@@ -24,7 +50,7 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 logger = logging.getLogger(__name__)
 
-# Fixed feature order for consistent visualization
+# Define a fixed feature order for consistent visualization and analysis in SHAP plots.
 FEATURE_ORDER = [
     "degree",
     "density",
@@ -37,182 +63,209 @@ FEATURE_ORDER = [
 ]
 
 
-class CustomThresholdModel(BaseEstimator, ClassifierMixin):
-    """Threshold-based classifier for change point detection in graph sequences.
+@dataclass(frozen=True)
+class ShapConfig:
+    """Configuration for SHAP analysis.
 
-    This classifier uses a simple fixed-threshold rule applied to the sum of features.
-    It predicts a change (label 1) if the sum of feature values is greater than the threshold,
-    and no change (label 0) otherwise. It is also designed for SHAP analysis.
+    Attributes:
+        window_size: Size of window around change points for labeling.
+        test_size: Proportion of data to use for testing.
+        random_state: Random seed for reproducibility.
+        use_probabilities: Whether to analyze probability outputs (via predict_proba).
+        positive_class: Whether to analyze positive class predictions.
+    """
+
+    window_size: int = 5
+    test_size: float = 0.2
+    random_state: int = 42
+    use_probabilities: bool = False
+    positive_class: bool = True
+
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.window_size < 1:
+            raise ValueError(f"window_size must be positive, got {self.window_size}")
+        if not 0 < self.test_size < 1:
+            raise ValueError(f"test_size must be in (0,1), got {self.test_size}")
+
+
+class CustomThresholdModel(BaseEstimator, ClassifierMixin):
+    """Threshold-based classifier for change point detection.
+
+    This classifier implements a simple fixed-threshold rule:
+        y = 1[∑ᵢ xᵢ > τ]
+    where x are the input features and τ is the decision threshold.
+
+    The model is designed for:
+      1. Binary classification of change points.
+      2. Probability estimation for uncertain predictions.
+      3. SHAP-based feature importance analysis.
+      4. Martingale contribution analysis in multiview detection.
+
+    Mathematical Properties:
+    -------------------------
+      - Linear decision boundary in feature space.
+      - Monotonic in feature values.
+      - Scale-invariant threshold.
+      - Interpretable decision rule.
     """
 
     def __init__(self, threshold: float = 0.5) -> None:
-        """
-        Initialize the model with a decision threshold.
+        """Initialize the model with a decision threshold.
 
         Args:
-            threshold: The decision boundary τ. The model predicts:
-                - 1 (change) if sum_i x_i > τ
-                - 0 (no change) otherwise.
+            threshold: Decision boundary τ. Predicts change if ∑ᵢ xᵢ > τ.
 
         Raises:
             ValueError: If threshold is not positive.
         """
+        # Validate threshold: must be positive.
         if threshold <= 0:
             logger.error(f"Invalid threshold value: {threshold}")
             raise ValueError("Threshold must be positive")
         self.threshold = threshold
-        logger.debug(f"Initialized CustomThresholdModel with threshold={threshold}")
+        logger.debug(f"Initialized model with threshold={threshold}")
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "CustomThresholdModel":
-        """
-        Fit the model to the provided data.
+    def fit(
+        self, X: np.ndarray, y: np.ndarray, sample_weight: Optional[np.ndarray] = None
+    ) -> "CustomThresholdModel":
+        """Fit the model (stores dimensions for validation).
 
-        For this classifier, no parameter estimation is necessary because the decision rule
-        is fixed (i.e. y_hat = 1[sum_i x_i > τ]). This method only stores the input feature
-        dimensions and the class labels for compatibility with scikit-learn.
+        No parameter estimation is needed as the decision rule is fixed.
+        This method only validates and stores input dimensions.
 
         Args:
-            X: Feature matrix of shape [n_samples x n_features]
-            y: Binary labels (0: no change, 1: change)
+            X: Feature matrix [n_samples × n_features].
+            y: Binary labels (0: no change, 1: change).
+            sample_weight: Optional sample weights (not used).
 
         Returns:
-            self: Fitted model instance.
+            self: The fitted model.
         """
+        # Validate X and y using scikit-learn's utility.
         X, y = check_X_y(X, y, accept_sparse=False)
-        self.n_features_in_ = X.shape[1]  # Store number of input features.
-        self.classes_ = np.unique(y)  # Store unique class labels.
+        self.n_features_in_ = X.shape[
+            1
+        ]  # Store number of features for later validation.
+        self.classes_ = np.unique(y)  # Save unique classes.
         logger.info(f"Model fitted with {self.n_features_in_} features")
-        logger.debug(f"Unique classes: {self.classes_}")
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """
-        Predict change points using the fixed threshold rule.
+        """Predict change points using the threshold rule.
 
-        For each sample, the prediction is given by:
-            y_hat = 1 if sum(x_i) > τ else 0
+        Implements the decision rule:
+            y = 1[∑ᵢ xᵢ > τ]
 
         Args:
-            X: Feature matrix of shape [n_samples x n_features]
+            X: Feature matrix [n_samples × n_features].
 
         Returns:
-            Binary predictions: An array of 0s and 1s.
+            Binary predictions (0: no change, 1: change).
 
         Raises:
-            ValueError: If X does not have the expected number of features.
+            ValueError: If X has wrong dimensions.
         """
-        check_is_fitted(self, ["n_features_in_", "classes_"])
+        check_is_fitted(self)  # Ensure model has been fitted.
         X = check_array(X, accept_sparse=False)
+
+        # Validate that the input feature dimension matches that seen during fit.
         if X.shape[1] != self.n_features_in_:
-            logger.error(
-                f"Feature dimension mismatch: got {X.shape[1]}, expected {self.n_features_in_}"
-            )
             raise ValueError(
                 f"X has {X.shape[1]} features, expected {self.n_features_in_}"
             )
-        logger.debug(f"Making predictions for {X.shape[0]} samples")
-        # Sum features and compare against threshold.
+
+        # Sum features and apply threshold to determine change.
         predictions = (np.sum(X, axis=1) > self.threshold).astype(int)
         n_changes = np.sum(predictions)
-        logger.debug(
-            f"Predicted {n_changes} change points out of {len(predictions)} samples"
-        )
-        logger.debug(f"Change point ratio: {n_changes / len(predictions)}")
+        logger.debug(f"Predicted {n_changes}/{len(predictions)} changes")
         return predictions
 
     def predict_proba(self, X: np.ndarray, positive_class: bool = True) -> np.ndarray:
-        """
-        Compute change point probabilities.
+        """Compute change point probabilities.
 
-        This method computes a continuous probability of change using:
-            P(change) = sum(x_i) / (sum(x_i) + τ)
-        This continuous output is useful for SHAP analysis.
+        Uses the formula:
+            P(change) = ∑ᵢ xᵢ / (∑ᵢ xᵢ + τ)
 
         Args:
-            X: Feature matrix of shape [n_samples x n_features]
-            positive_class: If True, return P(change); if False, return P(no change)
+            X: Feature matrix [n_samples × n_features].
+            positive_class: If True, return P(change).
 
         Returns:
-            A probability array of shape [n_samples].
-
-        Raises:
-            ValueError: If X does not have the expected dimensions.
+            Probability array [n_samples].
         """
-        check_is_fitted(self, ["n_features_in_", "classes_"])
+        check_is_fitted(self)
         X = check_array(X, accept_sparse=False)
+
+        # Validate input dimensions.
         if X.shape[1] != self.n_features_in_:
-            logger.error(
-                f"Feature dimension mismatch: got {X.shape[1]}, expected {self.n_features_in_}"
-            )
             raise ValueError(
                 f"X has {X.shape[1]} features, expected {self.n_features_in_}"
             )
-        logger.debug(f"Computing probabilities for {X.shape[0]} samples")
-        sums = np.sum(X, axis=1)
-        # Compute probability of change.
+
+        sums = np.sum(X, axis=1)  # Sum over features for each sample.
+        # Calculate probability using the given formula.
         probs_change = sums / (sums + self.threshold)
-        # Return probability for the positive class if requested.
-        probs = probs_change if positive_class else 1 - probs_change
-        logger.debug(f"Average probability: {np.mean(probs)}")
-        return probs
+        return probs_change if positive_class else 1 - probs_change
 
     def compute_shap_values(
         self,
         X: np.ndarray,
         change_points: List[int],
         sequence_length: int,
-        window_size: int = 5,
-        test_size: float = 0.2,
-        random_state: int = 42,
-        probs: bool = False,
-        positive_class: bool = True,
+        config: Optional[ShapConfig] = None,
     ) -> np.ndarray:
-        """
-        Compute SHAP values to explain which features contribute to detected changes.
+        """Compute SHAP values for feature importance analysis.
 
-        This method creates binary labels around the provided change points and trains the model.
-        It then uses SHAP's KernelExplainer to compute SHAP values for the input feature matrix.
+        Creates binary labels around change points and uses SHAP's
+        KernelExplainer to compute feature contributions.
 
         Args:
-            X: Feature matrix [n_timesteps x n_features]
-            change_points: List of indices where a change point was detected.
-            sequence_length: Total length of the sequence.
-            window_size: Size of the window around change points to mark as positive.
-            test_size: Proportion of the data to use for testing.
-            random_state: Random seed.
-            probs: If True, compute SHAP values for the probability output.
-            positive_class: If True, return SHAP values for the positive class.
+            X: Feature matrix [n_samples × n_features].
+            change_points: Indices of detected changes.
+            sequence_length: Total sequence length.
+            config: SHAP analysis configuration.
 
         Returns:
-            SHAP values for the entire sequence.
+            SHAP values [n_samples × n_features].
         """
-        # Create binary labels: mark a window around each change point as positive.
+        config = config or ShapConfig()
+
+        # Create binary labels where a window around each change point is marked as 1.
         y = np.zeros(sequence_length)
         for cp in change_points:
-            start_idx = max(0, cp - window_size)
-            end_idx = min(len(y), cp + window_size)
+            # Label a window around each change point.
+            start_idx = max(0, cp - config.window_size)
+            end_idx = min(len(y), cp + config.window_size)
             y[start_idx:end_idx] = 1
 
-        # Split data for training the model.
+        # Split the dataset for training and testing.
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
+            X, y, test_size=config.test_size, random_state=config.random_state
         )
+        # Fit the model on the training split.
         self.fit(X_train, y_train)
 
         try:
-            # Choose the explainer based on whether we want probabilities.
-            if probs:
-                explainer = shap.KernelExplainer(self.predict_proba, X_train)
-            else:
-                explainer = shap.KernelExplainer(self.predict, X_train)
+            # Choose the appropriate prediction function based on configuration.
+            predict_fn = (
+                self.predict_proba if config.use_probabilities else self.predict
+            )
+
+            # Use SHAP's KernelExplainer to compute SHAP values.
+            explainer = shap.KernelExplainer(predict_fn, X_train)
             shap_values = explainer.shap_values(X)
-            # If multiple classes, choose the appropriate one.
+
+            # If SHAP returns a list (one per class), select the desired class.
             if isinstance(shap_values, list):
-                shap_values = shap_values[1] if positive_class else shap_values[0]
+                shap_values = (
+                    shap_values[1] if config.positive_class else shap_values[0]
+                )
             return shap_values
+
         except Exception as e:
             logger.error(f"SHAP computation failed: {str(e)}")
-            # Return a dummy array on error.
+            # In case of failure, return a zero matrix.
             return np.zeros((len(X), X.shape[1]))
 
     def compute_martingale_shap_values(
@@ -220,32 +273,29 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
         martingales: Dict[str, Dict[str, Any]],
         change_points: List[int],
         sequence_length: int,
-        window_size: int = 5,
+        config: Optional[ShapConfig] = None,
     ) -> Tuple[np.ndarray, List[str]]:
-        """
-        Compute SHAP values specifically for martingale values from different features.
+        """Compute SHAP values for martingale contributions.
 
-        This method converts the martingale dictionary into a feature matrix and computes
-        SHAP values to explain how each feature's martingale contributes to change detection.
+        Analyzes how different features' martingales influence
+        change point detection in multiview settings.
 
         Args:
-            martingales: Dictionary containing martingale values for each feature
-            change_points: True change point indices
-            sequence_length: Length of the sequence
-            window_size: Window size for SHAP computation
+            martingales: Martingale values per feature.
+            change_points: True change points.
+            sequence_length: Sequence length.
+            config: SHAP analysis configuration.
 
         Returns:
-            tuple: (shap_values, feature_names)
-                - shap_values: numpy.ndarray of shape [n_timesteps x n_features]
-                - feature_names: list of feature names in order matching shap_values columns
+            Tuple of (SHAP values, feature names).
         """
-        # Convert martingale values to feature matrix with consistent ordering
+        # Convert the martingales dictionary into a feature matrix.
         feature_matrix = []
-        feature_names = []  # Keep track of which features were actually found
+        feature_names = []
 
         for feature in FEATURE_ORDER:
+            # Skip combined features and only process individual features.
             if feature in martingales and feature != "combined":
-                # Convert array of arrays to flat array
                 martingales_array = np.array(
                     [
                         x.item() if isinstance(x, np.ndarray) else x
@@ -256,45 +306,38 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
                 feature_names.append(feature)
 
         if not feature_matrix:
-            logger.error("No valid features found in martingales dictionary")
-            raise ValueError("No valid features found in martingales dictionary")
+            raise ValueError("No valid features in martingales dictionary")
 
-        X = np.vstack(feature_matrix).T  # [n_timesteps x n_features]
+        # Stack features column-wise to form a 2D matrix.
+        X = np.vstack(feature_matrix).T
 
-        # Compute SHAP values using the base method
+        # Compute SHAP values using the previously defined method.
         shap_values = self.compute_shap_values(
             X=X,
             change_points=change_points,
             sequence_length=sequence_length,
-            window_size=window_size,
+            config=config,
         )
 
         return shap_values, feature_names
 
     def get_feature_importances(self) -> np.ndarray:
-        """
-        Get feature importances for SHAP analysis.
-        Here, all features are considered equally important.
-        """
+        """Get uniform feature importances for SHAP analysis."""
+        check_is_fitted(self)
+        # Return equal importance for all features (since no training is done).
         return np.ones(self.n_features_in_) / self.n_features_in_
 
     def score(self, X: np.ndarray, y: np.ndarray) -> float:
-        """
-        Compute classification accuracy of change point predictions.
-
-        Accuracy is defined as (TP + TN) / n_samples.
+        """Compute classification accuracy.
 
         Args:
-            X: Feature matrix [n_samples x n_features]
-            y: True binary labels.
+            X: Feature matrix.
+            y: True labels.
 
         Returns:
-            Accuracy in [0,1].
+            Accuracy score in [0,1].
         """
-        logger.debug(f"Computing score for {len(X)} samples")
-        accuracy = np.mean(self.predict(X) == y)
-        logger.info(f"Model accuracy: {accuracy}")
-        return accuracy
+        return np.mean(self.predict(X) == y)
 
     def get_params(self, deep: bool = True) -> dict:
         """Get model parameters for scikit-learn compatibility."""
