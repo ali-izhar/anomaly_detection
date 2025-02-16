@@ -1,6 +1,6 @@
-# examples/network_visualization.py
+# tests/test_graph/test_network_vis.py
 
-"""Example script demonstrating network generation and visualization for different models."""
+"""Demonstrating network generation and visualization for different models."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ import sys
 import argparse
 import matplotlib.pyplot as plt
 
-project_root = str(Path(__file__).parent.parent)
+project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -54,7 +54,7 @@ def get_full_model_name(alias: str) -> str:
     return REVERSE_ALIASES.get(alias, alias)
 
 
-def visualize_network(model_alias: str, output_dir: str = "examples"):
+def visualize_network(model_alias: str, output_dir: str = "tests/test_graph/output"):
     """Generate and visualize a network model.
 
     Args:
@@ -115,8 +115,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        default="examples",
-        help="Directory to save visualizations (default: examples)",
+        default="tests/test_graph/output",
+        help="Directory to save visualizations (default: tests/test_graph/output)",
     )
 
     args = parser.parse_args()

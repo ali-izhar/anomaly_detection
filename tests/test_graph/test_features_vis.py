@@ -1,13 +1,13 @@
-# examples/feature_visualization.py
+# tests/test_graph/test_features_vis.py
 
-"""Example script demonstrating network evolution and feature dynamics visualization."""
+"""Demonstrating network evolution and feature dynamics visualization."""
 
 import os
 import sys
 import argparse
 from pathlib import Path
 
-project_root = str(Path(__file__).parent.parent)
+project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -42,7 +42,9 @@ def calculate_block_sizes(n: int, num_blocks: int) -> list:
     return sizes
 
 
-def visualize_network_evolution(model_alias: str, output_dir: str = "examples"):
+def visualize_network_evolution(
+    model_alias: str, output_dir: str = "tests/test_graph/output"
+):
     """Generate and visualize network evolution with features."""
     # Get full model name for config loading
     model_name = get_full_model_name(model_alias)
@@ -132,8 +134,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        default="examples",
-        help="Directory to save visualizations (default: examples)",
+        default="tests/test_graph/output",
+        help="Directory to save visualizations (default: tests/test_graph/output)",
     )
 
     args = parser.parse_args()

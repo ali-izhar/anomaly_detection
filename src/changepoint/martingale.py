@@ -231,16 +231,13 @@ def compute_martingale(
             new_horizon = None
             if predicted_data is not None and i >= config.history_size:
                 pred_idx = i - config.history_size
-                horizon_update_factor = 1.0
-
-                # Process each predicted future state (horizon).
-                for h in range(len(predicted_data[pred_idx])):
+                for j in range(len(predicted_data[pred_idx])):
                     if len(state.window) == 0:
                         pred_s_vals = [0.0]
                     else:
                         # Reshape the window data and prediction to 2D arrays
                         window_data = np.array(state.window).reshape(-1, 1)
-                        pred_data = np.array(predicted_data[pred_idx][h]).reshape(1, -1)
+                        pred_data = np.array(predicted_data[pred_idx][j]).reshape(1, -1)
                         pred_s_vals = strangeness_point(
                             np.vstack([window_data, pred_data]),
                             config=config.strangeness_config,
@@ -248,7 +245,7 @@ def compute_martingale(
                     pred_pvalue = get_pvalue(
                         pred_s_vals, random_state=config.random_state
                     )
-                    horizon_update_factor *= betting_function(1.0, pred_pvalue)
+                    horizon_update_factor = betting_function(1.0, pred_pvalue)
 
                 new_horizon = prev_trad * horizon_update_factor
                 if new_horizon > config.threshold:
@@ -473,9 +470,11 @@ def multiview_martingale_test(
 
             # Process each sample in the current batch.
             for i in range(idx, batch_end):
+                # Store previous traditional values before ANY updates
+                prev_traditional_t_minus_1 = state.traditional_martingales.copy()
                 new_traditional = []
 
-                # Update traditional martingale for each feature.
+                # Update traditional martingale for each feature using M_{t-1}
                 for j in range(num_features):
                     # Maintain rolling window for feature j if window_size is specified.
                     if (
@@ -488,7 +487,6 @@ def multiview_martingale_test(
                     if not state.windows[j]:
                         s_vals = [0.0]
                     else:
-                        # Reshape the window data to 2D array (n_samples, 1)
                         window_data = np.array(state.windows[j] + [data[j][i]]).reshape(
                             -1, 1
                         )
@@ -496,37 +494,43 @@ def multiview_martingale_test(
                             window_data,
                             config=config.strangeness_config,
                         )
-                    # Compute p-value and update traditional martingale for feature j.
+                    # Compute p-value and update traditional martingale for feature j using M_{t-1}
                     pv = get_pvalue(s_vals, random_state=config.random_state)
-                    prev_val = state.traditional_martingales[j]
+                    prev_val = prev_traditional_t_minus_1[j]  # Use M_{t-1}
                     new_val = betting_function(prev_val, pv)
                     new_traditional.append(new_val)
 
-                # Aggregate traditional martingale values across all features.
+                # Aggregate traditional martingale values across all features
                 total_traditional = sum(new_traditional)
                 avg_traditional = total_traditional / num_features
                 state.traditional_sum.append(total_traditional)
                 state.traditional_avg.append(avg_traditional)
 
-                # Update individual traditional martingales history for each feature.
+                # Update individual traditional martingales history for each feature
                 for j in range(num_features):
                     state.traditional_martingales[j] = new_traditional[j]
                     state.individual_traditional[j].append(new_traditional[j])
 
-                # Update horizon martingale if predicted data is available.
+                # Update horizon martingale if predictions are available
                 new_horizon = []
                 if predicted_data is not None and i >= config.history_size:
                     pred_idx = i - config.history_size
                     for j in range(num_features):
-                        prev_trad = state.traditional_martingales[j]
-                        horizon_factor = 1.0
+                        # Use M_{t-1} for horizon computation
+                        prev_trad = prev_traditional_t_minus_1[j]  # Use M_{t-1}
 
-                        # Process each horizon prediction for feature j.
+                        # Initialize list to store horizon betting factors
+                        horizon_factors = []
+                        total_weight = 0.0
+                        decay_rate = -0.3  # Exponential decay rate for horizon weights
+
+                        # Process each horizon prediction for feature j
                         for h in range(num_horizons):
                             if not state.windows[j]:
-                                continue
+                                # After reset, set horizon value to 1.0
+                                new_horizon_val = 1.0
+                                break
                             else:
-                                # Reshape the window data and prediction to 2D arrays
                                 window_data = np.array(state.windows[j]).reshape(-1, 1)
                                 pred_data = np.array(
                                     predicted_data[j][pred_idx][h]
@@ -538,41 +542,84 @@ def multiview_martingale_test(
                                 pred_pv = get_pvalue(
                                     pred_s_val, random_state=config.random_state
                                 )
-                                horizon_factor *= betting_function(1.0, pred_pv)
-                        new_horizon_val = prev_trad * horizon_factor
+                                # Store individual betting factors
+                                factor = betting_function(1.0, pred_pv)
+                                weight = np.exp(
+                                    decay_rate * h
+                                )  # Earlier horizons get more weight
+                                horizon_factors.append((factor, weight))
+                                total_weight += weight
+
+                        # Compute weighted geometric mean of horizon factors
+                        if len(state.windows[j]) > 0 and horizon_factors:
+                            # Center factors around 1.0 to prevent aggressive growth
+                            centered_factors = [
+                                (f - 1.0, w) for f, w in horizon_factors
+                            ]
+
+                            # Compute weighted average of centered factors
+                            avg_factor = (
+                                sum(f * w for f, w in centered_factors) / total_weight
+                            )
+
+                            # Map back to multiplicative space and apply mild dampening
+                            horizon_factor = np.exp(avg_factor)
+
+                            # Add consistency bonus if all factors suggest change
+                            if all(f > 1.1 for f, _ in horizon_factors):
+                                horizon_factor *= (
+                                    1.15  # 15% boost for consistent signals
+                                )
+
+                            # Limit growth to 2.5x the previous value
+                            horizon_factor = min(horizon_factor, 2.5)
+
+                            # Compute final horizon value using previous traditional
+                            new_horizon_val = prev_trad * horizon_factor
+                        else:
+                            new_horizon_val = 1.0  # Reset case
                         new_horizon.append(new_horizon_val)
 
-                    # Aggregate horizon martingale values.
-                    total_horizon = sum(new_horizon)
-                    avg_horizon = total_horizon / num_features
-                    state.horizon_sum.append(total_horizon)
-                    state.horizon_avg.append(avg_horizon)
+                # Aggregate horizon martingale values
+                total_horizon = sum(new_horizon)
+                avg_horizon = total_horizon / num_features
+                state.horizon_sum.append(total_horizon)
+                state.horizon_avg.append(avg_horizon)
 
-                    # Check for horizon martingale detection.
-                    if total_horizon > config.threshold:
-                        logger.info(
-                            f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold}"
-                        )
-                        state.horizon_change_points.append(i)
-                else:
-                    # If no predicted data, default horizon equals traditional.
-                    total_horizon = total_traditional
-                    avg_horizon = avg_traditional
-                    state.horizon_sum.append(total_horizon)
-                    state.horizon_avg.append(avg_horizon)
+                # Record horizon detection (but don't reset)
+                if total_horizon > config.threshold:
+                    logger.info(
+                        f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold}"
+                    )
+                    state.horizon_change_points.append(i)
 
-                # Handle reset logic if traditional martingale exceeds threshold.
+                # Handle reset logic - only reset on traditional martingale detection
                 if total_traditional > config.threshold:
                     logger.info(
                         f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
                     )
                     state.traditional_change_points.append(i)
+
+                    # Save detection values before reset
+                    for j in range(num_features):
+                        # Save the detection values
+                        state.individual_traditional[j].append(new_traditional[j])
+                        if new_horizon:
+                            state.individual_horizon[j].append(new_horizon[j])
+                        else:
+                            state.individual_horizon[j].append(new_traditional[j])
+
+                    # Reset state
                     state.reset(num_features)
                 else:
-                    # No detection: update each feature's window and horizon martingale history.
+                    # No detection: update windows and continue martingale sequences
                     for j in range(num_features):
                         state.windows[j].append(data[j][i])
+
                         if predicted_data is not None and i >= config.history_size:
+                            # Update running values
+                            state.horizon_martingales[j] = new_horizon[j]
+                            # Save to history
                             if len(state.individual_horizon) <= j:
                                 state.individual_horizon.append([])
                             state.individual_horizon[j].append(new_horizon[j])

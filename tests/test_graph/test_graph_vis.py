@@ -1,4 +1,4 @@
-# tests/test_graph_visualization.py
+# tests/test_graph/test_graph_vis.py
 
 """
 Test the visualization module.
@@ -23,7 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Add project root to Python path
-project_root = str(Path(__file__).parent.parent)
+project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 

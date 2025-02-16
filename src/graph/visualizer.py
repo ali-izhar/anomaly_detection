@@ -427,6 +427,12 @@ class NetworkVisualizer:
                 feature_name=feature_name,
             )
 
+            # Hide x-axis label for all plots except those in the last row
+            if i < n_features and i < len(axes):
+                is_bottom_row = i >= len(axes) - n_cols
+                if not is_bottom_row:
+                    axes[i].set_xlabel("")
+
         # Remove empty subplots
         for i in range(n_features, len(axes)):
             fig.delaxes(axes[i])

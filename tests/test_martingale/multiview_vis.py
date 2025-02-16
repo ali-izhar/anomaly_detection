@@ -1,12 +1,10 @@
-# examples/martingale_singleview_visualization.py
+# tests/test_martingale/multiview_vis.py
 
-"""Visualize single-view martingale-based change detection on network sequences.
+"""Visualize multiview martingale-based change detection on network sequences.
 Usage:
-    python examples/martingale_singleview_visualization.py ba
-    python examples/martingale_singleview_visualization.py ws
-    python examples/martingale_singleview_visualization.py er
-    python examples/martingale_singleview_visualization.py sbm
+    python tests/test_martingale/multiview_vis.py <model>
 """
+
 
 from pathlib import Path
 import sys
@@ -17,20 +15,31 @@ import matplotlib.pyplot as plt
 import numpy as np
 import networkx as nx
 import seaborn as sns
+
 from matplotlib.gridspec import GridSpec
 
-project_root = str(Path(__file__).parent.parent)
+project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.changepoint.pipeline import MartingalePipeline
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
 from src.graph.visualizer import NetworkVisualizer
+from src.changepoint.detector import ChangePointDetector, DetectorConfig
+from src.graph.features import NetworkFeatureExtractor
+from src.graph.utils import adjacency_to_graph
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# Paper-style figure sizes (in inches)
+SINGLE_COLUMN_WIDTH = 8.0
+DOUBLE_COLUMN_WIDTH = 12.0
+STANDARD_HEIGHT = 6.0
+TITLE_SIZE = 14
+LABEL_SIZE = 12
+TICK_SIZE = 10
 
 
 def get_full_model_name(alias: str) -> str:
@@ -49,7 +58,7 @@ def visualize_network_states(
     graphs: list,
     true_change_points: list,
     detected_change_points: list,
-    output_dir: str = "examples",
+    output_dir: str = "tests/test_martingale/output",
 ):
     """Create visualizations of network states at key points."""
     os.makedirs(output_dir, exist_ok=True)
@@ -64,11 +73,11 @@ def visualize_network_states(
     fig, axes = plt.subplots(
         n_points,
         2,
-        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+        figsize=(SINGLE_COLUMN_WIDTH, STANDARD_HEIGHT * n_points / 2),
     )
     fig.suptitle(
         f"{model_name.replace('_', ' ').title()} Network States",
-        fontsize=viz.TITLE_SIZE,
+        fontsize=TITLE_SIZE,
         y=0.98,
     )
 
@@ -126,18 +135,15 @@ def visualize_network_states(
     plt.close()
 
 
-def visualize_results(
+def visualize_feature_evolution(
     model_name: str,
-    graphs: list,
     features_raw: list,
     true_change_points: list,
     detected_change_points: list,
-    feature_results: dict,
-    output_dir: str = "examples",
+    output_dir: str = "tests/test_martingale/output",
 ):
-    """Create visualizations of network states and features at key points."""
+    """Create visualization of feature evolution over time."""
     os.makedirs(output_dir, exist_ok=True)
-    viz = NetworkVisualizer()
 
     # Set paper-style parameters
     plt.style.use("seaborn-v0_8-paper")
@@ -145,20 +151,14 @@ def visualize_results(
     sns.set_context("paper", font_scale=1.0)
 
     # Special colors for indicators
-    line_colors = {
+    colors = {
         "actual": "#1f77b4",  # Blue
-        "predicted": "#ff7f0e",  # Orange
-        "threshold": "#666666",  # Gray
-        "changepoint": "#FF9999",  # Light red
+        "change_point": "#FF9999",  # Light red
+        "detected": "#ff7f0e",  # Orange
     }
 
-    # Create network state visualizations
-    visualize_network_states(
-        model_name, graphs, true_change_points, detected_change_points, output_dir
-    )
-
     # Create feature evolution visualization
-    fig = plt.figure(figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * 2))
+    fig = plt.figure(figsize=(SINGLE_COLUMN_WIDTH, STANDARD_HEIGHT * 2))
     fig.patch.set_facecolor("white")
     fig.patch.set_edgecolor("black")
     fig.patch.set_linewidth(1.0)
@@ -183,48 +183,44 @@ def visualize_results(
         time = range(len(features_raw))
 
         # Extract feature values
-        if isinstance(features_raw[0][feature_name], list):
-            # For list features (like degrees), compute mean and std
-            mean_values = [
-                np.mean(f[feature_name]) if len(f[feature_name]) > 0 else 0
+        if feature_name == "density":
+            values = [f[feature_name] for f in features_raw]
+            std_values = None
+        else:
+            # For list features, compute mean and std
+            values = [
+                np.mean(f[feature_name]) if f[feature_name] else 0.0
                 for f in features_raw
             ]
             std_values = [
-                np.std(f[feature_name]) if len(f[feature_name]) > 0 else 0
+                np.std(f[feature_name]) if f[feature_name] else 0.0
                 for f in features_raw
             ]
 
-            # Plot mean line with std band
-            ax.plot(
-                time,
-                mean_values,
-                color=line_colors["actual"],
-                alpha=0.8,
-                linewidth=1.0,
-            )
+        # Plot mean line
+        ax.plot(
+            time,
+            values,
+            color=colors["actual"],
+            alpha=0.8,
+            linewidth=1.0,
+        )
+
+        # Add std band for list features
+        if std_values is not None:
             ax.fill_between(
                 time,
-                np.array(mean_values) - np.array(std_values),
-                np.array(mean_values) + np.array(std_values),
-                color=line_colors["actual"],
+                np.array(values) - np.array(std_values),
+                np.array(values) + np.array(std_values),
+                color=colors["actual"],
                 alpha=0.1,
-            )
-        else:
-            # For scalar features (like density)
-            values = [f[feature_name] for f in features_raw]
-            ax.plot(
-                time,
-                values,
-                color=line_colors["actual"],
-                alpha=0.8,
-                linewidth=1.0,
             )
 
         # Add true change points
         for cp in true_change_points:
             ax.axvline(
-                cp,
-                color=line_colors["changepoint"],
+                x=cp,
+                color=colors["change_point"],
                 linestyle="--",
                 alpha=0.5,
                 linewidth=0.8,
@@ -232,29 +228,32 @@ def visualize_results(
 
         # Add detected change points
         for cp in detected_change_points:
-            if isinstance(features_raw[0][feature_name], list):
-                y_val = mean_values[cp]
-            else:
-                y_val = features_raw[cp][feature_name]
             ax.plot(
                 cp,
-                y_val,
+                values[cp],
                 "o",
-                color=line_colors["predicted"],
+                color=colors["detected"],
                 markersize=6,
                 alpha=0.8,
                 markeredgewidth=1,
             )
 
         # Set title and labels
+        title = feature_name.replace("_", " ")
+        if feature_name != "density":
+            title = "Mean " + title
+        if feature_name in ["singular_values", "laplacian_eigenvalues"]:
+            title = title.replace("values", "value").replace(
+                "eigenvalues", "eigenvalue"
+            )
         ax.set_title(
-            feature_name.replace("_", " ").title(),
-            fontsize=viz.TITLE_SIZE,
+            title.title(),
+            fontsize=TITLE_SIZE,
             pad=4,
         )
-        ax.set_xlabel("Time" if row == 3 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
-        ax.set_ylabel("Value" if col == 0 else "", fontsize=viz.LABEL_SIZE, labelpad=2)
-        ax.tick_params(labelsize=viz.TICK_SIZE, pad=1)
+        ax.set_xlabel("Time" if row == 3 else "", fontsize=LABEL_SIZE, labelpad=2)
+        ax.set_ylabel("Value" if col == 0 else "", fontsize=LABEL_SIZE, labelpad=2)
+        ax.tick_params(labelsize=TICK_SIZE, pad=1)
         ax.grid(True, alpha=0.15, linewidth=0.5, linestyle=":")
 
         # Set x-axis ticks at intervals of 50
@@ -264,7 +263,7 @@ def visualize_results(
     plt.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Evolution\n"
         + "True Change Points (Red), Detected Change Points (Orange)",
-        fontsize=viz.TITLE_SIZE,
+        fontsize=TITLE_SIZE,
         y=0.98,
     )
     plt.tight_layout(pad=0.3)
@@ -279,7 +278,12 @@ def visualize_results(
     plt.close()
 
 
-def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float = 0.7):
+def run_visualization(
+    model_alias: str,
+    threshold: float = 60.0,
+    epsilon: float = 0.7,
+    batch_size: int = 1000,
+):
     """Run change point detection visualization on network sequence from specified model."""
     # 1. Get full model name and configuration
     model_name = get_full_model_name(model_alias)
@@ -294,43 +298,104 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
     graphs = result["graphs"]  # List of adjacency matrices
     true_change_points = result["change_points"]
 
-    # 3. Create and run the pipeline
-    logger.info("Running single-view change detection pipeline...")
-    pipeline = MartingalePipeline(
-        martingale_method="single_view",
+    # 3. Extract features
+    logger.info("Extracting features...")
+    feature_extractor = NetworkFeatureExtractor()
+    features_raw = []
+    features_numeric = []
+
+    for adj_matrix in graphs:
+        graph = adjacency_to_graph(adj_matrix)
+        raw_features = feature_extractor.get_features(graph)
+        numeric_features = feature_extractor.get_numeric_features(graph)
+        features_raw.append(raw_features)
+        features_numeric.append(
+            [
+                numeric_features["mean_degree"],
+                numeric_features["density"],
+                numeric_features["mean_clustering"],
+                numeric_features["mean_betweenness"],
+                numeric_features["mean_eigenvector"],
+                numeric_features["mean_closeness"],
+                numeric_features["max_singular_value"],
+                numeric_features["min_nonzero_laplacian"],
+            ]
+        )
+
+    features_numeric = np.array(features_numeric)
+
+    # 4. Initialize and run detector
+    logger.info("Running multiview change detection...")
+    detector_config = DetectorConfig(
+        method="multiview",
         threshold=threshold,
-        epsilon=epsilon,
-        random_state=42,
-        feature_set="all",  # Using all features but will be combined into single view
+        history_size=10,
+        batch_size=batch_size,
         reset=True,
         max_window=None,
+        betting_func_config={"name": "power", "params": {"epsilon": epsilon}},
+        distance_measure="euclidean",
+        distance_p=2.0,
+        random_state=42,
     )
 
-    # Run pipeline directly on adjacency matrices
-    pipeline_result = pipeline.run(
-        data=graphs,
-        data_type="adjacency",  # Specify that we're passing adjacency matrices
+    detector = ChangePointDetector(detector_config)
+
+    # Normalize each feature
+    features_normalized = (
+        features_numeric - np.mean(features_numeric, axis=0)
+    ) / np.std(features_numeric, axis=0)
+
+    # For multiview detection, we'll use the normalized features directly
+    # Each feature is already a separate view in features_normalized
+    # Shape is already (n_samples, n_features) where each feature is a view
+    logger.info(f"Multiview data shape: {features_normalized.shape}")
+
+    detection_result = detector.run(
+        data=features_normalized,  # Shape: (n_samples, n_features)
+        predicted_data=None,  # No predictions for basic visualization
     )
 
-    # 4. Print results and compare with true change points
+    # 5. Print results and compare with true change points
     print(
-        f"\n==== Single-View Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
+        f"\n==== Multiview Martingale Change Detection on {model_name.replace('_', ' ').title()} Network ===="
     )
     print(f"Network parameters: {params}")
+    print(f"\nFeatures used as views:")
+    print("- Mean degree")
+    print("- Density")
+    print("- Mean clustering coefficient")
+    print("- Mean betweenness centrality")
+    print("- Mean eigenvector centrality")
+    print("- Mean closeness centrality")
+    print("- Maximum singular value")
+    print("- Minimum non-zero Laplacian eigenvalue")
+
     print(f"\nTrue change points: {true_change_points}")
-    print(f"Detected change points: {pipeline_result['change_points']}")
+    print(f"Detected change points: {detection_result['traditional_change_points']}")
 
     # Print martingale statistics
     print("\nMartingale Statistics:")
-    print(f"- Final martingale value: {pipeline_result['martingales'][-1]:.2f}")
-    print(f"- Maximum martingale value: {np.max(pipeline_result['martingales']):.2f}")
+    print(
+        f"- Final sum martingale value: {detection_result['traditional_sum_martingales'][-1]:.2f}"
+    )
+    print(
+        f"- Final average martingale value: {detection_result['traditional_avg_martingales'][-1]:.2f}"
+    )
+    print(
+        f"- Maximum sum martingale value: {np.max(detection_result['traditional_sum_martingales']):.2f}"
+    )
+    print(
+        f"- Maximum average martingale value: {np.max(detection_result['traditional_avg_martingales']):.2f}"
+    )
 
     # Calculate detection accuracy
-    if true_change_points and pipeline_result["change_points"]:
+    if true_change_points and detection_result["traditional_change_points"]:
         errors = []
         for true_cp in true_change_points:
             closest_detected = min(
-                pipeline_result["change_points"], key=lambda x: abs(x - true_cp)
+                detection_result["traditional_change_points"],
+                key=lambda x: abs(x - true_cp),
             )
             error = abs(closest_detected - true_cp)
             errors.append(error)
@@ -339,9 +404,9 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
         print(f"\nDetection Performance:")
         print(f"Average detection delay: {avg_error:.2f} time steps")
 
-    # 5. Create visualizations
+    # 6. Create visualizations
     logger.info("Creating visualizations...")
-    output_dir = f"examples/{model_name}"
+    output_dir = f"tests/test_martingale/output/{model_name}"
     os.makedirs(output_dir, exist_ok=True)
 
     # Visualize network states
@@ -349,20 +414,40 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
         model_name=model_name,
         graphs=graphs,
         true_change_points=true_change_points,
-        detected_change_points=pipeline_result["change_points"],
+        detected_change_points=detection_result["traditional_change_points"],
         output_dir=output_dir,
     )
 
     # Create martingale visualizer
     martingale_viz = MartingaleVisualizer(
-        martingales={"combined": pipeline_result},  # Pass pipeline results directly
+        martingales={
+            "sum": detection_result["traditional_sum_martingales"],
+            "avg": detection_result["traditional_avg_martingales"],
+            "individual": detection_result["individual_traditional_martingales"],
+            "horizon_sum": detection_result.get("horizon_sum_martingales", None),
+            "horizon_avg": detection_result.get("horizon_avg_martingales", None),
+            "horizon_individual": detection_result.get(
+                "individual_horizon_martingales", None
+            ),
+        },
         change_points=true_change_points,
         threshold=threshold,
-        epsilon=epsilon,
+        betting_config={"function": "power", "params": {"power": {"epsilon": epsilon}}},
         output_dir=output_dir,
-        skip_shap=True,  # Skip SHAP for single-view
+        prefix="",
+        skip_shap=False,  # Include SHAP for multiview
+        method="multiview",
     )
     martingale_viz.create_visualization()
+
+    # Visualize feature evolution
+    visualize_feature_evolution(
+        model_name=model_name,
+        features_raw=features_raw,
+        true_change_points=true_change_points,
+        detected_change_points=detection_result["traditional_change_points"],
+        output_dir=output_dir,
+    )
 
     logger.info(f"Visualizations saved to {output_dir}/")
 
@@ -370,7 +455,7 @@ def run_visualization(model_alias: str, threshold: float = 60.0, epsilon: float 
 def main():
     """Run visualization based on command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize single-view change point detection on network evolution."
+        description="Visualize multiview change point detection on network evolution."
     )
     parser.add_argument(
         "model",
@@ -390,9 +475,20 @@ def main():
         default=0.7,
         help="Sensitivity parameter for martingale (default: 0.7)",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1000,
+        help="Batch size for multiview processing (default: 1000)",
+    )
 
     args = parser.parse_args()
-    run_visualization(args.model, args.threshold, args.epsilon)
+    run_visualization(
+        args.model,
+        args.threshold,
+        args.epsilon,
+        args.batch_size,
+    )
 
 
 if __name__ == "__main__":

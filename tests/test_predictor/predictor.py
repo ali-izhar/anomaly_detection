@@ -1,4 +1,4 @@
-# tests/test_predictor.py
+# tests/test_predictor/predictor.py
 
 """Use all predictors on the same graph network (ba, sbm, er, ws) to compare their performance."""
 
@@ -10,7 +10,7 @@ from pathlib import Path
 import argparse
 from typing import Dict, Any, List
 
-project_root = str(Path(__file__).parent.parent)
+project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
@@ -24,6 +24,12 @@ from src.graph.metrics import (
     compute_feature_distribution_metrics,
     FeatureMetrics,
     DistributionMetrics,
+)
+from src.configs.plotting import (
+    FIGURE_DIMENSIONS as FD,
+    TYPOGRAPHY as TYPO,
+    LINE_STYLE as LS,
+    COLORS,
 )
 
 
@@ -69,7 +75,7 @@ def test_network_feature_visualization(
     model_name, params, graphs, change_points, features
 ):
     """Test network feature visualization for different graph models."""
-    output_dir = "tests/output"
+    output_dir = "tests/test_predictor/output"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Initialize visualizer
@@ -83,11 +89,11 @@ def test_network_feature_visualization(
     fig, axes = plt.subplots(
         n_points,
         2,
-        figsize=(viz.SINGLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * n_points / 2),
+        figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * n_points / 2),
     )
     fig.suptitle(
         f"{model_name.replace('_', ' ').title()} Network States",
-        fontsize=viz.TITLE_SIZE,
+        fontsize=TYPO["TITLE_SIZE"],
         y=0.98,
     )
 
@@ -139,7 +145,7 @@ def compare_predictors(
     predictor_configs: Dict[str, Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Compare all predictors on the same data."""
-    output_dir = "tests/output"
+    output_dir = "tests/test_predictor/output"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Initialize components
@@ -240,11 +246,11 @@ def plot_prediction_comparison(
 ):
     """Plot comparison for a single predictor."""
     fig, axes = plt.subplots(
-        4, 2, figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.GRID_HEIGHT * 2)
+        4, 2, figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2)
     )
     fig.suptitle(
         f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
-        fontsize=viz.TITLE_SIZE,
+        fontsize=TYPO["TITLE_SIZE"],
         y=0.98,
     )
     axes = axes.flatten()
@@ -260,24 +266,24 @@ def plot_prediction_comparison(
             # Actual values
             actual_means = [np.mean(f[feature]) for f in actual_features]
             actual_stds = [np.std(f[feature]) for f in actual_features]
-            ax.plot(time, actual_means, label="Actual", color=viz.COLORS["actual"])
+            ax.plot(time, actual_means, label="Actual", color=COLORS["actual"])
             ax.fill_between(
                 time,
                 np.array(actual_means) - np.array(actual_stds),
                 np.array(actual_means) + np.array(actual_stds),
-                color=viz.COLORS["actual"],
+                color=COLORS["actual"],
                 alpha=0.1,
             )
 
             # Predicted values
             pred_means = [np.mean(f[feature]) for f in predicted_features]
             pred_stds = [np.std(f[feature]) for f in predicted_features]
-            ax.plot(time, pred_means, label="Predicted", color=viz.COLORS["predicted"])
+            ax.plot(time, pred_means, label="Predicted", color=COLORS["predicted"])
             ax.fill_between(
                 time,
                 np.array(pred_means) - np.array(pred_stds),
                 np.array(pred_means) + np.array(pred_stds),
-                color=viz.COLORS["predicted"],
+                color=COLORS["predicted"],
                 alpha=0.1,
             )
 
@@ -294,8 +300,8 @@ def plot_prediction_comparison(
             # For scalar features
             actual_values = [f[feature] for f in actual_features]
             pred_values = [f[feature] for f in predicted_features]
-            ax.plot(time, actual_values, label="Actual", color=viz.COLORS["actual"])
-            ax.plot(time, pred_values, label="Predicted", color=viz.COLORS["predicted"])
+            ax.plot(time, actual_values, label="Actual", color=COLORS["actual"])
+            ax.plot(time, pred_values, label="Predicted", color=COLORS["predicted"])
             metrics_text = ""
 
         # Add basic metrics
@@ -318,7 +324,7 @@ def plot_prediction_comparison(
             transform=ax.transAxes,
             verticalalignment="top",
             horizontalalignment="left",
-            fontsize=viz.ANNOTATION_SIZE,
+            fontsize=TYPO["ANNOTATION_SIZE"],
             bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
         )
 
@@ -327,17 +333,17 @@ def plot_prediction_comparison(
             if cp >= warmup and cp < len(actual_features) + warmup:
                 ax.axvline(
                     cp - warmup,
-                    color=viz.COLORS["change_point"],
+                    color=COLORS["change_point"],
                     linestyle="--",
                     alpha=0.5,
                 )
 
-        ax.set_title(feature.replace("_", " ").title(), fontsize=viz.TITLE_SIZE)
-        ax.set_xlabel("Time", fontsize=viz.LABEL_SIZE)
-        ax.set_ylabel("Value", fontsize=viz.LABEL_SIZE)
-        ax.tick_params(labelsize=viz.TICK_SIZE)
-        ax.grid(True, alpha=viz.GRID_ALPHA)
-        ax.legend(fontsize=viz.LEGEND_SIZE)
+        ax.set_title(feature.replace("_", " ").title(), fontsize=TYPO["TITLE_SIZE"])
+        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])
+        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"])
+        ax.tick_params(labelsize=TYPO["TICK_SIZE"])
+        ax.grid(True, alpha=LS["GRID_ALPHA"])
+        ax.legend(fontsize=TYPO["LEGEND_SIZE"])
 
     plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
@@ -363,11 +369,11 @@ def plot_predictor_comparison(
     fig, axes = plt.subplots(
         len(feature_names),
         1,
-        figsize=(viz.DOUBLE_COLUMN_WIDTH, viz.STANDARD_HEIGHT * len(feature_names)),
+        figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * len(feature_names)),
     )
     fig.suptitle(
         f"{model_name.replace('_', ' ').title()} Predictor Comparison",
-        fontsize=viz.TITLE_SIZE,
+        fontsize=TYPO["TITLE_SIZE"],
         y=0.98,
     )
 
@@ -388,11 +394,13 @@ def plot_predictor_comparison(
         ax.bar(x - width / 2, rmse_values, width, label="RMSE")
         ax.bar(x + width / 2, r2_values, width, label="R²")
 
-        ax.set_title(f"{feature.replace('_', ' ').title()}", fontsize=viz.TITLE_SIZE)
+        ax.set_title(
+            f"{feature.replace('_', ' ').title()}", fontsize=TYPO["TITLE_SIZE"]
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(results.keys())
         ax.legend()
-        ax.grid(True, alpha=viz.GRID_ALPHA)
+        ax.grid(True, alpha=LS["GRID_ALPHA"])
 
     plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
     plt.savefig(
