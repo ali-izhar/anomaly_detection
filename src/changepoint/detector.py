@@ -2,31 +2,14 @@
 
 """Change point detection using the martingale framework derived from conformal prediction."""
 
-from typing import List, Dict, Any, Optional, Callable, Union
+from typing import Dict, Any, Optional
+
 import logging
 import numpy as np
 
-from .betting import (
-    power_martingale,
-    exponential_martingale,
-    mixture_martingale,
-    constant_martingale,
-    beta_martingale,
-    kernel_density_martingale,
-)
 from .martingale import compute_martingale, multiview_martingale_test
 
 logger = logging.getLogger(__name__)
-
-# Mapping of betting function names to their implementations.
-BETTING_FUNCTIONS = {
-    "power": power_martingale,
-    "exponential": exponential_martingale,
-    "mixture": mixture_martingale,
-    "constant": constant_martingale,
-    "beta": beta_martingale,
-    "kernel": kernel_density_martingale,
-}
 
 
 class ChangePointDetector:
@@ -61,7 +44,7 @@ class ChangePointDetector:
         batch_size: int = 1000,
         reset: bool = True,
         max_window: Optional[int] = None,
-        betting_func: Union[str, Callable] = "power",
+        betting_func: str = "power",
         distance_measure: str = "euclidean",
         distance_p: float = 2.0,
     ):
@@ -76,17 +59,7 @@ class ChangePointDetector:
         self.max_window = max_window
         self.distance_measure = distance_measure
         self.distance_p = distance_p
-
-        # Handle betting function selection.
-        if isinstance(betting_func, str):
-            if betting_func not in BETTING_FUNCTIONS:
-                raise ValueError(
-                    f"Unknown betting function '{betting_func}'. "
-                    f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
-                )
-            self.betting_func = BETTING_FUNCTIONS[betting_func]
-        else:
-            self.betting_func = betting_func
+        self.betting_func = betting_func
 
     def run(
         self,
