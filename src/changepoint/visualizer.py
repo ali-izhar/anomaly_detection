@@ -1,14 +1,14 @@
 # src/changepoint/visualizer.py
 
-"""Visualizer for changepoint analysis results."""
+"""Visualizer for changepoint analysis results with research-quality plot generation."""
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from .threshold import CustomThresholdModel
 from ..configs.plotting import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
@@ -18,11 +18,12 @@ from ..configs.plotting import (
     GRID_STYLE as GRID,
     EXPORT_SETTINGS as EXPORT,
     get_matplotlib_rc_params,
+    get_grayscale_style,
 )
 
 
 class MartingaleVisualizer:
-    """Visualization class for martingale analysis results."""
+    """Visualization class for martingale analysis results with research-quality output."""
 
     def __init__(
         self,
@@ -35,19 +36,7 @@ class MartingaleVisualizer:
         skip_shap: bool = False,
         method: str = "multiview",
     ):
-        """Initialize the visualizer.
-
-        Args:
-            martingales: Dictionary containing martingale results from detector
-            change_points: List of true change points
-            threshold: Detection threshold
-            betting_config: Dictionary containing betting function configuration
-                          with format: {"function": str, "params": Dict[str, Any]}
-            output_dir: Directory to save visualizations
-            prefix: Prefix for output files
-            skip_shap: Whether to skip SHAP value plots
-            method: Detection method ('single_view' or 'multiview')
-        """
+        """Initialize the visualizer with research-quality plot settings."""
         self.change_points = change_points
         self.threshold = threshold
         self.betting_config = betting_config
@@ -112,9 +101,21 @@ class MartingaleVisualizer:
                 self.feature_names = None
                 self.prediction_shap_values = None
 
-        # Set paper-style parameters
+        # Set publication-quality parameters
         plt.style.use("seaborn-v0_8-paper")
         plt.rcParams.update(get_matplotlib_rc_params())
+
+        # Store color schemes
+        self.colors = COLORS
+        self.grayscale_colors = get_grayscale_style()
+
+        # Set default figure settings
+        self.fig_settings = {
+            "dpi": EXPORT["DPI"],
+            "bbox_inches": EXPORT["BBOX_INCHES"],
+            "pad_inches": EXPORT["PAD_INCHES"],
+            "format": EXPORT["FORMAT"],
+        }
 
     def _get_betting_params(self) -> Dict[str, Any]:
         """Extract relevant betting parameters for visualization."""
@@ -234,23 +235,180 @@ class MartingaleVisualizer:
             ):
                 self._plot_shap_values()
 
-    def _plot_detection_analysis(self) -> None:
-        """Create detailed detection analysis visualization."""
-        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"]))
-        gs = GridSpec(1, 2, figure=fig)
+    def _create_research_figure(self, width="single", height_scale=1.0) -> plt.Figure:
+        """Create a figure with research-quality dimensions."""
+        width_inches = (
+            FD["SINGLE_COLUMN_WIDTH"]
+            if width == "single"
+            else FD["DOUBLE_COLUMN_WIDTH"]
+        )
+        height_inches = FD["STANDARD_HEIGHT"] * height_scale
+        return plt.figure(figsize=(width_inches, height_inches))
 
-        # Left subplot: Traditional Martingale Analysis
+    def _plot_combined_martingales(self) -> None:
+        """Create publication-quality combined martingales plot."""
+        fig = self._create_research_figure(width="single", height_scale=1.2)
+        ax = fig.add_subplot(111)
+
+        # Track crossing points for annotations with improved positioning
+        crossing_points = []
+
+        if self.method == "multiview":
+            combined_results = self.martingales["combined"]
+
+            # Plot traditional martingales with enhanced styling
+            sum_martingale = combined_results.get("martingales_sum")
+            if sum_martingale is not None and len(sum_martingale) > 0:
+                ax.plot(
+                    sum_martingale,
+                    color=self.colors["actual"],
+                    label="Trad. Sum",  # Updated label
+                    linewidth=LS["LINE_WIDTH"],
+                    alpha=LS["LINE_ALPHA"],
+                    zorder=10,
+                )
+                # Find threshold crossings with improved annotation
+                crossing_points.extend(self._find_threshold_crossings(sum_martingale))
+
+            # Plot prediction martingales with enhanced visibility
+            pred_sum_martingale = combined_results.get("prediction_martingale_sum")
+            if pred_sum_martingale is not None and len(pred_sum_martingale) > 0:
+                history_size = len(sum_martingale) - len(pred_sum_martingale)
+                time_points = np.arange(
+                    history_size, history_size + len(pred_sum_martingale)
+                )
+                ax.plot(
+                    time_points,
+                    pred_sum_martingale,
+                    color=self.colors["predicted"],
+                    label="Horizon. Sum",  # Updated label
+                    linewidth=LS["LINE_WIDTH"],
+                    linestyle=LS["PREDICTION_LINE_STYLE"],
+                    alpha=LS["LINE_ALPHA"],
+                    zorder=9,
+                )
+
+        # Add threshold and change points with improved visibility
+        self._add_threshold_line(ax)
+        self._add_change_point_lines(ax)
+
+        # Add crossing point annotations with optimal positioning
+        self._add_crossing_annotations(ax, crossing_points)
+
+        # Optimize axis settings
+        self._optimize_axis_settings(ax)
+
+        # Add optimized legend
+        self._add_optimized_legend(ax)
+
+        # Save with publication settings
+        self._save_research_figure(fig, "combined_martingales.png")
+
+    def _plot_detection_analysis(self) -> None:
+        """Create publication-quality detection analysis visualization."""
+        fig = self._create_research_figure(width="double", height_scale=1.0)
+        gs = GridSpec(1, 2, figure=fig, wspace=0.25)
+
+        # Create subplots with enhanced styling
         ax1 = fig.add_subplot(gs[0, 0])
-        self._plot_detection_subplot(
-            ax1, "traditional", "Traditional Martingale Analysis"
+        ax2 = fig.add_subplot(gs[0, 1])
+
+        self._plot_detection_subplot(ax1, "traditional", "Traditional Analysis")
+        self._plot_detection_subplot(ax2, "horizon", "Horizon Analysis")
+
+        # Ensure consistent y-axis limits across subplots
+        self._synchronize_axis_limits([ax1, ax2])
+
+        # Save with publication settings
+        self._save_research_figure(fig, "detection_analysis.png")
+
+    def _plot_feature_martingales(self) -> None:
+        """Create publication-quality feature martingale plots."""
+        fig = self._create_research_figure(width="double", height_scale=2.0)
+
+        # Create grid with optimal spacing
+        gs = GridSpec(
+            4,
+            2,
+            figure=fig,
+            hspace=FD["GRID_SPACING"] * 1.5,
+            wspace=FD["GRID_SPACING"] * 2,
         )
 
-        # Right subplot: Horizon Martingale Analysis
-        ax2 = fig.add_subplot(gs[0, 1])
-        self._plot_detection_subplot(ax2, "horizon", "Horizon Martingale Analysis")
+        # Plot features with enhanced styling
+        self._plot_feature_grid(fig, gs)
 
-        plt.tight_layout()
-        self._save_figure("detection_analysis.png")
+        # Add betting function info to figure title
+        title = self._get_enhanced_title()
+        fig.suptitle(title, fontsize=TYPO["TITLE_SIZE"], y=0.95)
+
+        # Save with publication settings
+        self._save_research_figure(fig, "feature_martingales.png")
+
+    def _save_research_figure(self, fig: plt.Figure, filename: str) -> None:
+        """Save figure with publication-quality settings."""
+        output_path = os.path.join(self.output_dir, f"{self.prefix}{filename}")
+
+        # Save only PNG format with high quality settings
+        fig.savefig(
+            output_path,
+            dpi=EXPORT["DPI"],
+            bbox_inches=EXPORT["BBOX_INCHES"],
+            pad_inches=EXPORT["PAD_INCHES"],
+            format="png",
+            transparent=EXPORT["TRANSPARENT"],
+        )
+
+        plt.close(fig)
+
+    def _optimize_axis_settings(self, ax: plt.Axes) -> None:
+        """Apply publication-quality axis settings."""
+        # Set proper axis limits
+        ax.set_xlim(0, 200)
+        ax.set_xticks(np.arange(0, 201, 50))
+
+        # Optimize y-axis range
+        y_data = [line.get_ydata() for line in ax.get_lines()]
+        if y_data:
+            y_data = np.concatenate(y_data)
+            y_min, y_max = np.nanmin(y_data), np.nanmax(y_data)
+            margin = (y_max - y_min) * 0.1
+            ax.set_ylim(max(0, y_min - margin), y_max + margin)
+
+        # Enhanced grid
+        ax.grid(
+            True,
+            which="major",
+            linestyle=GRID["LINE_STYLE"],
+            alpha=GRID["MAJOR_ALPHA"],
+            linewidth=GRID["MAJOR_LINE_WIDTH"],
+        )
+
+        # Only set y-axis label, x-axis label is handled separately
+        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=TYPO["LABEL_PAD"])
+
+        # Enhanced ticks
+        ax.tick_params(
+            axis="both",
+            which="major",
+            labelsize=TYPO["TICK_SIZE"],
+            length=GRID["MAJOR_TICK_LENGTH"],
+        )
+
+    def _add_optimized_legend(self, ax: plt.Axes) -> None:
+        """Add publication-quality legend."""
+        ax.legend(
+            ncol=LEGEND["COLUMNS"],
+            loc=LEGEND["LOCATION"],
+            fontsize=TYPO["LEGEND_SIZE"],
+            frameon=True,
+            edgecolor=COLORS["text"],
+            facecolor=COLORS["background"],
+            framealpha=LEGEND["FRAME_ALPHA"],
+            borderaxespad=LEGEND["BORDER_PAD"],
+            handlelength=LEGEND["HANDLE_LENGTH"],
+            columnspacing=LEGEND["COLUMN_SPACING"],
+        )
 
     def _plot_detection_subplot(self, ax, mart_type: str, title: str) -> None:
         """Helper method to plot detection analysis for a specific martingale type."""
@@ -271,7 +429,7 @@ class MartingaleVisualizer:
 
         # Plot martingale values
         if values is not None and len(values) > 0:
-            ax.plot(values, color=COLORS["actual"], label="Martingale")
+            ax.plot(values, color=self.colors["actual"], label="Martingale")
 
             # Mark detection points
             for cp in changes:
@@ -292,7 +450,7 @@ class MartingaleVisualizer:
         # Add threshold line
         ax.axhline(
             y=self.threshold,
-            color=COLORS["threshold"],
+            color=self.colors["threshold"],
             linestyle="--",
             label="Threshold",
         )
@@ -302,408 +460,6 @@ class MartingaleVisualizer:
         ax.set_ylabel("Value")
         ax.legend()
         ax.grid(True)
-
-    def _plot_feature_martingales(self) -> None:
-        """Create grid of individual feature martingale plots."""
-        fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 1.5))
-
-        # Add betting function info to figure suptitle
-        title = f"Feature Martingales ({self.betting_config['function'].title()}"
-        if self.betting_params["param_str"]:
-            title += f", {self.betting_params['param_str']}"
-        title += ")"
-        fig.suptitle(title, fontsize=TYPO["TITLE_SIZE"])
-
-        gs = GridSpec(
-            4,
-            2,
-            figure=fig,
-            hspace=FD["GRID_SPACING"],
-            wspace=FD["GRID_SPACING"],
-        )
-
-        features = [
-            "mean_degree",
-            "density",
-            "mean_clustering",
-            "mean_betweenness",
-            "mean_eigenvector",
-            "mean_closeness",
-            "max_singular_value",
-            "min_nonzero_laplacian",
-        ]
-
-        max_mart_global = 0
-
-        # First pass to find global maximum
-        for feature in features:
-            if feature in self.martingales:
-                results = self.martingales[feature]
-                martingales = results.get("martingales", [])
-                pred_martingales = results.get("prediction_martingales", [])
-
-                if isinstance(martingales, (list, np.ndarray)) and len(martingales) > 0:
-                    max_mart_global = max(max_mart_global, np.max(martingales))
-                if (
-                    isinstance(pred_martingales, (list, np.ndarray))
-                    and len(pred_martingales) > 0
-                ):
-                    max_mart_global = max(max_mart_global, np.max(pred_martingales))
-
-        # Now plot each feature
-        for idx, feature in enumerate(features):
-            row, col = divmod(idx, 2)
-            ax = fig.add_subplot(gs[row, col])
-
-            if feature in self.martingales:
-                results = self.martingales[feature]
-                martingales = results.get("martingales", [])
-                pred_martingales = results.get("prediction_martingales", [])
-
-                # Plot traditional martingale
-                if isinstance(martingales, (list, np.ndarray)) and len(martingales) > 0:
-                    ax.plot(
-                        martingales,
-                        color=COLORS["actual"],
-                        linewidth=LS["LINE_WIDTH"],
-                        alpha=LS["LINE_ALPHA"],
-                        label="Trad.",  # Shortened label
-                        zorder=10,
-                    )
-
-                # Plot prediction martingale
-                if (
-                    isinstance(pred_martingales, (list, np.ndarray))
-                    and len(pred_martingales) > 0
-                ):
-                    history_size = len(martingales) - len(pred_martingales)
-                    time_points = np.arange(
-                        history_size, history_size + len(pred_martingales)
-                    )
-                    ax.plot(
-                        time_points,
-                        pred_martingales,
-                        color=COLORS["predicted"],
-                        linewidth=LS["LINE_WIDTH"],
-                        linestyle="--",
-                        alpha=LS["LINE_ALPHA"],
-                        label="Pred.",  # Shortened label
-                        zorder=9,
-                    )
-
-                # Add change points with reduced alpha
-                for cp in self.change_points:
-                    ax.axvline(
-                        x=cp,
-                        color=COLORS["change_point"],
-                        linestyle="--",
-                        alpha=0.2,  # Reduced alpha
-                        linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
-                        zorder=1,
-                    )
-
-                # Add threshold line with reduced alpha
-                ax.axhline(
-                    y=self.threshold,
-                    color=COLORS["threshold"],
-                    linestyle="--",
-                    alpha=0.2,  # Reduced alpha
-                    linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
-                    zorder=2,
-                )
-
-                # Set consistent y-axis limits based on global maximum
-                y_max = max_mart_global * 1.05  # Reduced margin
-                y_min = 0  # Start from 0
-                ax.set_ylim(y_min, y_max)
-
-                # Create evenly spaced ticks
-                n_ticks = 4  # Reduced number of ticks
-                y_ticks = np.linspace(0, y_max, n_ticks)
-                ax.set_yticks(y_ticks)
-                ax.yaxis.set_major_formatter(
-                    plt.FuncFormatter(lambda x, p: f"{x:.1f}")  # Simplified format
-                )
-
-            # Simplified title
-            ax.set_title(
-                feature.replace("mean_", "").replace("_", " ").title(),
-                fontsize=TYPO["TITLE_SIZE"],
-                pad=1,  # Reduced padding
-            )
-
-            # X-axis settings
-            ax.set_xlim(0, 200)
-            ax.set_xticks(np.arange(0, 201, 100))  # Reduced number of ticks
-
-            if row == 3:  # Bottom row
-                ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-            else:
-                ax.set_xticklabels([])
-
-            if col == 0:  # Left column
-                ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-
-            if idx == 0:  # Legend only in first plot
-                ax.legend(
-                    fontsize=TYPO["LEGEND_SIZE"],
-                    ncol=2,
-                    loc="upper right",
-                    borderaxespad=0.1,
-                    handlelength=LEGEND["HANDLE_LENGTH"],
-                    columnspacing=LEGEND["COLUMN_SPACING"],
-                )
-
-            # Tick parameters
-            ax.tick_params(
-                axis="both",
-                which="major",
-                labelsize=TYPO["TICK_SIZE"],
-                pad=1,
-                length=2,
-            )
-
-            # Grid settings
-            ax.grid(
-                True,
-                linestyle=":",
-                alpha=GRID["MAJOR_ALPHA"] * 0.5,  # Reduced alpha
-                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
-            )
-
-        plt.tight_layout(pad=0.1)  # Tighter layout
-        self._save_figure("feature_martingales.png")  # Save as PNG
-
-    def _plot_combined_martingales(self) -> None:
-        """Create plot for combined martingales."""
-        fig = plt.figure(figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"]))
-        ax = fig.add_subplot(111)
-        combined_results = self.martingales["combined"]
-
-        # Add betting function info to title
-        title = f"Martingale Values ({self.betting_config['function'].title()}"
-        if self.betting_params["param_str"]:
-            title += f", {self.betting_params['param_str']}"
-        title += ")"
-        ax.set_title(title, fontsize=TYPO["TITLE_SIZE"])
-
-        # Track crossing points for annotations
-        crossing_points = []
-
-        if self.method == "multiview":
-            # Plot traditional martingales
-            sum_martingale = combined_results.get("martingales_sum")
-            avg_martingale = combined_results.get("martingales_avg")
-
-            if (
-                sum_martingale is not None
-                and isinstance(sum_martingale, (list, np.ndarray))
-                and len(sum_martingale) > 0
-            ):
-                ax.plot(
-                    sum_martingale,
-                    color=COLORS["actual"],
-                    label="Sum",  # Shortened label
-                    linewidth=LS["LINE_WIDTH"],
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=10,
-                )
-                # Find threshold crossings for traditional sum martingale
-                for i in range(1, len(sum_martingale)):
-                    if (
-                        sum_martingale[i] > self.threshold
-                        and sum_martingale[i - 1] <= self.threshold
-                    ):
-                        crossing_points.append(
-                            {
-                                "x": i,
-                                "y": sum_martingale[i],
-                                "color": COLORS["actual"],
-                                "label": f"t={i}",
-                            }
-                        )
-
-            if (
-                avg_martingale is not None
-                and isinstance(avg_martingale, (list, np.ndarray))
-                and len(avg_martingale) > 0
-            ):
-                ax.plot(
-                    avg_martingale,
-                    color=COLORS["average"],
-                    label="Avg",  # Shortened label
-                    linewidth=LS["LINE_WIDTH"],
-                    linestyle="--",
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=8,
-                )
-
-            # Plot prediction martingales
-            pred_sum_martingale = combined_results.get("prediction_martingale_sum")
-            pred_avg_martingale = combined_results.get("prediction_martingale_avg")
-
-            if (
-                pred_sum_martingale is not None
-                and isinstance(pred_sum_martingale, (list, np.ndarray))
-                and len(pred_sum_martingale) > 0
-            ):
-                history_size = len(sum_martingale) - len(pred_sum_martingale)
-                time_points = np.arange(
-                    history_size, history_size + len(pred_sum_martingale)
-                )
-                ax.plot(
-                    time_points,
-                    pred_sum_martingale,
-                    color=COLORS["predicted"],
-                    label="P.Sum",  # Shortened label
-                    linewidth=LS["LINE_WIDTH"],
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=9,
-                )
-                # Find threshold crossings for prediction sum martingale
-                for i in range(1, len(pred_sum_martingale)):
-                    if (
-                        pred_sum_martingale[i] > self.threshold
-                        and pred_sum_martingale[i - 1] <= self.threshold
-                    ):
-                        crossing_points.append(
-                            {
-                                "x": time_points[i],
-                                "y": pred_sum_martingale[i],
-                                "color": COLORS["predicted"],
-                                "label": f"t={time_points[i]}",
-                            }
-                        )
-
-            if (
-                pred_avg_martingale is not None
-                and isinstance(pred_avg_martingale, (list, np.ndarray))
-                and len(pred_avg_martingale) > 0
-            ):
-                history_size = len(avg_martingale) - len(pred_avg_martingale)
-                time_points = np.arange(
-                    history_size, history_size + len(pred_avg_martingale)
-                )
-                ax.plot(
-                    time_points,
-                    pred_avg_martingale,
-                    color=COLORS["pred_avg"],
-                    label="P.Avg",  # Shortened label
-                    linewidth=LS["LINE_WIDTH"],
-                    linestyle="--",
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=7,
-                )
-
-        # Add threshold and change points with reduced visibility
-        ax.axhline(
-            y=self.threshold,
-            color=COLORS["threshold"],
-            linestyle="--",
-            alpha=0.2,  # Reduced alpha
-            linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
-            label="Thresh",  # Shortened label
-            zorder=5,
-        )
-
-        for cp in self.change_points:
-            ax.axvline(
-                x=cp,
-                color=COLORS["change_point"],
-                linestyle="--",
-                alpha=0.2,  # Reduced alpha
-                linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner line
-                zorder=4,
-            )
-
-        # Add arrows for threshold crossings
-        arrow_props = dict(
-            arrowstyle="->", linewidth=1, shrinkA=0, shrinkB=0, color="black", alpha=0.7
-        )
-
-        for point in crossing_points:
-            # Add arrow
-            ax.annotate(
-                "",
-                xy=(point["x"], self.threshold),  # Arrow tip at threshold
-                xytext=(
-                    point["x"],
-                    point["y"] + 5,
-                ),  # Arrow start above the crossing point
-                arrowprops=arrow_props,
-                zorder=15,
-            )
-            # Add text label
-            ax.annotate(
-                point["label"],
-                xy=(point["x"], point["y"] + 7),  # Position text above arrow
-                xytext=(0, 0),  # No offset
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=TYPO["ANNOTATION_SIZE"],
-                color=point["color"],
-                weight="bold",
-                zorder=16,
-            )
-
-        # Grid settings
-        ax.grid(
-            True,
-            which="major",
-            linestyle=":",
-            alpha=GRID["MAJOR_ALPHA"] * 0.5,  # Reduced alpha
-            linewidth=GRID["MAJOR_LINE_WIDTH"] * 0.5,  # Thinner lines
-        )
-
-        # Axis settings
-        ax.set_xlim(0, 200)
-        ax.set_xticks(np.arange(0, 201, 100))  # Reduced number of ticks
-
-        # Dynamic y-axis range
-        if self.method == "multiview":
-            mart_seq = combined_results.get("martingales_sum", [])
-            pred_mart_seq = combined_results.get("prediction_martingale_sum", [])
-        else:
-            mart_seq = combined_results.get("martingales", [])
-            pred_mart_seq = combined_results.get("prediction_martingales", [])
-
-        max_mart = 0
-        if isinstance(mart_seq, (list, np.ndarray)) and len(mart_seq) > 0:
-            max_mart = max(max_mart, np.max(mart_seq))
-        if isinstance(pred_mart_seq, (list, np.ndarray)) and len(pred_mart_seq) > 0:
-            max_mart = max(max_mart, np.max(pred_mart_seq))
-
-        if max_mart > 0:
-            y_max = max(max_mart * 1.05, self.threshold * 1.05)  # Reduced margin
-            ax.set_ylim(0, y_max)  # Start from 0
-            ax.yaxis.set_major_locator(plt.MaxNLocator(4))  # Reduced number of ticks
-
-        # Legend
-        ax.legend(
-            ncol=3,  # Increased columns for compactness
-            loc="upper right",
-            fontsize=TYPO["LEGEND_SIZE"],
-            frameon=True,
-            handlelength=LEGEND["HANDLE_LENGTH"],
-            handletextpad=0.2,  # Reduced padding
-            columnspacing=LEGEND["COLUMN_SPACING"],
-            borderaxespad=0.1,  # Reduced padding
-        )
-
-        # Labels
-        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=1)
-        ax.tick_params(
-            axis="both",
-            which="major",
-            labelsize=TYPO["TICK_SIZE"],
-            pad=1,
-            length=2,
-        )
-
-        plt.tight_layout(pad=0.1)  # Tighter layout
-        self._save_figure("combined_martingales.png")  # Save as PNG
 
     def _plot_overlaid_martingales(self) -> None:
         """Create plot overlaying individual feature martingales with combined martingale."""
@@ -1026,3 +782,245 @@ class MartingaleVisualizer:
             format=EXPORT["FORMAT"],
             transparent=EXPORT["TRANSPARENT"],
         )
+
+    def _get_enhanced_title(self) -> str:
+        """Generate publication-quality title with mathematical notation."""
+        title = f"Feature Martingales ({self.betting_config['function'].title()}"
+        if self.betting_params["param_str"]:
+            # Convert to proper mathematical notation
+            param_str = self.betting_params["param_str"].replace("ε", "$\\varepsilon$")
+            param_str = param_str.replace("λ", "$\\lambda$")
+            param_str = param_str.replace("α", "$\\alpha$")
+            param_str = param_str.replace("β", "$\\beta$")
+            title += f", {param_str}"
+        title += ")"
+        return title
+
+    def _find_threshold_crossings(self, values: np.ndarray) -> List[Dict[str, Any]]:
+        """Find points where the martingale crosses the threshold."""
+        crossing_points = []
+        if isinstance(values, (list, np.ndarray)) and len(values) > 0:
+            for i in range(1, len(values)):
+                if values[i] > self.threshold and values[i - 1] <= self.threshold:
+                    crossing_points.append(
+                        {
+                            "x": i,
+                            "y": values[i],
+                            "color": self.colors["actual"],
+                            "label": f"t={i}",
+                        }
+                    )
+        return crossing_points
+
+    def _add_threshold_line(self, ax: plt.Axes) -> None:
+        """Add threshold line with enhanced visibility."""
+        ax.axhline(
+            y=self.threshold,
+            color=self.colors["threshold"],
+            linestyle=LS["THRESHOLD_LINE_STYLE"],
+            alpha=0.5,
+            linewidth=LS["LINE_WIDTH"],
+            label="Threshold",
+            zorder=5,
+        )
+
+    def _add_change_point_lines(self, ax: plt.Axes) -> None:
+        """Add change point lines with enhanced visibility."""
+        for cp in self.change_points:
+            ax.axvline(
+                x=cp,
+                color=self.colors["change_point"],
+                linestyle=LS["CHANGE_POINT_LINE_STYLE"],
+                alpha=0.3,
+                linewidth=LS["LINE_WIDTH"] * 0.8,
+                zorder=4,
+            )
+
+    def _add_crossing_annotations(
+        self, ax: plt.Axes, crossing_points: List[Dict[str, Any]]
+    ) -> None:
+        """Add annotations for threshold crossing points."""
+        arrow_props = dict(
+            arrowstyle="->",
+            linewidth=LS["LINE_WIDTH"] * 0.8,
+            shrinkA=0,
+            shrinkB=0,
+            color=self.colors["text"],
+            alpha=0.7,
+        )
+
+        for point in crossing_points:
+            # Add arrow pointing to crossing point
+            ax.annotate(
+                "",
+                xy=(point["x"], self.threshold),  # Arrow tip at threshold
+                xytext=(
+                    point["x"],
+                    point["y"] + (point["y"] - self.threshold) * 0.2,
+                ),  # Dynamic offset
+                arrowprops=arrow_props,
+                zorder=15,
+            )
+
+            # Add text label with enhanced positioning
+            ax.annotate(
+                point["label"],
+                xy=(
+                    point["x"],
+                    point["y"] + (point["y"] - self.threshold) * 0.25,
+                ),  # Dynamic positioning
+                xytext=(0, 0),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=TYPO["ANNOTATION_SIZE"],
+                color=point["color"],
+                weight="bold",
+                zorder=16,
+            )
+
+    def _synchronize_axis_limits(self, axes: List[plt.Axes]) -> None:
+        """Ensure consistent axis limits across multiple subplots."""
+        y_min, y_max = float("inf"), float("-inf")
+
+        # Find global min and max
+        for ax in axes:
+            for line in ax.get_lines():
+                data = line.get_ydata()
+                if isinstance(data, (list, np.ndarray)) and len(data) > 0:
+                    y_min = min(y_min, np.nanmin(data))
+                    y_max = max(y_max, np.nanmax(data))
+
+        # Add margin
+        margin = (y_max - y_min) * 0.1
+        y_min = max(0, y_min - margin)  # Don't go below 0
+        y_max = y_max + margin
+
+        # Set consistent limits
+        for ax in axes:
+            ax.set_ylim(y_min, y_max)
+            ax.set_xlim(0, 200)
+            ax.set_xticks(np.arange(0, 201, 50))
+
+    def _plot_feature_grid(self, fig: plt.Figure, gs: GridSpec) -> None:
+        """Plot feature martingales in a grid layout."""
+        features = [
+            "mean_degree",
+            "density",
+            "mean_clustering",
+            "mean_betweenness",
+            "mean_eigenvector",
+            "mean_closeness",
+            "max_singular_value",
+            "min_nonzero_laplacian",
+        ]
+
+        # Find global maximum for consistent y-axis
+        max_mart_global = self._find_global_maximum(features)
+
+        # Plot each feature
+        for idx, feature in enumerate(features):
+            row, col = divmod(idx, 2)
+            ax = fig.add_subplot(gs[row, col])
+
+            if feature in self.martingales:
+                self._plot_single_feature(
+                    ax,
+                    feature,
+                    max_mart_global,
+                    show_xlabel=(row == 3),  # Only bottom row shows x-label
+                    show_ylabel=(col == 0),  # Left column shows y-label
+                    show_legend=(idx == 0),  # First plot shows legend
+                )
+
+    def _find_global_maximum(self, features: List[str]) -> float:
+        """Find global maximum value across all features."""
+        max_mart = 0
+        for feature in features:
+            if feature in self.martingales:
+                results = self.martingales[feature]
+                for key in ["martingales", "prediction_martingales"]:
+                    values = results.get(key, [])
+                    if isinstance(values, (list, np.ndarray)) and len(values) > 0:
+                        max_mart = max(max_mart, np.nanmax(values))
+        return max_mart
+
+    def _plot_single_feature(
+        self,
+        ax: plt.Axes,
+        feature: str,
+        max_mart_global: float,
+        show_xlabel: bool = False,
+        show_ylabel: bool = False,
+        show_legend: bool = False,
+    ) -> None:
+        """Plot a single feature with enhanced styling."""
+        results = self.martingales[feature]
+
+        # Plot traditional martingale
+        martingales = results.get("martingales", [])
+        if isinstance(martingales, (list, np.ndarray)) and len(martingales) > 0:
+            ax.plot(
+                martingales,
+                color=self.colors["actual"],
+                label="Traditional",
+                linewidth=LS["LINE_WIDTH"],
+                alpha=LS["LINE_ALPHA"],
+                zorder=10,
+            )
+
+        # Plot prediction martingale
+        pred_martingales = results.get("prediction_martingales", [])
+        if (
+            isinstance(pred_martingales, (list, np.ndarray))
+            and len(pred_martingales) > 0
+        ):
+            history_size = len(martingales) - len(pred_martingales)
+            time_points = np.arange(history_size, history_size + len(pred_martingales))
+            ax.plot(
+                time_points,
+                pred_martingales,
+                color=self.colors["predicted"],
+                label="Horizon",  # Updated label
+                linewidth=LS["LINE_WIDTH"],
+                linestyle=LS["PREDICTION_LINE_STYLE"],
+                alpha=LS["LINE_ALPHA"],
+                zorder=9,
+            )
+
+        # Add threshold and change points
+        self._add_threshold_line(ax)
+        self._add_change_point_lines(ax)
+
+        # Set consistent y-axis limits
+        y_max = max_mart_global * 1.05
+        ax.set_ylim(0, y_max)
+        ax.set_yticks(np.linspace(0, y_max, 4))
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"{x:.1f}"))
+
+        # Enhanced title and labels
+        ax.set_title(
+            feature.replace("mean_", "").replace("_", " ").title(),
+            fontsize=TYPO["TITLE_SIZE"],
+            pad=TYPO["TITLE_PAD"] * 2,  # Increased padding for title
+        )
+
+        # Show x-label only on bottom row
+        if show_xlabel:
+            ax.set_xlabel(
+                "Time", fontsize=TYPO["LABEL_SIZE"], labelpad=TYPO["LABEL_PAD"]
+            )
+        else:
+            ax.set_xlabel("")  # Remove x-label for other subplots
+            ax.set_xticklabels([])  # Also remove x-tick labels for non-bottom rows
+
+        # Handle y-axis label
+        if not show_ylabel:
+            ax.set_ylabel("")  # Remove y-label if not on left column
+
+        # Legend only in first plot
+        if show_legend:
+            self._add_optimized_legend(ax)
+
+        # Enhanced grid and ticks
+        self._optimize_axis_settings(ax)

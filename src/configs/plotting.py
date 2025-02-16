@@ -102,6 +102,30 @@ EXPORT_SETTINGS = {
     "TRANSPARENT": False,  # Solid background for better visibility
 }
 
+# Add grayscale alternatives for print versions
+GRAYSCALE_COLORS = {
+    "actual": "#000000",  # Black
+    "predicted": "#666666",  # Dark gray
+    "average": "#999999",  # Medium gray
+    "pred_avg": "#CCCCCC",  # Light gray
+    "change_point": "#333333",  # Very dark gray
+    "threshold": "#000000",  # Black
+    "feature": "#666666",  # Dark gray
+    "grid": "#EEEEEE",  # Very light gray
+}
+
+# Error bar styling for statistical plots
+ERROR_BAR_STYLE = {"capsize": 2, "capthick": 0.5, "elinewidth": 0.5, "alpha": 0.8}
+
+# Statistical plot settings
+STATISTICAL_PLOT_STYLE = {
+    "violin_alpha": 0.3,
+    "box_width": 0.7,
+    "whisker_caps": True,
+    "outlier_marker": ".",
+    "outlier_size": 2,
+}
+
 
 def get_network_style(custom_style: Dict = None) -> Dict:
     """Get network visualization style with optional customization."""
@@ -113,9 +137,10 @@ def get_network_style(custom_style: Dict = None) -> Dict:
 
 def get_matplotlib_rc_params() -> Dict[str, Any]:
     """Get matplotlib RC parameters for publication-quality plots."""
-    return {
+    params = {
         # Font settings
-        "font.family": TYPOGRAPHY["FONT_FAMILY"],
+        "font.family": "sans-serif",  # Changed from Arial to sans-serif
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],  # Fallback fonts
         "font.size": TYPOGRAPHY["LABEL_SIZE"],
         "font.weight": TYPOGRAPHY["FONT_WEIGHT"],
         # Axes settings
@@ -154,5 +179,46 @@ def get_matplotlib_rc_params() -> Dict[str, Any]:
         "figure.constrained_layout.use": True,
         # Text settings
         "text.color": COLORS["text"],
-        "text.usetex": False,  # Don't use LaTeX by default
+        "text.usetex": False,  # Disable LaTeX
+        "pdf.fonttype": 42,  # Ensure fonts are embedded properly
+        "ps.fonttype": 42,
+        "figure.autolayout": True,  # Better layout handling
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.01,
+        "savefig.dpi": 600,
+        "savefig.format": "png",  # Default to PNG format
+        # Improved tick settings
+        "xtick.major.size": 3,
+        "ytick.major.size": 3,
+        "xtick.minor.size": 1.5,
+        "ytick.minor.size": 1.5,
+        "xtick.major.pad": 2,
+        "ytick.major.pad": 2,
+        # Enhanced grid settings
+        "grid.linestyle": ":",
+        "grid.alpha": 0.1,
+        # Better legend settings
+        "legend.frameon": True,
+        "legend.framealpha": 0.9,
+        "legend.edgecolor": "0.8",
+        "legend.borderpad": 0.2,
+        "legend.columnspacing": 1.0,
+        "legend.handlelength": 1.0,
     }
+
+    return params
+
+
+def get_grayscale_style() -> Dict[str, str]:
+    """Get grayscale color scheme for print versions."""
+    return GRAYSCALE_COLORS.copy()
+
+
+def get_error_bar_style() -> Dict[str, float]:
+    """Get error bar styling for statistical plots."""
+    return ERROR_BAR_STYLE.copy()
+
+
+def get_statistical_style() -> Dict[str, Any]:
+    """Get styling for statistical plots (box plots, violin plots, etc.)."""
+    return STATISTICAL_PLOT_STYLE.copy()
