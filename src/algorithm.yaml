@@ -26,12 +26,29 @@ model:
 # Detection parameters
 detection:
   threshold: 60.0  # Detection threshold for martingale
-  epsilon: 0.7  # Sensitivity parameter for martingale updates
   batch_size: 1000  # Batch size for multiview processing
   reset: true  # Reset martingales after detection
   max_window: null  # Maximum window size (null for adaptive)
   prediction_horizon: 5  # Number of steps to predict ahead
-  betting_function: "power"  # choices: ["power", "exponential", "mixture", "constant", "beta", "kernel"]
+  
+  # Betting function configuration
+  betting_func_config:
+    name: "power"  # Available options: power, exponential, mixture, constant, beta, kernel
+    # Parameters for each betting function:
+    power:
+      epsilon: 0.7  # Sensitivity parameter in (0,1); lower values = larger bets on small p-values
+    exponential:
+      lambd: 1.0  # Rate parameter controlling sensitivity
+    mixture:
+      epsilons: [0.5, 0.6, 0.7, 0.8, 0.9]  # List of sensitivity parameters
+    constant: {}  # No parameters needed
+    beta:
+      a: 0.5  # Alpha parameter of Beta distribution
+      b: 1.5  # Beta parameter of Beta distribution
+    kernel:
+      bandwidth: 0.1  # Bandwidth for Gaussian kernel
+      past_pvalues: []  # List of past p-values (updated during runtime)
+
   distance:
     measure: "euclidean"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski"]
     p: 2.0  # Order for Minkowski distance (only used when measure is "minkowski")

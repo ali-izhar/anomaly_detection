@@ -77,7 +77,7 @@ class ChangePointDetector:
         data: np.ndarray,
         predicted_data: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
-        """Run the change point detection pipeline.
+        """Run the change point detection algorithm.
 
         Args:
             data: np.ndarray of shape (n_samples, n_features)

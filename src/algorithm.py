@@ -66,15 +66,22 @@ class GraphChangeDetection:
 
         # Validate detection configuration
         det_config = self.config["detection"]
-        if det_config["betting_function"] not in [
+        betting_config = det_config.get("betting_func_config", {})
+        if not betting_config or "name" not in betting_config:
+            raise ValueError("Betting function configuration must specify a 'name'")
+
+        valid_betting_functions = [
             "power",
             "exponential",
             "mixture",
             "constant",
             "beta",
             "kernel",
-        ]:
-            raise ValueError("Invalid betting function specified")
+        ]
+        if betting_config["name"] not in valid_betting_functions:
+            raise ValueError(
+                f"Invalid betting function specified. Must be one of: {valid_betting_functions}"
+            )
 
     def _setup_logging(self):
         """Configure logging."""
@@ -84,15 +91,15 @@ class GraphChangeDetection:
         )
 
     def run(self) -> Dict[str, Any]:
-        """Run the complete detection pipeline."""
-        logger.info(f"Starting {self.config['name']} pipeline")
+        """Run the complete detection algorithm."""
+        logger.info(f"Starting {self.config['name']} ...")
         logger.info(f"Description: {self.config['description']}")
 
         try:
             # Create timestamped output directory
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             network_type = self.config["model"]["network"]
-            betting_function = self.config["detection"]["betting_function"]
+            betting_function = self.config["detection"]["betting_func_config"]["name"]
             predictor_type = self.config["model"]["predictor"]["type"]
             distance_measure = self.config["detection"]["distance"]["measure"]
             self.config["output"]["directory"] = os.path.join(
@@ -166,11 +173,11 @@ class GraphChangeDetection:
                 predictor,
             )
 
-            logger.info("Pipeline completed successfully")
+            logger.info("Algorithm completed successfully")
             return results
 
         except Exception as e:
-            logger.error(f"Pipeline failed: {str(e)}")
+            logger.error(f"Algorithm failed: {str(e)}")
             raise
 
     def _init_predictor(self):
@@ -196,15 +203,23 @@ class GraphChangeDetection:
         distance_config = det_config.get("distance", {"measure": "euclidean", "p": 2.0})
         logger.info(f"Using distance measure: {distance_config['measure']}")
 
+        # Get betting function configuration
+        betting_config = det_config["betting_func_config"]
+        betting_name = betting_config["name"]
+        betting_params = betting_config.get(betting_name, {})
+
+        # Create the proper betting function config structure
+        betting_func_config = {"name": betting_name, "params": betting_params}
+        logger.info(f"Using betting function: {betting_name}")
+
         return ChangePointDetector(
             martingale_method=self.config["model"]["type"],
             threshold=det_config["threshold"],
-            epsilon=det_config["epsilon"],
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
             max_window=det_config["max_window"],
             random_state=42,  # Fixed for reproducibility
-            betting_func=det_config["betting_function"],
+            betting_func_config=betting_func_config,
             distance_measure=distance_config["measure"],
             distance_p=distance_config["p"],
         )
@@ -277,11 +292,21 @@ class GraphChangeDetection:
         """Create visualizations of the results."""
         logger.info("Creating visualizations")
         output_config = self.config["output"]
+        det_config = self.config["detection"]
+
+        # Get betting function configuration
+        betting_config = {
+            "function": det_config["betting_func_config"]["name"],
+            "params": det_config["betting_func_config"].get(
+                det_config["betting_func_config"]["name"], {}
+            ),
+        }
+
         visualizer = MartingaleVisualizer(
             martingales=detection_result,
             change_points=true_change_points,
-            threshold=self.config["detection"]["threshold"],
-            epsilon=self.config["detection"]["epsilon"],
+            threshold=det_config["threshold"],
+            betting_config=betting_config,
             output_dir=output_config["directory"],
             prefix=output_config["prefix"],
             skip_shap=output_config["visualization"]["skip_shap"],

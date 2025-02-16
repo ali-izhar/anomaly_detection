@@ -26,12 +26,14 @@ from src.changepoint.detector import ChangePointDetector
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
 from src.predictor.factory import PredictorFactory
-from src.changepoint.visualizer import MartingaleVisualizer
-from src.graph.visualizer import NetworkVisualizer
+
+# from src.changepoint.visualizer import MartingaleVisualizer
+# from src.graph.visualizer import NetworkVisualizer
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
-from src.configs.plotting import FIGURE_DIMENSIONS as FD
-from src.configs.plotting import TYPOGRAPHY as TYPO
+
+# from src.configs.plotting import FIGURE_DIMENSIONS as FD
+# from src.configs.plotting import TYPOGRAPHY as TYPO
 
 # Setup logging with debug level
 logger = logging.getLogger(__name__)
