@@ -11,484 +11,606 @@ Reset Strategy:
 - Horizon martingale only resets when traditional martingale confirms a change.
 """
 
-from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+    final,
+)
 
 import logging
 import numpy as np
+from numpy import floating, integer
 
 from .betting import (
     BettingFunctionConfig,
     get_betting_function,
 )
-from .strangeness import strangeness_point, get_pvalue
+from .distance import DistanceConfig
+from .strangeness import strangeness_point, get_pvalue, StrangenessConfig
+
 
 logger = logging.getLogger(__name__)
 
+# Type definitions for scalars and arrays
+ScalarType = TypeVar("ScalarType", bound=Union[floating, integer])
+Array = np.ndarray
+DataPoint = Union[List[float], np.ndarray]
 
+
+@dataclass(frozen=True)
+class MartingaleConfig:
+    """Configuration for martingale computation.
+
+    Attributes:
+        threshold: Detection threshold for martingale values.
+        history_size: Minimum number of observations before using predictions.
+        reset: Whether to reset after detection.
+        window_size: Maximum window size for strangeness computation.
+        random_state: Random seed for reproducibility.
+        betting_func_config: Configuration for betting function.
+        distance_measure: Distance metric for strangeness computation.
+        distance_p: Order parameter for Minkowski distance.
+        strangeness_config: Configuration for strangeness computation.
+    """
+
+    threshold: float
+    history_size: int
+    reset: bool = True
+    window_size: Optional[int] = None
+    random_state: Optional[int] = None
+    betting_func_config: Optional[BettingFunctionConfig] = None
+    distance_measure: str = "euclidean"
+    distance_p: float = 2.0
+    strangeness_config: Optional[StrangenessConfig] = None
+
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.threshold <= 0:
+            raise ValueError(f"Threshold must be positive, got {self.threshold}")
+        if self.history_size < 1:
+            raise ValueError(
+                f"History size must be at least 1, got {self.history_size}"
+            )
+        if self.window_size is not None and self.window_size < 1:
+            raise ValueError(
+                f"Window size must be at least 1 if specified, got {self.window_size}"
+            )
+        if self.distance_p <= 0:
+            raise ValueError(
+                f"Distance order parameter must be positive, got {self.distance_p}"
+            )
+
+
+@dataclass
+class MartingaleState:
+    """State for martingale computation.
+
+    Attributes:
+        window: Rolling window of past observations.
+        traditional_martingale: Current traditional martingale value.
+        horizon_martingale: Current horizon martingale value.
+        saved_traditional: History of traditional martingale values.
+        saved_horizon: History of horizon martingale values.
+        traditional_change_points: Indices where traditional martingale detected changes.
+        horizon_change_points: Indices where horizon martingale detected changes.
+    """
+
+    window: List[DataPoint] = field(default_factory=list)
+    traditional_martingale: float = 1.0
+    horizon_martingale: float = 1.0
+    saved_traditional: List[float] = field(default_factory=lambda: [1.0])
+    saved_horizon: List[float] = field(default_factory=lambda: [1.0])
+    traditional_change_points: List[int] = field(default_factory=list)
+    horizon_change_points: List[int] = field(default_factory=list)
+
+    def reset(self):
+        """Reset martingale state after a detection event."""
+        self.window.clear()
+        self.traditional_martingale = 1.0
+        self.horizon_martingale = 1.0
+        # Append reset values to the history for continuity
+        self.saved_traditional.append(1.0)
+        self.saved_horizon.append(1.0)
+
+
+@final
 def compute_martingale(
-    data: List[Any],
-    predicted_data: List[np.ndarray],
-    threshold: float,
-    history_size: int,
-    reset: bool = True,
-    window_size: Optional[int] = None,
-    random_state: Optional[int] = None,
-    betting_func_config: BettingFunctionConfig = None,
-    distance_measure: str = "euclidean",
-    distance_p: float = 2.0,
+    data: List[DataPoint],
+    predicted_data: Optional[List[Array]] = None,
+    config: Optional[MartingaleConfig] = None,
+    state: Optional[MartingaleState] = None,
 ) -> Dict[str, Any]:
-    """
-    Compute a martingale for online change detection over a univariate data stream using conformal p-values
-    and a chosen strangeness measure.
+    """Compute a martingale for online change detection over a univariate data stream.
 
-    Two martingale streams are computed:
+    Uses conformal p-values and a chosen strangeness measure to compute two martingale streams:
       1. Traditional martingale: uses only the current observation with its history.
-      2. Horizon martingale: uses the current observation plus all predicted future states (horizon)
-         together with the history.
+      2. Horizon martingale: uses the current observation plus predicted future states.
 
-    Parameters
-    ----------
-    data : List[Any]
-        Sequential observations to monitor.
-    predicted_data : List[np.ndarray]
-        List of predicted feature vectors for future timesteps. Each prediction should have the same shape as a data row.
-    threshold : float
-        Detection threshold (> 0). A change is reported if the martingale exceeds this value.
-    history_size : int
-        Minimum number of observations to accumulate before using predictions.
-    reset : bool, optional
-        Whether to reset the martingale and history window after a detection (default: True).
-    window_size : int, optional
-        Maximum number of recent observations to keep in the history window.
-    random_state : int, optional
-        Random seed for reproducibility.
-    betting_func_config : BettingFunctionConfig, optional
-        Configuration for the betting function.
-    distance_measure : str, optional
-        Distance metric to use for strangeness computation.
-    distance_p : float, optional
-        Order parameter for Minkowski distance.
+    Args:
+        data: Sequential observations to monitor.
+        predicted_data: Optional list of predicted feature vectors for future timesteps.
+        config: Configuration for martingale computation.
+        state: Optional state for continuing computation from a previous run.
 
-    Returns
-    -------
-    Dict[str, Any]
-        A dictionary with:
-         - "traditional_change_points": List[int] indices where the traditional martingale detected a change.
-         - "horizon_change_points": List[int] indices where the horizon martingale detected a change.
+    Returns:
+        Dictionary containing:
+         - "traditional_change_points": List[int] of indices where traditional martingale detected a change.
+         - "horizon_change_points": List[int] of indices where horizon martingale detected a change.
          - "traditional_martingales": np.ndarray of traditional martingale values over time.
-         - "horizon_martingales": np.ndarray of horizon martingale values (if predictions are provided).
+         - "horizon_martingales": np.ndarray of horizon martingale values (if predictions provided).
+
+    Raises:
+        ValueError: If input validation fails.
+        RuntimeError: If computation fails.
     """
+    if not data:
+        raise ValueError("Empty data sequence")
 
-    betting_function = get_betting_function(betting_func_config)
+    # Use provided config or set default values.
+    if config is None:
+        config = MartingaleConfig(
+            threshold=1.0,
+            history_size=10,
+            reset=True,
+            window_size=None,
+            random_state=None,
+            betting_func_config=BettingFunctionConfig(
+                name="power",
+                params={"epsilon": 0.7},
+            ),
+            distance_measure="euclidean",
+            distance_p=2.0,
+            strangeness_config=StrangenessConfig(
+                n_clusters=1,
+                batch_size=None,
+                random_state=None,
+                distance_config=DistanceConfig(metric="euclidean"),
+            ),
+        )
 
+    # Initialize state if not provided.
+    if state is None:
+        state = MartingaleState()
+
+    # Obtain the betting function callable based on the betting_func_config.
+    betting_function = get_betting_function(config.betting_func_config)
+
+    # Log input dimensions and configuration details.
     logger.debug("Single-view Martingale Input Dimensions:")
     logger.debug(f"  Sequence length: {len(data)}")
     if predicted_data:
         logger.debug(f"  Number of predictions: {len(predicted_data)}")
         logger.debug(f"  Predictions per timestep: {len(predicted_data[0])}")
-    logger.debug(f"  History size: {history_size}")
-    logger.debug(f"  Window size: {window_size if window_size else 'None'}")
+    logger.debug(f"  History size: {config.history_size}")
+    logger.debug(
+        f"  Window size: {config.window_size if config.window_size else 'None'}"
+    )
     logger.debug("-" * 50)
 
-    # ------- Input Validation -------
-    if threshold <= 0:
-        logger.error(f"Invalid threshold value: {threshold}")
-        raise ValueError("Threshold must be positive")
-
-    logger.debug(
-        f"Starting martingale computation with threshold={threshold}, window_size={window_size}"
-    )
-
-    # ------- Initialize Storage -------
-    # For traditional martingale detections.
-    traditional_change_points: List[int] = []
-    horizon_change_points: List[int] = []  # For horizon martingale detections.
-
-    # Initialize both martingale streams with initial value 1.0.
-    traditional_martingale = [1.0]  # Running value for traditional updates.
-    saved_traditional = [1.0]  # Saved sequence for output.
-    horizon_martingale = [1.0]  # Running value for horizon updates.
-    saved_horizon = [1.0]  # Saved horizon martingale sequence.
-
-    # Rolling history window for strangeness computation.
-    window: List[Any] = []
-
-    # ------- Compute Martingale -------
     try:
-        #  For each point in the data stream, compute the martingale.
+        # Process each point in the data stream.
         for i, point in enumerate(data):
-
-            # Maintain the rolling window if window_size is specified.
-            if window_size and len(window) >= window_size:
-                window = window[-window_size:]
+            # Maintain a rolling window if a window_size is set.
+            if config.window_size and len(state.window) >= config.window_size:
+                state.window = state.window[-config.window_size :]
 
             # Compute strangeness for the current observation.
-            if len(window) == 0:
-                # If the window is empty, the strangeness is 0.0.
+            # If the window is empty, default strangeness is set to 0.
+            if len(state.window) == 0:
                 s_vals = [0.0]
             else:
+                # Reshape the window data to 2D array (n_samples, 1)
+                window_data = np.array(state.window + [point]).reshape(-1, 1)
                 s_vals = strangeness_point(
-                    window + [point],
-                    random_state=random_state,
-                    distance_measure=distance_measure,
-                    p=distance_p,
+                    window_data,
+                    config=config.strangeness_config,
                 )
 
-            # Compute conformal p-value from the strangeness values.
-            pvalue = get_pvalue(s_vals, random_state=random_state)
+            # Compute conformal p-value using the strangeness scores.
+            pvalue = get_pvalue(s_vals, random_state=config.random_state)
 
-            # Retrieve the previous traditional martingale value.
-            prev_trad = traditional_martingale[-1]
-
-            # Update the traditional martingale using the betting function.
+            # Update traditional martingale using the betting function.
+            prev_trad = state.traditional_martingale
             new_trad = betting_function(prev_trad, pvalue)
 
-            # Check if a change has been detected in the traditional martingale.
+            # Check if the updated traditional martingale exceeds the threshold.
             detected_trad = False
-            if reset and new_trad > threshold:
+            if config.reset and new_trad > config.threshold:
                 logger.info(
-                    f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {threshold}"
+                    f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {config.threshold}"
                 )
                 detected_trad = True
-                traditional_change_points.append(i)
+                state.traditional_change_points.append(i)
 
-            # --- Horizon Martingale Update ---
+            # Update horizon martingale if predictions are available.
             new_horizon = None
-            if predicted_data is not None and i >= history_size:
-                # Use predictions only after accumulating enough history.
-                pred_idx = i - history_size
-
-                # Initialize the product factor for the horizon update.
+            if predicted_data is not None and i >= config.history_size:
+                pred_idx = i - config.history_size
                 horizon_update_factor = 1.0
 
-                # Loop over all horizon predictions at the current prediction index.
+                # Process each predicted future state (horizon).
                 for h in range(len(predicted_data[pred_idx])):
-                    # Compute strangeness for the predicted state.
-                    if len(window) == 0:
+                    if len(state.window) == 0:
                         pred_s_vals = [0.0]
                     else:
-                        # Wrap predicted value in a list to mimic an observation.
+                        # Reshape the window data and prediction to 2D arrays
+                        window_data = np.array(state.window).reshape(-1, 1)
+                        pred_data = np.array(predicted_data[pred_idx][h]).reshape(1, -1)
                         pred_s_vals = strangeness_point(
-                            window + [[predicted_data[pred_idx][h]]],
-                            random_state=random_state,
-                            distance_measure=distance_measure,
-                            p=distance_p,
+                            np.vstack([window_data, pred_data]),
+                            config=config.strangeness_config,
                         )
-
-                    # Compute the conformal p-value for the predicted state.
-                    pred_pvalue = get_pvalue(pred_s_vals, random_state=random_state)
-
-                    # Update the product factor.
+                    pred_pvalue = get_pvalue(
+                        pred_s_vals, random_state=config.random_state
+                    )
                     horizon_update_factor *= betting_function(1.0, pred_pvalue)
 
-                # Update the horizon martingale using the same previous traditional value.
                 new_horizon = prev_trad * horizon_update_factor
-                if new_horizon > threshold:
+                if new_horizon > config.threshold:
                     logger.info(
-                        f"Horizon martingale detected change at t={i}: {new_horizon:.4f} > {threshold}"
+                        f"Horizon martingale detected change at t={i}: {new_horizon:.4f} > {config.threshold}"
                     )
-                    horizon_change_points.append(i)
-
+                    state.horizon_change_points.append(i)
             elif predicted_data is not None:
+                # If predictions exist but not enough history, default horizon equals traditional.
                 new_horizon = prev_trad
 
-            # --- Reset Logic (Hybrid Approach) ---
+            # Reset state if a change is detected; otherwise, update state.
             if detected_trad:
-                # On traditional detection:
-                # 1. Reset traditional martingale to 1.0
-                # 2. Reset horizon martingale to 1.0 (hybrid approach)
-                # 3. Clear window for fresh start
-                window = []  # Clear window after detection
-                saved_traditional.append(new_trad)  # Store detection value
-                traditional_martingale.append(1.0)  # Reset for next iteration
+                state.reset()
+                # Save the reset value (1.0) before continuing
+                state.saved_traditional.append(1.0)
                 if new_horizon is not None:
-                    saved_horizon.append(new_horizon)
-                    horizon_martingale.append(
-                        1.0
-                    )  # Reset horizon on traditional detection
+                    state.saved_horizon.append(1.0)
+                # Skip updating state for this point since we just reset
+                continue
             else:
-                # No detection: update windows and continue martingale sequences
-                window.append(point)
-                saved_traditional.append(new_trad)
-                traditional_martingale.append(new_trad)
+                state.window.append(point)
+                state.traditional_martingale = new_trad
+                state.saved_traditional.append(new_trad)
                 if new_horizon is not None:
-                    saved_horizon.append(new_horizon)
-                    horizon_martingale.append(new_horizon)  # Continue horizon sequence
+                    state.horizon_martingale = new_horizon
+                    state.saved_horizon.append(new_horizon)
 
-            # Log state every 10 timesteps.
+            # Periodically log the current state.
             if i > 0 and i % 10 == 0:
                 logger.debug(
-                    f"t={i}: window size={len(window)}, traditional M={traditional_martingale[-1]:.4f}"
+                    f"t={i}: window size={len(state.window)}, traditional M={state.traditional_martingale:.4f}"
                 )
-                if predicted_data is not None and i >= history_size:
-                    logger.debug(f"t={i}: horizon M={horizon_martingale[-1]:.4f}")
+                if predicted_data is not None and i >= config.history_size:
+                    logger.debug(f"t={i}: horizon M={state.horizon_martingale:.4f}")
                 logger.debug("-" * 30)
 
         logger.debug(
-            f"Martingale computation complete. Traditional change points: {len(traditional_change_points)}; Horizon change points: {len(horizon_change_points)}."
+            f"Martingale computation complete. Traditional change points: {len(state.traditional_change_points)}; "
+            f"Horizon change points: {len(state.horizon_change_points)}."
         )
 
+        # Return the computed martingale histories and detected change points.
         return {
-            "traditional_change_points": traditional_change_points,
-            "horizon_change_points": horizon_change_points,
+            "traditional_change_points": state.traditional_change_points,
+            "horizon_change_points": state.horizon_change_points,
             "traditional_martingales": np.array(
-                saved_traditional[1:], dtype=float
-            ),  # Excludes initial value.
+                state.saved_traditional[1:], dtype=float
+            ),
             "horizon_martingales": (
-                np.array(saved_horizon[1:], dtype=float)
+                np.array(state.saved_horizon[1:], dtype=float)
                 if predicted_data is not None
                 else None
             ),
         }
+
     except Exception as e:
         logger.error(f"Martingale computation failed: {str(e)}")
         raise RuntimeError(f"Martingale computation failed: {str(e)}")
 
 
-def multiview_martingale_test(
-    data: List[List[Any]],
-    predicted_data: List[List[np.ndarray]],
-    threshold: float,
-    history_size: int,
-    window_size: Optional[int] = None,
-    batch_size: int = 1000,
-    random_state: Optional[int] = None,
-    betting_func_config: BettingFunctionConfig = None,
-    distance_measure: str = "euclidean",
-    distance_p: float = 2.0,
-) -> Dict[str, Any]:
-    """
-    Compute a multivariate (multiview) martingale test by aggregating evidence across multiple features.
+@dataclass
+class MultiviewMartingaleState:
+    """State for multiview martingale computation.
 
-    For d features, each feature j maintains its own martingale computed using the traditional update (current observation + history)
-    and the horizon update (if predictions are provided). The combined martingale is defined as:
+    Attributes:
+        windows: List of rolling windows for each feature.
+        traditional_martingales: Current traditional martingale values per feature.
+        horizon_martingales: Current horizon martingale values per feature.
+        traditional_sum: Sum of traditional martingales across features.
+        horizon_sum: Sum of horizon martingales across features.
+        traditional_avg: Average of traditional martingales.
+        horizon_avg: Average of horizon martingales.
+        traditional_change_points: Indices where traditional martingale detected changes.
+        horizon_change_points: Indices where horizon martingale detected changes.
+        individual_traditional: Martingale history for each individual feature.
+        individual_horizon: Horizon martingale history for each individual feature.
+    """
+
+    windows: List[List[DataPoint]] = field(default_factory=list)
+    traditional_martingales: List[float] = field(default_factory=list)
+    horizon_martingales: List[float] = field(default_factory=list)
+    traditional_sum: List[float] = field(default_factory=lambda: [1.0])
+    horizon_sum: List[float] = field(default_factory=lambda: [1.0])
+    traditional_avg: List[float] = field(default_factory=lambda: [1.0])
+    horizon_avg: List[float] = field(default_factory=lambda: [1.0])
+    traditional_change_points: List[int] = field(default_factory=list)
+    horizon_change_points: List[int] = field(default_factory=list)
+    individual_traditional: List[List[float]] = field(default_factory=list)
+    individual_horizon: List[List[float]] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Initialize state lists if they are not already set."""
+        if not self.windows:
+            self.windows = []
+        if not self.traditional_martingales:
+            self.traditional_martingales = []
+        if not self.horizon_martingales:
+            self.horizon_martingales = []
+        if not self.individual_traditional:
+            self.individual_traditional = []
+        if not self.individual_horizon:
+            self.individual_horizon = []
+
+    def reset(self, num_features: int):
+        """Reset state for all features.
+
+        Args:
+            num_features: Number of features to initialize.
+        """
+        # Reset each feature's rolling window.
+        self.windows = [[] for _ in range(num_features)]
+        # Reset martingale values for each feature to 1.0.
+        self.traditional_martingales = [1.0] * num_features
+        self.horizon_martingales = [1.0] * num_features
+        # Update overall sum and average with the reset values.
+        self.traditional_sum.append(float(num_features))
+        self.horizon_sum.append(float(num_features))
+        self.traditional_avg.append(1.0)
+        self.horizon_avg.append(1.0)
+        # Reset individual martingale histories per feature.
+        for j in range(num_features):
+            if len(self.individual_traditional) <= j:
+                self.individual_traditional.append([1.0])
+            else:
+                self.individual_traditional[j].append(1.0)
+            if len(self.individual_horizon) <= j:
+                self.individual_horizon.append([1.0])
+            else:
+                self.individual_horizon[j].append(1.0)
+
+
+@final
+def multiview_martingale_test(
+    data: List[List[DataPoint]],
+    predicted_data: Optional[List[List[Array]]] = None,
+    config: Optional[MartingaleConfig] = None,
+    state: Optional[MultiviewMartingaleState] = None,
+    batch_size: int = 1000,
+) -> Dict[str, Any]:
+    """Compute a multivariate (multiview) martingale test by aggregating evidence across features.
+
+    For d features, each feature maintains its own martingale computed using the traditional update
+    (current observation + history) and the horizon update (if predictions are provided).
+    The combined martingale is defined as:
          M_total(n) = sum_{j=1}^{d} M_j(n)
          M_avg(n) = M_total(n) / d
     A change is declared if M_total(n) exceeds the threshold.
 
-    Parameters
-    ----------
-    data : List[List[Any]]
-        List of feature sequences to monitor.
-    predicted_data : List[List[np.ndarray]]
-        List of predicted feature vectors for each feature.
-    threshold : float
-        Detection threshold (> 0). A change is reported if the martingale exceeds this value.
-    history_size : int
-        Minimum number of observations to accumulate before using predictions.
-    window_size : int, optional
-        Maximum number of recent observations to keep in the history window.
-    batch_size : int, optional
-        Size of batches for processing (default: 1000).
-    random_state : int, optional
-        Random seed for reproducibility.
-    betting_func_config : BettingFunctionConfig, optional
-        Configuration for the betting function.
-    distance_measure : str, optional
-        Distance metric to use for strangeness computation.
-    distance_p : float, optional
-        Order parameter for Minkowski distance.
+    Args:
+        data: List of feature sequences to monitor.
+        predicted_data: Optional list of predicted feature vectors for each feature.
+        config: Configuration for martingale computation.
+        state: Optional state for continuing computation from a previous run.
+        batch_size: Size of batches for processing.
 
-    Returns
-    -------
-    Dict[str, Any]
-        A dictionary with change points and martingale values.
+    Returns:
+        Dictionary containing change points and martingale values.
+
+    Raises:
+        ValueError: If input validation fails.
+        RuntimeError: If computation fails.
     """
+    if not data or not data[0]:
+        raise ValueError("Empty data sequence")
 
-    betting_function = get_betting_function(betting_func_config)
+    # Use provided configuration or default settings.
+    if config is None:
+        config = MartingaleConfig(
+            threshold=1.0,
+            history_size=10,
+            reset=True,
+            window_size=None,
+            random_state=None,
+            betting_func_config=BettingFunctionConfig(
+                name="power",
+                params={"epsilon": 0.7},
+            ),
+            distance_measure="euclidean",
+            distance_p=2.0,
+            strangeness_config=StrangenessConfig(
+                n_clusters=1,
+                batch_size=None,
+                random_state=None,
+                distance_config=DistanceConfig(metric="euclidean"),
+            ),
+        )
 
+    # Initialize state if not provided.
+    if state is None:
+        state = MultiviewMartingaleState()
+        state.reset(len(data))
+
+    # Get the betting function based on the provided configuration.
+    betting_function = get_betting_function(config.betting_func_config)
+
+    # Log input dimensions and configuration details.
     logger.debug("Multiview Martingale Input Dimensions:")
     logger.debug(f"  Number of features: {len(data)}")
     logger.debug(f"  Sequence length per feature: {len(data[0])}")
     if predicted_data:
         logger.debug(f"  Number of prediction timesteps: {len(predicted_data[0])}")
         logger.debug(f"  Predictions per timestep: {len(predicted_data[0][0])}")
-    logger.debug(f"  History size: {history_size}")
-    logger.debug(f"  Window size: {window_size if window_size else 'None'}")
+    logger.debug(f"  History size: {config.history_size}")
+    logger.debug(
+        f"  Window size: {config.window_size if config.window_size else 'None'}"
+    )
     logger.debug(f"  Batch size: {batch_size}")
     logger.debug("-" * 50)
 
-    # ------- Input Validation -------
-    if not data or not data[0]:
-        logger.error("Empty data sequence provided")
-        raise ValueError("Empty data sequence")
-    if threshold <= 0:
-        logger.error(f"Invalid threshold value: {threshold}")
-        raise ValueError("Threshold must be positive")
+    try:
+        num_features = len(data)
+        num_samples = len(data[0])
+        num_horizons = len(predicted_data[0][0]) if predicted_data is not None else 0
 
-    logger.debug(
-        f"Starting multiview martingale test with {len(data)} features, num_samples={len(data[0])}, threshold={threshold}"
-    )
+        idx = 0
+        while idx < num_samples:
+            batch_end = min(idx + batch_size, num_samples)
+            logger.debug(
+                f"Processing batch [{idx}:{batch_end}]: Batch size = {batch_end - idx}"
+            )
 
-    # ------- Initialize Storage -------
-    num_features = len(data)
-    num_samples = len(data[0])
+            # Process each sample in the current batch.
+            for i in range(idx, batch_end):
+                new_traditional = []
 
-    # Initialize per-feature history windows and individual traditional martingale series.
-    windows = [[] for _ in range(num_features)]
-    traditional_martingales = [[1.0] for _ in range(num_features)]
-    individual_traditional = [[1.0] for _ in range(num_features)]
+                # Update traditional martingale for each feature.
+                for j in range(num_features):
+                    # Maintain rolling window for feature j if window_size is specified.
+                    if (
+                        config.window_size
+                        and len(state.windows[j]) >= config.window_size
+                    ):
+                        state.windows[j] = state.windows[j][-config.window_size :]
 
-    # Aggregated traditional martingale series.
-    traditional_sum = [float(num_features)]
-    traditional_avg = [1.0]
-    traditional_change_points = []
+                    # Compute strangeness for the current observation for feature j.
+                    if not state.windows[j]:
+                        s_vals = [0.0]
+                    else:
+                        # Reshape the window data to 2D array (n_samples, 1)
+                        window_data = np.array(state.windows[j] + [data[j][i]]).reshape(
+                            -1, 1
+                        )
+                        s_vals = strangeness_point(
+                            window_data,
+                            config=config.strangeness_config,
+                        )
+                    # Compute p-value and update traditional martingale for feature j.
+                    pv = get_pvalue(s_vals, random_state=config.random_state)
+                    prev_val = state.traditional_martingales[j]
+                    new_val = betting_function(prev_val, pv)
+                    new_traditional.append(new_val)
 
-    # Initialize individual horizon martingale series.
-    horizon_martingales = [[1.0] for _ in range(num_features)]
+                # Aggregate traditional martingale values across all features.
+                total_traditional = sum(new_traditional)
+                avg_traditional = total_traditional / num_features
+                state.traditional_sum.append(total_traditional)
+                state.traditional_avg.append(avg_traditional)
 
-    # Aggregated horizon martingale series.
-    horizon_sum = [float(num_features)]
-    horizon_avg = [1.0]
-    horizon_change_points = []
+                # Update individual traditional martingales history for each feature.
+                for j in range(num_features):
+                    state.traditional_martingales[j] = new_traditional[j]
+                    state.individual_traditional[j].append(new_traditional[j])
 
-    # Determine prediction horizon length.
-    num_horizons = len(predicted_data[0][0]) if predicted_data is not None else 0
+                # Update horizon martingale if predicted data is available.
+                new_horizon = []
+                if predicted_data is not None and i >= config.history_size:
+                    pred_idx = i - config.history_size
+                    for j in range(num_features):
+                        prev_trad = state.traditional_martingales[j]
+                        horizon_factor = 1.0
 
-    idx = 0
-    while idx < num_samples:
-        batch_end = min(idx + batch_size, num_samples)
-        logger.debug(
-            f"Processing batch [{idx}:{batch_end}]: Batch size = {batch_end - idx}"
-        )
+                        # Process each horizon prediction for feature j.
+                        for h in range(num_horizons):
+                            if not state.windows[j]:
+                                continue
+                            else:
+                                # Reshape the window data and prediction to 2D arrays
+                                window_data = np.array(state.windows[j]).reshape(-1, 1)
+                                pred_data = np.array(
+                                    predicted_data[j][pred_idx][h]
+                                ).reshape(1, -1)
+                                pred_s_val = strangeness_point(
+                                    np.vstack([window_data, pred_data]),
+                                    config=config.strangeness_config,
+                                )
+                                pred_pv = get_pvalue(
+                                    pred_s_val, random_state=config.random_state
+                                )
+                                horizon_factor *= betting_function(1.0, pred_pv)
+                        new_horizon_val = prev_trad * horizon_factor
+                        new_horizon.append(new_horizon_val)
 
-        for i in range(idx, batch_end):
-            new_traditional = (
-                []
-            )  # New traditional martingale values for current timestep.
-            # For each feature, update the traditional martingale.
-            for j in range(num_features):
+                    # Aggregate horizon martingale values.
+                    total_horizon = sum(new_horizon)
+                    avg_horizon = total_horizon / num_features
+                    state.horizon_sum.append(total_horizon)
+                    state.horizon_avg.append(avg_horizon)
 
-                # Maintain the rolling window if window_size is specified.
-                if window_size and len(windows[j]) >= window_size:
-                    windows[j] = windows[j][-window_size:]
-
-                # Compute strangeness for the current observation.
-                if not windows[j]:
-                    s_vals = [0.0]
+                    # Check for horizon martingale detection.
+                    if total_horizon > config.threshold:
+                        logger.info(
+                            f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold}"
+                        )
+                        state.horizon_change_points.append(i)
                 else:
-                    s_vals = strangeness_point(
-                        windows[j] + [data[j][i]],
-                        random_state=random_state,
-                        distance_measure=distance_measure,
-                        p=distance_p,
-                    )
+                    # If no predicted data, default horizon equals traditional.
+                    total_horizon = total_traditional
+                    avg_horizon = avg_traditional
+                    state.horizon_sum.append(total_horizon)
+                    state.horizon_avg.append(avg_horizon)
 
-                # Compute p-value for update
-                pv = get_pvalue(s_vals, random_state=random_state)
-
-                # Update the traditional martingale using the betting function.
-                prev_val = traditional_martingales[j][-1]
-                new_val = betting_function(prev_val, pv)
-                new_traditional.append(new_val)
-
-            # Aggregate the traditional martingale values.
-            total_traditional = sum(new_traditional)
-            avg_traditional = total_traditional / num_features
-            traditional_sum.append(total_traditional)
-            traditional_avg.append(avg_traditional)
-
-            # Update the aggregated traditional martingale series.
-            for j in range(num_features):
-                traditional_martingales[j].append(new_traditional[j])
-                individual_traditional[j].append(
-                    new_traditional[j]
-                )  # Update individual traditional
-
-            # --- Horizon Martingale Update ---
-            new_horizon = []
-            if predicted_data is not None and i >= history_size:
-                pred_idx = i - history_size
-                for j in range(num_features):
-                    # Start with the same previous value as traditional martingale
-                    prev_trad = traditional_martingales[j][
-                        -2
-                    ]  # Use traditional value before current update
-                    horizon_factor = 1.0
-
-                    # Loop over each prediction for feature j.
-                    for h in range(num_horizons):
-                        if not windows[j]:
-                            # Skip horizon updates when window is empty (after reset)
-                            continue
-                        else:
-                            pred_s_val = strangeness_point(
-                                windows[j] + [predicted_data[j][pred_idx][h]],
-                                random_state=random_state,
-                                distance_measure=distance_measure,
-                                p=distance_p,
-                            )
-                            pred_pv = get_pvalue(pred_s_val, random_state=random_state)
-                            horizon_factor *= betting_function(1.0, pred_pv)
-
-                    # Update horizon martingale value using traditional previous value
-                    new_horizon_val = (
-                        prev_trad * horizon_factor
-                    )  # Start from traditional value
-                    new_horizon.append(new_horizon_val)
-
-                # Compute aggregated horizon martingale
-                total_horizon = sum(new_horizon)
-                avg_horizon = total_horizon / num_features
-                horizon_sum.append(total_horizon)
-                horizon_avg.append(avg_horizon)
-
-                # Check for horizon martingale detection
-                if total_horizon > threshold:
+                # Handle reset logic if traditional martingale exceeds threshold.
+                if total_traditional > config.threshold:
                     logger.info(
-                        f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {threshold}"
+                        f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
                     )
-                    horizon_change_points.append(i)
-            else:
-                total_horizon = total_traditional
-                avg_horizon = avg_traditional
-                horizon_sum.append(total_horizon)
-                horizon_avg.append(avg_horizon)
+                    state.traditional_change_points.append(i)
+                    state.reset(num_features)
+                else:
+                    # No detection: update each feature's window and horizon martingale history.
+                    for j in range(num_features):
+                        state.windows[j].append(data[j][i])
+                        if predicted_data is not None and i >= config.history_size:
+                            if len(state.individual_horizon) <= j:
+                                state.individual_horizon.append([])
+                            state.individual_horizon[j].append(new_horizon[j])
 
-            # --- Reset Logic (Hybrid Approach) ---
-            if total_traditional > threshold:
-                logger.info(
-                    f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {threshold}"
-                )
-                traditional_change_points.append(i)
-                # Reset both traditional and horizon martingales for all features
-                for j in range(num_features):
-                    windows[j] = []  # Clear windows
-                    traditional_martingales[j].append(1.0)  # Reset traditional
-                    individual_traditional[j].append(
-                        1.0
-                    )  # Reset individual traditional
-                    horizon_martingales[j].append(
-                        1.0
-                    )  # Reset horizon (hybrid approach)
-            else:
-                # No detection: update windows and continue martingale sequences
-                for j in range(num_features):
-                    windows[j].append(data[j][i])
-                    if predicted_data is not None and i >= history_size:
-                        horizon_martingales[j].append(new_horizon[j])
+                # Periodically log the current state.
+                if i > 0 and i % 10 == 0:
+                    logger.debug(
+                        f"t={i}: Avg window size={np.mean([len(w) for w in state.windows]):.1f}, "
+                        f"Traditional Sum={state.traditional_sum[-1]:.4f}, "
+                        f"Horizon Sum={state.horizon_sum[-1]:.4f}"
+                    )
 
-            if i > 0 and i % 10 == 0:
-                logger.debug(
-                    f"t={i}: Avg window size={np.mean([len(w) for w in windows]):.1f}, Traditional Sum={traditional_sum[-1]:.4f}, Horizon Sum={horizon_sum[-1]:.4f}"
-                )
+            logger.debug(
+                f"Completed batch: Traditional Sum={state.traditional_sum[-1]:.4f}, "
+                f"Change points={len(state.traditional_change_points)}"
+            )
+            idx = batch_end
 
-        logger.debug(
-            f"Completed batch: Traditional Sum={traditional_sum[-1]:.4f}, Change points={len(traditional_change_points)}"
-        )
-        idx = batch_end
+        # Return the aggregated results as numpy arrays.
+        return {
+            "traditional_change_points": state.traditional_change_points,
+            "horizon_change_points": state.horizon_change_points,
+            "traditional_sum_martingales": np.array(
+                state.traditional_sum[1:], dtype=float
+            ),
+            "traditional_avg_martingales": np.array(
+                state.traditional_avg[1:], dtype=float
+            ),
+            "horizon_sum_martingales": np.array(state.horizon_sum[1:], dtype=float),
+            "horizon_avg_martingales": np.array(state.horizon_avg[1:], dtype=float),
+            "individual_traditional_martingales": [
+                np.array(m[1:], dtype=float) for m in state.individual_traditional
+            ],
+            "individual_horizon_martingales": [
+                np.array(m[1:], dtype=float) for m in state.individual_horizon
+            ],
+        }
 
-    return {
-        "traditional_change_points": traditional_change_points,
-        "horizon_change_points": horizon_change_points,
-        "traditional_sum_martingales": np.array(traditional_sum[1:], dtype=float),
-        "traditional_avg_martingales": np.array(traditional_avg[1:], dtype=float),
-        "horizon_sum_martingales": np.array(horizon_sum[1:], dtype=float),
-        "horizon_avg_martingales": np.array(horizon_avg[1:], dtype=float),
-        "individual_traditional_martingales": [
-            np.array(m[1:], dtype=float) for m in traditional_martingales
-        ],
-        "individual_horizon_martingales": [
-            np.array(m[1:], dtype=float) for m in horizon_martingales
-        ],
-    }
+    except Exception as e:
+        logger.error(f"Multiview martingale computation failed: {str(e)}")
+        raise RuntimeError(f"Multiview martingale computation failed: {str(e)}")

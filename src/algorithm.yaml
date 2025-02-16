@@ -34,9 +34,8 @@ detection:
   # Betting function configuration
   betting_func_config:
     name: "power"  # Available options: power, exponential, mixture, constant, beta, kernel
-    # Parameters for each betting function:
-    power:
-      epsilon: 0.7  # Sensitivity parameter in (0,1); lower values = larger bets on small p-values
+    power:  # Parameters specific to the power betting function
+      epsilon: 0.7
     exponential:
       lambd: 1.0  # Rate parameter controlling sensitivity
     mixture:
@@ -49,9 +48,10 @@ detection:
       bandwidth: 0.1  # Bandwidth for Gaussian kernel
       past_pvalues: []  # List of past p-values (updated during runtime)
 
+  # Distance configuration
   distance:
-    measure: "euclidean"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski"]
-    p: 2.0  # Order for Minkowski distance (only used when measure is "minkowski")
+    measure: "euclidean"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski", "chebyshev"]
+    p: 2.0  # Order for Minkowski distance
 
 # Feature extraction
 features:

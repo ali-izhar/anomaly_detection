@@ -1,232 +1,321 @@
 # src/changepoint/distance.py
 
-"""Distance computation utilities for change point detection."""
+"""Distance computation utilities for change point detection.
 
-from typing import Union
+This module provides a collection of distance metrics for computing dissimilarity
+between data points and cluster centers in the context of change point detection.
+The distances are used in strangeness measure computation and conformal prediction.
 
+Mathematical Framework:
+---------------------
+For two points x, y ∈ ℝᵈ, the following distances are supported:
+
+1. Euclidean Distance (L₂):
+   d(x,y) = √(Σᵢ(xᵢ-yᵢ)²)
+
+2. Mahalanobis Distance:
+   d(x,y) = √((x-y)ᵀΣ⁻¹(x-y))
+   where Σ is the covariance matrix
+
+3. Manhattan Distance (L₁):
+   d(x,y) = Σᵢ|xᵢ-yᵢ|
+
+4. Cosine Distance:
+   d(x,y) = 1 - cos(x,y) = 1 - (x·y)/(||x||·||y||)
+
+5. Minkowski Distance (Lₚ):
+   d(x,y) = (Σᵢ|xᵢ-yᵢ|ᵖ)^(1/p)
+
+6. Chebyshev Distance (L∞):
+   d(x,y) = maxᵢ|xᵢ-yᵢ|
+
+Numerical Considerations:
+----------------------
+1. Small constants are added to denominators to prevent division by zero
+2. Covariance matrices are regularized for numerical stability
+3. Input arrays are validated for correct dimensions and types
+4. Edge cases (zero vectors, identical points) are handled gracefully
+
+References:
+----------
+[1] Cha, S.-H. (2007). "Comprehensive Survey on Distance/Similarity Measures
+    between Probability Density Functions"
+[2] Deza, M. M., & Deza, E. (2009). "Encyclopedia of Distances"
+"""
+
+from dataclasses import dataclass
+from typing import Union, Optional, Literal, get_args
 import logging
 import numpy as np
+from numpy.linalg import LinAlgError
 from sklearn.cluster import KMeans, MiniBatchKMeans
 
 logger = logging.getLogger(__name__)
+
+# Define allowed distance metric names using Literal types for better type safety.
+DistanceMetric = Literal[
+    "euclidean", "mahalanobis", "manhattan", "cosine", "minkowski", "chebyshev"
+]
+# Retrieve the valid metric names as a tuple
+VALID_METRICS: tuple[str, ...] = get_args(DistanceMetric)
+
+
+@dataclass(frozen=True)
+class DistanceConfig:
+    """Configuration for distance computation.
+
+    Attributes:
+        metric: Distance metric to use
+        p: Order parameter for Minkowski distance
+        eps: Small constant for numerical stability
+        cov_reg: Regularization parameter for covariance matrix
+        use_correlation: Whether to use correlation instead of covariance
+    """
+
+    metric: DistanceMetric = "euclidean"
+    p: float = 2.0
+    eps: float = 1e-8
+    cov_reg: float = 1e-6
+    use_correlation: bool = False
+
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        # Check if the provided metric is one of the allowed metrics
+        if self.metric not in VALID_METRICS:
+            raise ValueError(
+                f"Invalid metric: {self.metric}. Must be one of {VALID_METRICS}"
+            )
+        # Ensure the Minkowski parameter p is strictly positive
+        if self.p <= 0:
+            raise ValueError(f"p must be positive, got {self.p}")
+        # Ensure the small constant eps is strictly positive
+        if self.eps <= 0:
+            raise ValueError(f"eps must be positive, got {self.eps}")
+        # Regularization parameter for the covariance must be non-negative
+        if self.cov_reg < 0:
+            raise ValueError(f"cov_reg must be non-negative, got {self.cov_reg}")
+
+
+def compute_pairwise_distances(
+    x: np.ndarray,
+    y: np.ndarray,
+    config: Optional[DistanceConfig] = None,
+) -> np.ndarray:
+    """Compute pairwise distances between points in x and y.
+
+    Args:
+        x: Array of shape (n_samples_x, n_features)
+        y: Array of shape (n_samples_y, n_features)
+        config: Distance computation configuration
+
+    Returns:
+        Array of shape (n_samples_x, n_samples_y) containing pairwise distances
+
+    Raises:
+        ValueError: If input dimensions are invalid
+        RuntimeError: If distance computation fails
+    """
+    # Use the provided configuration or default to a Euclidean configuration
+    config = config or DistanceConfig()
+
+    # Convert inputs to numpy arrays if they aren't already
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Validate input dimensions
+    if x.ndim > 2 or y.ndim > 2:
+        raise ValueError(f"Expected 2D arrays, got x.ndim={x.ndim}, y.ndim={y.ndim}")
+    if x.ndim != 2 or y.ndim != 2:
+        raise ValueError("Expected 2D arrays")
+
+    try:
+        # Validate feature dimensions match
+        if x.shape[1] != y.shape[1]:
+            raise ValueError(
+                f"Feature dimension mismatch: x={x.shape[1]}, y={y.shape[1]}"
+            )
+
+        # Dispatch to the proper function based on the selected metric
+        if config.metric == "euclidean":
+            return _compute_euclidean(x, y, config.eps)
+        elif config.metric == "mahalanobis":
+            return _compute_mahalanobis(x, y, config)
+        elif config.metric == "manhattan":
+            return _compute_manhattan(x, y)
+        elif config.metric == "cosine":
+            return _compute_cosine(x, y, config.eps)
+        elif config.metric == "minkowski":
+            return _compute_minkowski(x, y, config.p)
+        else:  # Must be chebyshev if not any of the above
+            return _compute_chebyshev(x, y)
+
+    except Exception as e:
+        # Only wrap non-ValueError exceptions in RuntimeError
+        if isinstance(e, ValueError):
+            raise
+        logger.error(f"Distance computation failed: {str(e)}")
+        raise RuntimeError(f"Distance computation failed: {str(e)}")
 
 
 def compute_cluster_distances(
     data_array: np.ndarray,
     model: Union[KMeans, MiniBatchKMeans],
-    distance_measure: str = "euclidean",
-    p: float = 2.0,
+    config: Optional[DistanceConfig] = None,
 ) -> np.ndarray:
-    """
-    Compute distances from each point in `data_array` to each cluster center
-    using the specified distance measure.
+    """Compute distances from each point to cluster centers.
 
-    Parameters
-    ----------
-    data_array : np.ndarray
-        2D numpy array of shape (N, d) where N is the number of points.
-    model : Union[KMeans, MiniBatchKMeans]
-        A fitted clustering model (e.g., KMeans) whose cluster centers will be used.
-    distance_measure : str, optional
-        The distance metric to use. Options are:
-          - "euclidean" (default): Uses the model's transform.
-          - "mahalanobis": Uses a global covariance matrix computed over data_array.
-          - "manhattan": L1 norm.
-          - "cosine": 1 minus the cosine similarity.
-          - "minkowski": Minkowski distance with order p (default p=2.0 is Euclidean).
-    p : float, optional
-        The order for Minkowski distance (only used when distance_measure=="minkowski").
+    Args:
+        data_array: Array of shape (n_samples, n_features)
+        model: Fitted clustering model with cluster centers
+        config: Distance computation configuration
 
-    Returns
-    -------
-    np.ndarray
-        A (N x n_clusters) array of distances.
+    Returns:
+        Array of shape (n_samples, n_clusters) containing distances to centers
+
+    Raises:
+        TypeError: If input type is invalid
+        ValueError: If input dimensions are invalid
+        RuntimeError: If distance computation fails
     """
-    # Ensure that the input data is a numpy array.
+    # Use default configuration if none is provided
+    config = config or DistanceConfig()
+
+    # Check input type before any conversion
     if not isinstance(data_array, np.ndarray):
-        logger.error("data_array must be a numpy array")
         raise TypeError("data_array must be a numpy array")
 
-    # Check that the data array is two-dimensional.
-    if data_array.ndim != 2:
-        logger.error(f"Invalid data dimensions: {data_array.ndim}D. Expected 2D array.")
-        raise ValueError(
-            f"Invalid data dimensions: {data_array.ndim}D. Expected 2D array."
-        )
+    # Store original dimension for validation
+    orig_ndim = data_array.ndim
 
-    # Unpack the shape of the data array: N points with d features each.
-    N, d = data_array.shape
+    # Reshape 1D array to 2D if needed
+    if data_array.ndim == 1:
+        data_array = data_array.reshape(-1, 1)
 
-    # Retrieve cluster centers from the clustering model.
-    centers = model.cluster_centers_
-    n_clusters, d_centers = centers.shape
+    # Validate input dimensions
+    if orig_ndim != 2 and orig_ndim != 1:
+        raise ValueError(f"Expected 1D or 2D array, got {orig_ndim}D")
 
-    # Validate that the feature dimensions of the data and the cluster centers match.
-    if d != d_centers:
-        logger.error(f"Feature dimension mismatch: data ({d}) != centers ({d_centers})")
-        raise ValueError(
-            f"Feature dimension mismatch: data ({d}) != centers ({d_centers})"
-        )
+    try:
+        # Retrieve cluster centers from the model
+        centers = model.cluster_centers_
 
-    # === Euclidean Distance ===
-    # For Euclidean distance, we take advantage of the model's efficient transform method.
-    if distance_measure == "euclidean":
-        distances = model.transform(data_array)
-        if distances.shape != (N, n_clusters):
-            logger.error(
-                f"Invalid euclidean distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
-            )
+        # Check feature dimensions match
+        if data_array.shape[1] != centers.shape[1]:
             raise ValueError(
-                f"Invalid euclidean distances shape: {distances.shape}. Expected: ({N}, {n_clusters})"
-            )
-        return distances
-
-    # === Mahalanobis Distance ===
-    elif distance_measure == "mahalanobis":
-        # For single-feature data, use variance instead of covariance matrix
-        if d == 1:
-            # Compute variance, adding small constant to avoid division by zero
-            var = np.var(data_array, axis=0) + 1e-8
-            distances = np.zeros((N, n_clusters))
-            for i in range(N):
-                for j in range(n_clusters):
-                    diff = data_array[i] - centers[j]
-                    distances[i, j] = np.sqrt(np.sum((diff**2) / var))
-            return distances
-
-        # For multi-feature data, use full covariance matrix
-        # Compute the global covariance matrix over all data points
-        cov = np.cov(data_array, rowvar=False)
-        if cov.shape != (d, d):
-            logger.error(
-                f"Invalid covariance matrix shape: {cov.shape}. Expected: ({d}, {d})"
-            )
-            raise ValueError(
-                f"Invalid covariance matrix shape: {cov.shape}. Expected: ({d}, {d})"
+                f"Feature dimension mismatch: data={data_array.shape[1]}, centers={centers.shape[1]}"
             )
 
-        # Add small constant to diagonal to ensure matrix is invertible
-        cov = cov + np.eye(d) * 1e-8
+        # For Euclidean distances, if not using correlation adjustments,
+        # use the clustering model's built-in transform for efficiency
+        if config.metric == "euclidean" and not config.use_correlation:
+            try:
+                return model.transform(data_array)
+            except Exception:
+                # Fall back to manual computation if transform fails
+                return compute_pairwise_distances(data_array, centers, config)
 
-        # Compute the pseudo-inverse of the covariance matrix to handle singular cases
-        inv_cov = np.linalg.pinv(cov)
-        if inv_cov.shape != (d, d):
-            logger.error(
-                f"Invalid inverse covariance matrix shape: {inv_cov.shape}. Expected: ({d}, {d})"
-            )
-            raise ValueError(
-                f"Invalid inverse covariance matrix shape: {inv_cov.shape}. Expected: ({d}, {d})"
-            )
+        # Otherwise, compute the distances manually using pairwise distances
+        return compute_pairwise_distances(data_array, centers, config)
 
-        # Initialize an array to store distances from each point to each cluster center.
-        distances = np.zeros((N, n_clusters))
-        # Compute the Mahalanobis distance for every point-center pair.
-        for i in range(N):
-            for j in range(n_clusters):
-                # Calculate the difference vector between the point and the cluster center.
-                diff = data_array[i] - centers[j]
-                if diff.shape != (d,):
-                    logger.error(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                    raise ValueError(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                # Compute the Mahalanobis distance using the quadratic form.
-                distances[i, j] = np.sqrt(diff @ inv_cov @ diff)
+    except (TypeError, ValueError) as e:
+        # Re-raise TypeError and ValueError as is
+        raise
+    except Exception as e:
+        # Wrap other exceptions in RuntimeError
+        logger.error(f"Cluster distance computation failed: {str(e)}")
+        raise RuntimeError(f"Cluster distance computation failed: {str(e)}")
 
-        return distances
 
-    # === Manhattan Distance (L1 Norm) ===
-    elif distance_measure == "manhattan":
-        # Initialize the distances array.
-        distances = np.zeros((N, n_clusters))
-        # Compute L1 distance (sum of absolute differences) for each point-center pair.
-        for i in range(N):
-            for j in range(n_clusters):
-                diff = data_array[i] - centers[j]
-                if diff.shape != (d,):
-                    logger.error(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                    raise ValueError(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                distances[i, j] = np.sum(np.abs(diff))
-        return distances
+def _compute_euclidean(x: np.ndarray, y: np.ndarray, eps: float) -> np.ndarray:
+    """Compute Euclidean (L₂) distances."""
+    # Compute squared norms for x and y.
+    x2 = np.sum(x * x, axis=1, keepdims=True)  # Shape (n_x, 1)
+    y2 = np.sum(y * y, axis=1, keepdims=True).T  # Shape (1, n_y)
+    # Compute the dot product between x and y.
+    xy = np.dot(x, y.T)  # Shape (n_x, n_y)
 
-    # === Cosine Distance ===
-    # Cosine distance is defined as 1 minus the cosine similarity.
-    elif distance_measure == "cosine":
-        # Initialize an array for the cosine distances.
-        distances = np.zeros((N, n_clusters))
-        # Iterate over every point and cluster center.
-        for i in range(N):
-            for j in range(n_clusters):
-                if data_array[i].shape != (d,) or centers[j].shape != (d,):
-                    logger.error(
-                        f"Invalid vector shapes: data {data_array[i].shape}, center {centers[j].shape}. Expected: ({d},)"
-                    )
-                    raise ValueError(
-                        f"Invalid vector shapes: data {data_array[i].shape}, center {centers[j].shape}. Expected: ({d},)"
-                    )
+    # Calculate squared distances and take the square root.
+    # Use np.maximum to ensure non-negative values inside sqrt
+    squared_dist = np.maximum(x2 + y2 - 2 * xy, 0)
+    # Only add eps to exact zeros
+    squared_dist = np.where(squared_dist == 0, 0, squared_dist)
+    return np.sqrt(squared_dist)
 
-                # Compute the dot product between the data point and the cluster center.
-                numerator = np.dot(data_array[i], centers[j])
-                # Compute the norms of the data point and the cluster center.
-                norm_i = np.linalg.norm(data_array[i])
-                norm_j = np.linalg.norm(centers[j])
 
-                # Handle potential division by zero by setting cosine similarity to zero.
-                if norm_i == 0 or norm_j == 0:
-                    cosine_similarity = 0
-                else:
-                    cosine_similarity = numerator / (norm_i * norm_j)
-                # Cosine distance is 1 minus the cosine similarity.
-                distances[i, j] = 1 - cosine_similarity
+def _compute_mahalanobis(
+    x: np.ndarray,
+    y: np.ndarray,
+    config: DistanceConfig,
+) -> np.ndarray:
+    """Compute Mahalanobis distances using global covariance."""
+    # Special handling for 1D case
+    if x.shape[1] == 1:
+        x_flat = x.ravel()
+        y_flat = y.ravel()
+        var = np.var(np.concatenate([x_flat, y_flat])) + config.eps
+        diff = x_flat[:, np.newaxis] - y_flat[np.newaxis, :]
+        return np.abs(diff) / np.sqrt(var)
 
-        return distances
-
-    # === Minkowski Distance ===
-    elif distance_measure == "minkowski":
-        # Initialize an array to hold the Minkowski distances.
-        distances = np.zeros((N, n_clusters))
-        # Calculate the Minkowski distance (of order p) for each point-center pair.
-        for i in range(N):
-            for j in range(n_clusters):
-                diff = data_array[i] - centers[j]
-                if diff.shape != (d,):
-                    logger.error(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                    raise ValueError(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                # Minkowski distance: sum(|diff|^p) raised to the power of 1/p.
-                distances[i, j] = np.sum(np.abs(diff) ** p) ** (1.0 / p)
-
-        return distances
-
-    # === Chebyshev Distance (L∞ norm) ===
-    elif distance_measure == "chebyshev":
-        # Initialize an array to hold the Chebyshev distances.
-        distances = np.zeros((N, n_clusters))
-        # Calculate the Chebyshev distance (maximum absolute difference) for each point-center pair.
-        for i in range(N):
-            for j in range(n_clusters):
-                diff = data_array[i] - centers[j]
-                if diff.shape != (d,):
-                    logger.error(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                    raise ValueError(
-                        f"Invalid difference vector shape: {diff.shape}. Expected: ({d},)"
-                    )
-                # Chebyshev distance: max(|diff|)
-                distances[i, j] = np.max(np.abs(diff))
-
-        return distances
-
+    # Regular computation for higher dimensions
+    combined = np.vstack([x, y])
+    if config.use_correlation:
+        cov = np.corrcoef(combined, rowvar=False)
     else:
-        logger.error(f"Invalid distance_measure: {distance_measure}")
-        raise ValueError(f"Invalid distance_measure: {distance_measure}")
+        cov = np.cov(combined, rowvar=False)
+        cov += np.eye(cov.shape[0]) * config.cov_reg
+
+    try:
+        inv_cov = np.linalg.pinv(cov)
+    except LinAlgError:
+        logger.warning(
+            "Covariance matrix inversion failed, falling back to Euclidean distance"
+        )
+        return _compute_euclidean(x, y, config.eps)
+
+    diff = x[:, np.newaxis, :] - y[np.newaxis, :, :]
+    return np.sqrt(
+        np.sum(np.sum(diff[:, :, :, np.newaxis] * inv_cov, axis=2) * diff, axis=2)
+    )
+
+
+def _compute_manhattan(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Compute Manhattan (L₁) distances."""
+    # Use broadcasting to compute pairwise differences
+    diff = x[:, np.newaxis, :] - y[np.newaxis, :, :]  # Shape (n_x, n_y, n_features)
+    # Sum absolute differences along feature axis
+    distances = np.sum(np.abs(diff), axis=2)
+    # Ensure exact zeros for identical points
+    return np.where(np.all(diff == 0, axis=2), 0, distances)
+
+
+def _compute_cosine(x: np.ndarray, y: np.ndarray, eps: float) -> np.ndarray:
+    """Compute cosine distances."""
+    # Compute the L2 norms of x and y.
+    x_norm = np.sqrt(np.sum(x * x, axis=1, keepdims=True))
+    y_norm = np.sqrt(np.sum(y * y, axis=1, keepdims=True))
+
+    # Normalize the vectors; add eps to avoid division by zero.
+    x_normalized = x / (x_norm + eps)
+    y_normalized = y / (y_norm + eps)
+
+    # Compute cosine similarity as the dot product of the normalized vectors.
+    similarity = np.dot(x_normalized, y_normalized.T)
+    # Clip the similarity values to the valid range [-1, 1] to handle numerical imprecision.
+    similarity = np.clip(similarity, -1.0, 1.0)
+    # Convert similarity to distance.
+    return 1.0 - similarity
+
+
+def _compute_minkowski(x: np.ndarray, y: np.ndarray, p: float) -> np.ndarray:
+    """Compute Minkowski (Lₚ) distances."""
+    # Calculate the p-th power of the absolute differences, sum them, then take the 1/p root.
+    return np.power(
+        np.sum(np.power(np.abs(x[:, np.newaxis, :] - y[np.newaxis, :, :]), p), axis=2),
+        1.0 / p,
+    )
+
+
+def _compute_chebyshev(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Compute Chebyshev (L∞) distances."""
+    # For each pair, take the maximum absolute difference across features.
+    return np.max(np.abs(x[:, np.newaxis, :] - y[np.newaxis, :, :]), axis=2)

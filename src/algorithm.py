@@ -23,6 +23,7 @@ from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
 from src.predictor import PredictorFactory
+from src.changepoint.detector import DetectorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -199,30 +200,33 @@ class GraphChangeDetection:
         det_config = self.config["detection"]
         logger.info(f"Initializing detector with {self.config['model']['type']} method")
 
-        # Get distance configuration
-        distance_config = det_config.get("distance", {"measure": "euclidean", "p": 2.0})
-        logger.info(f"Using distance measure: {distance_config['measure']}")
-
-        # Get betting function configuration
-        betting_config = det_config["betting_func_config"]
-        betting_name = betting_config["name"]
-        betting_params = betting_config.get(betting_name, {})
-
-        # Create the proper betting function config structure
-        betting_func_config = {"name": betting_name, "params": betting_params}
-        logger.info(f"Using betting function: {betting_name}")
-
-        return ChangePointDetector(
-            martingale_method=self.config["model"]["type"],
+        # Create DetectorConfig with all necessary parameters
+        detector_config = DetectorConfig(
+            method=self.config["model"]["type"],  # "single_view" or "multiview"
             threshold=det_config["threshold"],
+            history_size=self.config["model"]["predictor"]["config"]["n_history"],
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
             max_window=det_config["max_window"],
+            # Betting function configuration
+            betting_func_config={
+                "name": det_config["betting_func_config"]["name"],
+                "params": det_config["betting_func_config"].get(
+                    det_config["betting_func_config"]["name"], {}
+                ),
+            },
+            # Distance configuration
+            distance_measure=det_config["distance"]["measure"],
+            distance_p=det_config["distance"]["p"],
             random_state=42,  # Fixed for reproducibility
-            betting_func_config=betting_func_config,
-            distance_measure=distance_config["measure"],
-            distance_p=distance_config["p"],
         )
+
+        logger.info(f"Using distance measure: {detector_config.distance_measure}")
+        logger.info(
+            f"Using betting function: {detector_config.betting_func_config['name']}"
+        )
+
+        return ChangePointDetector(detector_config)
 
     def _generate_sequence(self, generator):
         """Generate the graph sequence using model-specific configuration."""
