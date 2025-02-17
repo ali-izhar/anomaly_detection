@@ -22,13 +22,14 @@ project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from src.changepoint.detector import ChangePointDetector, DetectorConfig
 from src.changepoint.visualizer import MartingaleVisualizer
 from src.configs.loader import get_config
-from src.graph.generator import GraphGenerator
-from src.graph.visualizer import NetworkVisualizer
-from src.changepoint.detector import ChangePointDetector, DetectorConfig
 from src.graph.features import NetworkFeatureExtractor
+from src.graph.generator import GraphGenerator
 from src.graph.utils import adjacency_to_graph
+from src.graph.visualizer import NetworkVisualizer
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -420,16 +421,7 @@ def run_visualization(
 
     # Create martingale visualizer
     martingale_viz = MartingaleVisualizer(
-        martingales={
-            "sum": detection_result["traditional_sum_martingales"],
-            "avg": detection_result["traditional_avg_martingales"],
-            "individual": detection_result["individual_traditional_martingales"],
-            "horizon_sum": detection_result.get("horizon_sum_martingales", None),
-            "horizon_avg": detection_result.get("horizon_avg_martingales", None),
-            "horizon_individual": detection_result.get(
-                "individual_horizon_martingales", None
-            ),
-        },
+        martingales=detection_result,  # Pass the entire detection result directly
         change_points=true_change_points,
         threshold=threshold,
         betting_config={"function": "power", "params": {"power": {"epsilon": epsilon}}},
