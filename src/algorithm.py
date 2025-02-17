@@ -3,7 +3,7 @@
 """Forecast-based Graph Structural Change Detection Algorithm."""
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 import logging
 import sys
@@ -48,10 +48,27 @@ class GraphChangeDetection:
 
     def _validate_config(self):
         """Validate the loaded configuration."""
-        required_sections = ["model", "detection", "features", "output"]
+        required_sections = ["model", "detection", "features", "output", "trials"]
         for section in required_sections:
             if section not in self.config:
                 raise ValueError(f"Missing required configuration section: {section}")
+
+        # Validate trials configuration
+        trials_config = self.config["trials"]
+        if trials_config["n_trials"] < 1:
+            raise ValueError("Number of trials must be at least 1")
+
+        # Validate random seeds configuration
+        if trials_config["random_seeds"] is not None:
+            if isinstance(trials_config["random_seeds"], (list, tuple)):
+                if len(trials_config["random_seeds"]) != trials_config["n_trials"]:
+                    raise ValueError(
+                        "Number of random seeds must match number of trials"
+                    )
+            elif not isinstance(trials_config["random_seeds"], (int, float)):
+                raise ValueError(
+                    "random_seeds must be null, an integer, or a list of integers"
+                )
 
         # Validate model configuration
         model_config = self.config["model"]
@@ -92,7 +109,7 @@ class GraphChangeDetection:
         )
 
     def run(self) -> Dict[str, Any]:
-        """Run the complete detection algorithm."""
+        """Run the complete detection algorithm with multiple trials."""
         logger.info(f"Starting {self.config['name']} ...")
         logger.info(f"Description: {self.config['description']}")
 
@@ -116,7 +133,6 @@ class GraphChangeDetection:
             # -------------------------------------------------- #
             predictor = self._init_predictor()
             generator = self._init_generator()
-            detector = self._init_detector()
 
             # -------------------------------------------------- #
             # ---------- Step 2: Generate graph sequence ------- #
@@ -145,21 +161,18 @@ class GraphChangeDetection:
                 logger.info(f"Generated predictions shape: {predicted_features.shape}")
 
             # -------------------------------------------------- #
-            # ---------- Step 5: Run detection ----------------- #
+            # ---------- Step 5: Run multiple trials ----------- #
             # -------------------------------------------------- #
-            detection_result = detector.run(
-                data=features_numeric, predicted_data=predicted_features
+            trial_results = self._run_multiple_trials(
+                features_numeric, predicted_features, true_change_points
             )
-
-            if detection_result is None:
-                raise RuntimeError("Detection failed to produce results")
 
             # -------------------------------------------------- #
             # ---------- Step 6: Create visualizations --------- #
             # -------------------------------------------------- #
             if self.config["output"]["visualization"]["enabled"]:
                 self._create_visualizations(
-                    detection_result, true_change_points, features_raw
+                    trial_results["aggregated"], true_change_points, features_raw
                 )
 
             # -------------------------------------------------- #
@@ -170,7 +183,7 @@ class GraphChangeDetection:
                 features_numeric,
                 features_raw,
                 predicted_graphs,
-                detection_result,
+                trial_results,
                 predictor,
             )
 
@@ -180,6 +193,184 @@ class GraphChangeDetection:
         except Exception as e:
             logger.error(f"Algorithm failed: {str(e)}")
             raise
+
+    def _run_multiple_trials(
+        self,
+        features_numeric: np.ndarray,
+        predicted_features: Optional[np.ndarray],
+        true_change_points: List[int],
+    ) -> Dict[str, Any]:
+        """Run multiple trials of the detector.
+
+        Args:
+            features_numeric: Extracted numeric features
+            predicted_features: Predicted feature vectors
+            true_change_points: Ground truth change points
+
+        Returns:
+            Dictionary containing individual trial results and aggregated statistics
+        """
+        trials_config = self.config["trials"]
+        n_trials = trials_config["n_trials"]
+        base_seed = trials_config["random_seeds"]
+
+        logger.info(f"Running {n_trials} detection trials...")
+
+        # Handle random seeds
+        if base_seed is None:
+            # Generate completely random seeds
+            random_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
+        elif isinstance(base_seed, (int, float)):
+            # Generate deterministic sequence of seeds from base seed
+            rng = np.random.RandomState(int(base_seed))
+            random_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
+        else:
+            # Use provided list of seeds
+            random_seeds = np.array(base_seed)
+
+        logger.info(f"Using seeds: {random_seeds.tolist()}")
+
+        individual_results = []
+        for trial_idx, seed in enumerate(random_seeds):
+            logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
+
+            # Initialize detector with current trial seed
+            detector = self._init_detector(random_state=seed)
+
+            # Run detection
+            detection_result = detector.run(
+                data=features_numeric, predicted_data=predicted_features
+            )
+
+            if detection_result is None:
+                raise RuntimeError(f"Detection failed for trial {trial_idx + 1}")
+
+            individual_results.append(detection_result)
+
+        # Aggregate results across trials
+        aggregated_results = self._aggregate_trial_results(individual_results)
+
+        trial_results = {
+            "individual_trials": (
+                individual_results if trials_config["save_individual_trials"] else None
+            ),
+            "aggregated": aggregated_results,
+            "random_seeds": random_seeds.tolist(),
+        }
+
+        return trial_results
+
+    def _aggregate_trial_results(
+        self, individual_results: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Aggregate results from multiple trials.
+
+        Args:
+            individual_results: List of detection results from each trial
+
+        Returns:
+            Dictionary containing aggregated statistics
+        """
+        n_trials = len(individual_results)
+        first_result = individual_results[0]
+
+        # Initialize aggregated results
+        aggregated = {
+            "detection_frequencies": {
+                "traditional": {},
+                "horizon": {},
+            }
+        }
+
+        # Define all possible martingale keys
+        possible_martingale_keys = [
+            # Single-view and common keys
+            "traditional_martingales",
+            "horizon_martingales",
+            # Multiview specific keys
+            "traditional_sum_martingales",
+            "traditional_avg_martingales",
+            "horizon_sum_martingales",
+            "horizon_avg_martingales",
+            "individual_traditional_martingales",
+            "individual_horizon_martingales",
+        ]
+
+        # Initialize martingale arrays for keys that exist in results
+        martingale_keys = [
+            key for key in possible_martingale_keys if key in first_result
+        ]
+        logger.debug(f"Found martingale keys: {martingale_keys}")
+
+        # Initialize arrays for each martingale type
+        for key in martingale_keys:
+            if key.startswith("individual_"):
+                # For individual martingales (list of arrays), initialize list of zeros arrays
+                n_features = len(first_result[key])
+                aggregated[key] = [
+                    np.zeros_like(first_result[key][i]) for i in range(n_features)
+                ]
+            else:
+                # For regular martingales, initialize single zeros array
+                aggregated[key] = np.zeros_like(first_result[key])
+
+        # Initialize change point lists
+        change_point_keys = []
+        if "traditional_change_points" in first_result:
+            change_point_keys.append("traditional_change_points")
+            aggregated["traditional_change_points"] = []
+        if "horizon_change_points" in first_result:
+            change_point_keys.append("horizon_change_points")
+            aggregated["horizon_change_points"] = []
+
+        # Aggregate results across trials
+        for result in individual_results:
+            # Aggregate martingale values
+            for key in martingale_keys:
+                if key.startswith("individual_"):
+                    # For individual martingales, sum each feature's martingales separately
+                    for i in range(len(aggregated[key])):
+                        aggregated[key][i] += result[key][i]
+                else:
+                    # For regular martingales, simple addition
+                    aggregated[key] += result[key]
+
+            # Count detection frequencies
+            for cp_key in change_point_keys:
+                detector_type = cp_key.split("_")[0]  # traditional or horizon
+                for cp in result[cp_key]:
+                    aggregated["detection_frequencies"][detector_type][cp] = (
+                        aggregated["detection_frequencies"][detector_type].get(cp, 0)
+                        + 1
+                    )
+
+        # Average martingale values
+        for key in martingale_keys:
+            if key.startswith("individual_"):
+                # Average each feature's martingales separately
+                for i in range(len(aggregated[key])):
+                    aggregated[key][i] /= n_trials
+            else:
+                # Average regular martingales
+                aggregated[key] /= n_trials
+
+        # Convert detection frequencies to probabilities and get consensus change points
+        threshold = n_trials / 2  # Majority vote threshold
+
+        for detector_type in ["traditional", "horizon"]:
+            cp_key = f"{detector_type}_change_points"
+            if cp_key in change_point_keys:
+                frequencies = aggregated["detection_frequencies"][detector_type]
+                change_points = []
+
+                for cp, freq in frequencies.items():
+                    frequencies[cp] = freq / n_trials  # Convert to probability
+                    if freq > threshold:
+                        change_points.append(cp)
+
+                aggregated[cp_key] = sorted(change_points)
+
+        return aggregated
 
     def _init_predictor(self):
         """Initialize the graph predictor."""
@@ -195,30 +386,28 @@ class GraphChangeDetection:
         logger.info(f"Initializing {network_type} graph generator")
         return GraphGenerator(network_type)
 
-    def _init_detector(self):
-        """Initialize the change point detector."""
+    def _init_detector(self, random_state: Optional[int] = None) -> ChangePointDetector:
+        """Initialize the change point detector with optional random state."""
         det_config = self.config["detection"]
         logger.info(f"Initializing detector with {self.config['model']['type']} method")
 
         # Create DetectorConfig with all necessary parameters
         detector_config = DetectorConfig(
-            method=self.config["model"]["type"],  # "single_view" or "multiview"
+            method=self.config["model"]["type"],
             threshold=det_config["threshold"],
             history_size=self.config["model"]["predictor"]["config"]["n_history"],
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
             max_window=det_config["max_window"],
-            # Betting function configuration
             betting_func_config={
                 "name": det_config["betting_func_config"]["name"],
                 "params": det_config["betting_func_config"].get(
                     det_config["betting_func_config"]["name"], {}
                 ),
             },
-            # Distance configuration
             distance_measure=det_config["distance"]["measure"],
             distance_p=det_config["distance"]["p"],
-            random_state=42,  # Fixed for reproducibility
+            random_state=random_state,  # Use provided random state
         )
 
         logger.info(f"Using distance measure: {detector_config.distance_measure}")
@@ -324,7 +513,7 @@ class GraphChangeDetection:
         features_numeric,
         features_raw,
         predicted_graphs,
-        detection_result,
+        trial_results,
         predictor,
     ):
         """Compile all results into a single dictionary."""
@@ -353,7 +542,7 @@ class GraphChangeDetection:
             )
 
         if self.config["output"]["save_martingales"]:
-            results.update(detection_result)
+            results.update(trial_results["aggregated"])
 
         return results
 

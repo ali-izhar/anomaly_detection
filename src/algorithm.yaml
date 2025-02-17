@@ -4,6 +4,12 @@ name: forecast_based_graph_cpd
 version: 1.0
 description: "Forecast-based Graph Structural Change Detection using Martingale Framework with Distribution-Aware Prediction"
 
+# Trial configuration
+trials:
+  n_trials: 2  # Number of times to run the detector
+  random_seeds: 99  # Optional list of seeds for reproducibility. If null, will generate random seeds
+  aggregate_stats: true  # Whether to compute aggregate statistics across trials
+  save_individual_trials: false  # Whether to save results from each individual trial
 
 # Model configuration
 model:
