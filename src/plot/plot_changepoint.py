@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from ..configs.plotting import (
+from .plotting import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
     LINE_STYLE as LS,

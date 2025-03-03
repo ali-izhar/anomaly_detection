@@ -13,14 +13,14 @@ import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from ..configs.plotting import (
+from .plotting import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
     LINE_STYLE as LS,
     COLORS,
     get_network_style,
 )
-from .utils import graph_to_adjacency, adjacency_to_graph
+from ..graph.utils import graph_to_adjacency, adjacency_to_graph
 
 logger = logging.getLogger(__name__)
 

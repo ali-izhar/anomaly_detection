@@ -17,7 +17,7 @@ if project_root not in sys.path:
 from src.configs.loader import get_config
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
-from src.graph.visualizer import NetworkVisualizer
+from src.plot.plot_graph import NetworkVisualizer
 from src.predictor.factory import PredictorFactory
 from src.graph.metrics import (
     compute_feature_metrics,
@@ -25,7 +25,7 @@ from src.graph.metrics import (
     FeatureMetrics,
     DistributionMetrics,
 )
-from src.configs.plotting import (
+from src.plot.plotting import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
     LINE_STYLE as LS,

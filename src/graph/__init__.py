@@ -8,13 +8,10 @@ from .metrics import (
     FeatureMetrics,
     DistributionMetrics,
 )
-from .visualizer import NetworkVisualizer
-
 
 __all__ = [
     "NetworkFeatureExtractor",
     "GraphGenerator",
-    "NetworkVisualizer",
     "compute_feature_metrics",
     "compute_feature_distribution_metrics",
     "FeatureMetrics",

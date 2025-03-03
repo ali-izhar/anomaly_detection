@@ -15,7 +15,7 @@ if project_root not in sys.path:
 
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
-from src.graph.visualizer import NetworkVisualizer
+from src.plot.plot_graph import NetworkVisualizer
 
 
 def calculate_block_sizes(n: int, num_blocks: int) -> list:

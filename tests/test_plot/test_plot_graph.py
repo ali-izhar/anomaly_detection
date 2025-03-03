@@ -28,7 +28,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.graph.generator import GraphGenerator
-from src.graph.visualizer import NetworkVisualizer
+from src.plot.plot_graph import NetworkVisualizer
 
 
 @pytest.fixture(autouse=True)

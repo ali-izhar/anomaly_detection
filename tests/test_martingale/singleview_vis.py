@@ -20,13 +20,13 @@ project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.changepoint.visualizer import MartingaleVisualizer
+from src.changepoint.detector import ChangePointDetector, DetectorConfig
 from src.configs.loader import get_config
 from src.graph.generator import GraphGenerator
-from src.graph.visualizer import NetworkVisualizer
-from src.changepoint.detector import ChangePointDetector, DetectorConfig
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
+from src.plot.plot_changepoint import MartingaleVisualizer
+from src.plot.plot_graph import NetworkVisualizer
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
