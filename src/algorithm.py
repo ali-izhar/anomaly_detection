@@ -23,6 +23,7 @@ from src.graph.features import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
 from src.plot.plot_changepoint import MartingaleVisualizer
 from src.predictor import PredictorFactory
+from src.output_manager import OutputManager
 
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,17 @@ class GraphChangeDetection:
                 f"Invalid betting function specified. Must be one of: {valid_betting_functions}"
             )
 
+        # Initialize execution options if not present
+        if "execution" not in self.config:
+            logger.warning("No 'execution' section found in config, using defaults")
+            self.config["execution"] = {
+                "enable_prediction": True,
+                "enable_visualization": True,
+                "save_csv": True,
+            }
+        elif "save_csv" not in self.config["execution"]:
+            self.config["execution"]["save_csv"] = True
+
     def _setup_logging(self):
         """Configure logging."""
         logging.basicConfig(
@@ -108,10 +120,43 @@ class GraphChangeDetection:
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
 
-    def run(self) -> Dict[str, Any]:
-        """Run the complete detection algorithm with multiple trials."""
-        logger.info(f"Starting {self.config['name']} ...")
-        logger.info(f"Description: {self.config['description']}")
+    def run(
+        self, prediction: bool = None, visualize: bool = None, save_csv: bool = None
+    ) -> Dict[str, Any]:
+        """Run the complete detection algorithm with multiple trials.
+
+        Args:
+            prediction: Whether to generate and use predictions for detection.
+                       If None, uses config value.
+            visualize: Whether to create visualizations of the results.
+                       If None, uses config value.
+            save_csv: Whether to save results to CSV files.
+                      If None, uses config value.
+
+        Returns:
+            Dictionary containing all results
+        """
+        # Use provided parameters or fall back to config values
+        enable_prediction = (
+            prediction
+            if prediction is not None
+            else self.config["execution"].get("enable_prediction", True)
+        )
+        enable_visualization = (
+            visualize
+            if visualize is not None
+            else self.config["execution"].get("enable_visualization", True)
+        )
+        enable_csv_export = (
+            save_csv
+            if save_csv is not None
+            else self.config["execution"].get("save_csv", True)
+        )
+
+        # logger.info(f"Starting {self.config['name']}, {self.config['description']}")
+        logger.debug(
+            f"Running with prediction={enable_prediction}, visualize={enable_visualization}, save_csv={enable_csv_export}"
+        )
 
         try:
             # Create timestamped output directory
@@ -131,8 +176,12 @@ class GraphChangeDetection:
             # -------------------------------------------------- #
             # ----------- Step 1: Initialize components -------- #
             # -------------------------------------------------- #
-            predictor = self._init_predictor()
             generator = self._init_generator()
+
+            # Only initialize predictor if prediction is enabled
+            predictor = None
+            if enable_prediction:
+                predictor = self._init_predictor()
 
             # -------------------------------------------------- #
             # ---------- Step 2: Generate graph sequence ------- #
@@ -148,16 +197,14 @@ class GraphChangeDetection:
             logger.info(f"Extracted features shape: {features_numeric.shape}")
 
             # -------------------------------------------------- #
-            # ---------- Step 4: Generate predictions ---------- #
+            # ---------- Step 4: Generate predictions (optional) #
             # -------------------------------------------------- #
-            predicted_graphs = self._generate_predictions(graphs, predictor)
-            predicted_features = (
-                self._process_predictions(predicted_graphs)
-                if predicted_graphs
-                else None
-            )
+            predicted_graphs = None
+            predicted_features = None
 
-            if predicted_features is not None:
+            if enable_prediction:
+                predicted_graphs = self._generate_predictions(graphs, predictor)
+                predicted_features = self._process_predictions(predicted_graphs)
                 logger.info(f"Generated predictions shape: {predicted_features.shape}")
 
             # -------------------------------------------------- #
@@ -168,15 +215,39 @@ class GraphChangeDetection:
             )
 
             # -------------------------------------------------- #
-            # ---------- Step 6: Create visualizations --------- #
+            # ------ Step 6: Create visualizations (optional) -- #
             # -------------------------------------------------- #
-            if self.config["output"]["visualization"]["enabled"]:
+            if (
+                enable_visualization
+                and self.config["output"]["visualization"]["enabled"]
+            ):
                 self._create_visualizations(
                     trial_results["aggregated"], true_change_points, features_raw
                 )
 
             # -------------------------------------------------- #
-            # --------- Step 7: Compile and return results ----- #
+            # ---------- Step 7: Export results to CSV (optional) #
+            # -------------------------------------------------- #
+            if enable_csv_export:
+                try:
+                    # Create output directory if it doesn't exist
+                    csv_output_dir = os.path.join(self.config["output"]["directory"])
+
+                    # Pass the entire config object to OutputManager for direct access
+                    output_manager = OutputManager(csv_output_dir, self.config)
+
+                    # Export both individual trials and aggregated results
+                    output_manager.export_to_csv(
+                        trial_results["aggregated"],
+                        true_change_points,
+                        individual_trials=trial_results["individual_trials"],
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to export results to CSV: {str(e)}")
+                    # Don't raise the exception, continue with algorithm
+
+            # -------------------------------------------------- #
+            # --------- Step 8: Compile and return results ----- #
             # -------------------------------------------------- #
             results = self._compile_results(
                 sequence_result,
@@ -187,7 +258,7 @@ class GraphChangeDetection:
                 predictor,
             )
 
-            logger.info("Algorithm completed successfully")
+            logger.info("Successfully completed algorithm")
             return results
 
         except Exception as e:
@@ -204,7 +275,7 @@ class GraphChangeDetection:
 
         Args:
             features_numeric: Extracted numeric features
-            predicted_features: Predicted feature vectors
+            predicted_features: Predicted feature vectors (can be None)
             true_change_points: Ground truth change points
 
         Returns:
@@ -250,10 +321,9 @@ class GraphChangeDetection:
         # Aggregate results across trials
         aggregated_results = self._aggregate_trial_results(individual_results)
 
+        # Always include individual trial results for CSV export
         trial_results = {
-            "individual_trials": (
-                individual_results if trials_config["save_individual_trials"] else None
-            ),
+            "individual_trials": individual_results,
             "aggregated": aggregated_results,
             "random_seeds": random_seeds.tolist(),
         }
@@ -533,13 +603,18 @@ class GraphChangeDetection:
                 }
             )
 
-        if self.config["output"]["save_predictions"]:
+        if predicted_graphs is not None and self.config["output"]["save_predictions"]:
             results.update(
                 {
                     "predicted_graphs": predicted_graphs,
-                    "predictor_states": predictor.get_state(),
                 }
             )
+            if predictor is not None:
+                results.update(
+                    {
+                        "predictor_states": predictor.get_state(),
+                    }
+                )
 
         if self.config["output"]["save_martingales"]:
             results.update(trial_results["aggregated"])
@@ -547,23 +622,51 @@ class GraphChangeDetection:
         return results
 
 
-def main(config_path: str) -> Dict[str, Any]:
+def main(
+    config_path: str,
+    prediction: bool = None,
+    visualize: bool = None,
+    save_csv: bool = None,
+) -> Dict[str, Any]:
     """Run the algorithm with the given configuration.
 
     Args:
         config_path: Path to YAML configuration file
+        prediction: Whether to generate and use predictions for detection.
+                   If None, uses the value from the config file.
+        visualize: Whether to create visualizations of the results.
+                   If None, uses the value from the config file.
+        save_csv: Whether to save results to CSV files.
+                 If None, uses the value from the config file.
 
     Returns:
         Dictionary containing all results
     """
     algorithm = GraphChangeDetection(config_path)
-    return algorithm.run()
+    return algorithm.run(prediction=prediction, visualize=visualize, save_csv=save_csv)
 
 
 if __name__ == "__main__":
     import sys
+    import argparse
 
-    if len(sys.argv) != 2:
-        print("Usage: python algorithm.py <config_path>")
-        sys.exit(1)
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Run graph change detection algorithm")
+    parser.add_argument("config_path", help="Path to configuration YAML file")
+    parser.add_argument(
+        "--no-prediction", action="store_true", help="Disable prediction in detection"
+    )
+    parser.add_argument(
+        "--no-visualization", action="store_true", help="Disable result visualization"
+    )
+    parser.add_argument(
+        "--no-csv", action="store_true", help="Disable CSV export of results"
+    )
+
+    args = parser.parse_args()
+
+    result = main(
+        args.config_path,
+        prediction=not args.no_prediction if args.no_prediction else None,
+        visualize=not args.no_visualization if args.no_visualization else None,
+        save_csv=not args.no_csv if args.no_csv else None,
+    )
