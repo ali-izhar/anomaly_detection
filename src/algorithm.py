@@ -330,59 +330,68 @@ class GraphChangeDetection:
 
         return trial_results
 
-    def _aggregate_trial_results(
-        self, individual_results: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def _aggregate_trial_results(self, individual_results):
         """Aggregate results from multiple trials.
 
         Args:
-            individual_results: List of detection results from each trial
+            individual_results: List of individual trial results
 
         Returns:
-            Dictionary containing aggregated statistics
+            Aggregated results dictionary
         """
-        n_trials = len(individual_results)
-        first_result = individual_results[0]
+        if not individual_results:
+            return {}
 
-        # Initialize aggregated results
-        aggregated = {
-            "detection_frequencies": {
-                "traditional": {},
-                "horizon": {},
-            }
+        # Get keys from first result
+        first_result = individual_results[0]
+        aggregated = {}
+
+        # Determine martingale keys to aggregate
+        martingale_keys = []
+        for key in first_result.keys():
+            if any(
+                key.startswith(prefix) for prefix in ["traditional_", "horizon_"]
+            ) and key.endswith(
+                ("_martingales", "_sum_martingales", "_avg_martingales")
+            ):
+                martingale_keys.append(key)
+
+        # Initialize detection frequency counter
+        aggregated["detection_frequencies"] = {
+            "traditional": {},
+            "horizon": {},
         }
 
-        # Define all possible martingale keys
-        possible_martingale_keys = [
-            # Single-view and common keys
-            "traditional_martingales",
-            "horizon_martingales",
-            # Multiview specific keys
-            "traditional_sum_martingales",
-            "traditional_avg_martingales",
-            "horizon_sum_martingales",
-            "horizon_avg_martingales",
-            "individual_traditional_martingales",
-            "individual_horizon_martingales",
-        ]
+        # Find the maximum length for each martingale array across all trials
+        max_lengths = {}
+        for key in martingale_keys:
+            if key.startswith("individual_"):
+                # For individual martingales, find max length for each feature
+                max_lengths[key] = []
+                for i in range(len(first_result[key])):
+                    max_len = max(
+                        len(result[key][i]) if key in result else 0
+                        for result in individual_results
+                    )
+                    max_lengths[key].append(max_len)
+            else:
+                # For regular martingales, find max length
+                max_lengths[key] = max(
+                    len(result[key]) if key in result else 0
+                    for result in individual_results
+                )
 
-        # Initialize martingale arrays for keys that exist in results
-        martingale_keys = [
-            key for key in possible_martingale_keys if key in first_result
-        ]
-        logger.debug(f"Found martingale keys: {martingale_keys}")
-
-        # Initialize arrays for each martingale type
+        # Initialize arrays for each martingale type with the maximum lengths
         for key in martingale_keys:
             if key.startswith("individual_"):
                 # For individual martingales (list of arrays), initialize list of zeros arrays
                 n_features = len(first_result[key])
                 aggregated[key] = [
-                    np.zeros_like(first_result[key][i]) for i in range(n_features)
+                    np.zeros(max_lengths[key][i]) for i in range(n_features)
                 ]
             else:
                 # For regular martingales, initialize single zeros array
-                aggregated[key] = np.zeros_like(first_result[key])
+                aggregated[key] = np.zeros(max_lengths[key])
 
         # Initialize change point lists
         change_point_keys = []
@@ -397,16 +406,30 @@ class GraphChangeDetection:
         for result in individual_results:
             # Aggregate martingale values
             for key in martingale_keys:
+                if key not in result:
+                    continue  # Skip if this key doesn't exist in this trial's results
+
                 if key.startswith("individual_"):
                     # For individual martingales, sum each feature's martingales separately
                     for i in range(len(aggregated[key])):
-                        aggregated[key][i] += result[key][i]
+                        if i < len(
+                            result[key]
+                        ):  # Check if this feature exists in the result
+                            # Pad the array if needed to match the aggregated size
+                            padded_array = np.zeros(max_lengths[key][i])
+                            padded_array[: len(result[key][i])] = result[key][i]
+                            aggregated[key][i][: len(padded_array)] += padded_array
                 else:
-                    # For regular martingales, simple addition
-                    aggregated[key] += result[key]
+                    # For regular martingales, pad and add
+                    padded_array = np.zeros(max_lengths[key])
+                    padded_array[: len(result[key])] = result[key]
+                    aggregated[key][: len(padded_array)] += padded_array
 
             # Count detection frequencies
             for cp_key in change_point_keys:
+                if cp_key not in result:
+                    continue  # Skip if this key doesn't exist in this trial's results
+
                 detector_type = cp_key.split("_")[0]  # traditional or horizon
                 for cp in result[cp_key]:
                     aggregated["detection_frequencies"][detector_type][cp] = (
@@ -415,30 +438,15 @@ class GraphChangeDetection:
                     )
 
         # Average martingale values
+        num_trials = len(individual_results)
         for key in martingale_keys:
             if key.startswith("individual_"):
                 # Average each feature's martingales separately
                 for i in range(len(aggregated[key])):
-                    aggregated[key][i] /= n_trials
+                    aggregated[key][i] /= num_trials
             else:
                 # Average regular martingales
-                aggregated[key] /= n_trials
-
-        # Convert detection frequencies to probabilities and get consensus change points
-        threshold = n_trials / 2  # Majority vote threshold
-
-        for detector_type in ["traditional", "horizon"]:
-            cp_key = f"{detector_type}_change_points"
-            if cp_key in change_point_keys:
-                frequencies = aggregated["detection_frequencies"][detector_type]
-                change_points = []
-
-                for cp, freq in frequencies.items():
-                    frequencies[cp] = freq / n_trials  # Convert to probability
-                    if freq > threshold:
-                        change_points.append(cp)
-
-                aggregated[cp_key] = sorted(change_points)
+                aggregated[key] /= num_trials
 
         return aggregated
 

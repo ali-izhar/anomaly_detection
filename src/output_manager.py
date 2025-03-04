@@ -98,19 +98,37 @@ class OutputManager:
 
         # Count detections per trial
         for i, trial in enumerate(individual_trials):
+            # Traditional martingale detections
             if "traditional_change_points" in trial:
                 # Adjust detection points
                 adjusted_detections = [
                     max(0, point - 1) for point in trial["traditional_change_points"]
                 ]
-                summary_data[f"Trial {i+1} Detection Count"] = [
+                summary_data[f"Trial {i+1} Traditional Detection Count"] = [
                     self._count_detections_near_cp(adjusted_detections, cp)
                     for cp in true_change_points
                 ]
 
                 # Record detection latency (distance from true CP to first detection)
-                summary_data[f"Trial {i+1} Latency"] = [
+                summary_data[f"Trial {i+1} Traditional Latency"] = [
                     self._calc_detection_latency(adjusted_detections, cp)
+                    for cp in true_change_points
+                ]
+
+            # Horizon martingale detections
+            if "horizon_change_points" in trial:
+                # Adjust detection points
+                adjusted_horizon_detections = [
+                    max(0, point - 1) for point in trial["horizon_change_points"]
+                ]
+                summary_data[f"Trial {i+1} Horizon Detection Count"] = [
+                    self._count_detections_near_cp(adjusted_horizon_detections, cp)
+                    for cp in true_change_points
+                ]
+
+                # Record detection latency for horizon detections
+                summary_data[f"Trial {i+1} Horizon Latency"] = [
+                    self._calc_detection_latency(adjusted_horizon_detections, cp)
                     for cp in true_change_points
                 ]
 
@@ -148,11 +166,11 @@ class OutputManager:
 
         # For each trial, list all detections
         for i, trial in enumerate(individual_trials):
-            if "traditional_change_points" in trial:
-                trial_num = i + 1
-                raw_detections = trial["traditional_change_points"]
+            trial_num = i + 1
 
-                # Get both raw and adjusted detections
+            # Process traditional martingale detections
+            if "traditional_change_points" in trial:
+                raw_detections = trial["traditional_change_points"]
                 adjusted_detections = [max(0, point - 1) for point in raw_detections]
 
                 # Process each detection point
@@ -167,6 +185,36 @@ class OutputManager:
                     details_rows.append(
                         {
                             "Trial": trial_num,
+                            "Type": "Traditional",
+                            "Detection #": j + 1,
+                            "Raw Detection Index": raw_point,
+                            "Adjusted Detection Index": adj_point,
+                            "Nearest True CP": nearest_cp,
+                            "Distance to CP": distance,
+                            "Is Within 10 Steps": abs(distance) <= 10,
+                        }
+                    )
+
+            # Process horizon martingale detections
+            if "horizon_change_points" in trial:
+                raw_horizon_detections = trial["horizon_change_points"]
+                adjusted_horizon_detections = [
+                    max(0, point - 1) for point in raw_horizon_detections
+                ]
+
+                # Process each detection point
+                for j, (raw_point, adj_point) in enumerate(
+                    zip(raw_horizon_detections, adjusted_horizon_detections)
+                ):
+                    # Find the nearest true change point
+                    nearest_cp, distance = self._find_nearest_cp(
+                        adj_point, true_change_points
+                    )
+
+                    details_rows.append(
+                        {
+                            "Trial": trial_num,
+                            "Type": "Horizon",
                             "Detection #": j + 1,
                             "Raw Detection Index": raw_point,
                             "Adjusted Detection Index": adj_point,
@@ -185,6 +233,7 @@ class OutputManager:
             df_details = pd.DataFrame(
                 columns=[
                     "Trial",
+                    "Type",
                     "Detection #",
                     "Raw Detection Index",
                     "Adjusted Detection Index",
@@ -293,15 +342,22 @@ class OutputManager:
         ):
             threshold = self.config["detection"]["threshold"]
 
-        # Only include traditional martingale values (removed horizon martingales)
-        martingale_keys = [
+        # Add martingale values to the dataframe (both traditional and horizon)
+        # Define the martingale keys we want to include
+        traditional_martingale_keys = [
             "traditional_martingales",
             "traditional_sum_martingales",
             "traditional_avg_martingales",
         ]
 
-        # Add martingale values to the dataframe
-        for martingale_key in martingale_keys:
+        horizon_martingale_keys = [
+            "horizon_martingales",
+            "horizon_sum_martingales",
+            "horizon_avg_martingales",
+        ]
+
+        # Add traditional martingale values
+        for martingale_key in traditional_martingale_keys:
             if martingale_key in detection_results:
                 martingale_values = detection_results[martingale_key]
                 if len(martingale_values) > 0:
@@ -323,20 +379,51 @@ class OutputManager:
                             ):
                                 df_data["traditional_detected"][i] = 1
 
-        # Calculate algorithm detection values but don't include them in the output dataframe
-        # These values are still used in the summary and details sheets
+        # Add horizon martingale values
+        for martingale_key in horizon_martingale_keys:
+            if martingale_key in detection_results:
+                martingale_values = detection_results[martingale_key]
+                if len(martingale_values) > 0:
+                    max_idx = min(len(martingale_values), n_timesteps)
+                    df_data[martingale_key] = list(martingale_values[:max_idx]) + [
+                        None
+                    ] * (n_timesteps - max_idx)
+
+                    # Add detection column for horizon sum martingales
+                    if martingale_key == "horizon_sum_martingales":
+                        # Initialize all detection flags to 0
+                        df_data["horizon_detected"] = [0] * n_timesteps
+
+                        # Set flag to 1 at indices where martingale exceeds threshold
+                        for i in range(max_idx):
+                            if (
+                                df_data[martingale_key][i] is not None
+                                and df_data[martingale_key][i] > threshold
+                            ):
+                                df_data["horizon_detected"][i] = 1
+
+        # Calculate traditional detection values for internal analysis
         if "traditional_change_points" in detection_results:
             detected_points = detection_results["traditional_change_points"]
-            # Store for internal analysis but don't include in output
+            # Store for internal analysis
             self._raw_detection_points = detected_points
             self._adjusted_detection_points = [
                 max(0, point - 1) for point in detected_points
             ]
 
-        # Create the dataframe with a specific column order (traditional martingales only)
+        # Calculate horizon detection values for internal analysis
+        if "horizon_change_points" in detection_results:
+            horizon_detected_points = detection_results["horizon_change_points"]
+            # Store for internal analysis
+            self._raw_horizon_detection_points = horizon_detected_points
+            self._adjusted_horizon_detection_points = [
+                max(0, point - 1) for point in horizon_detected_points
+            ]
+
+        # Create the dataframe with a specific column order
         columns = ["timestep", "true_change_point"]
 
-        # Add traditional columns (with detection flag right after the sum martingale)
+        # Add traditional columns
         if "traditional_martingales" in df_data:
             columns.append("traditional_martingales")
         if "traditional_sum_martingales" in df_data:
@@ -346,6 +433,17 @@ class OutputManager:
             )  # Put detection flag immediately after sum
         if "traditional_avg_martingales" in df_data:
             columns.append("traditional_avg_martingales")
+
+        # Add horizon columns
+        if "horizon_martingales" in df_data:
+            columns.append("horizon_martingales")
+        if "horizon_sum_martingales" in df_data:
+            columns.append("horizon_sum_martingales")
+            columns.append(
+                "horizon_detected"
+            )  # Put detection flag immediately after sum
+        if "horizon_avg_martingales" in df_data:
+            columns.append("horizon_avg_martingales")
 
         # Create DataFrame with specific column order
         return pd.DataFrame({col: df_data[col] for col in columns if col in df_data})
