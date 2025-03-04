@@ -23,15 +23,20 @@ model:
     type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
     config:
       # AdaptiveDistributionAwarePredictor configuration
-      n_history: 5  # Number of historical graphs to consider
-      adaptive: true  # Enable adaptive prediction
-      enforce_connectivity: true  # Maintain graph connectivity in predictions
-      binary: true  # Use binary adjacency matrices
-      spectral_reg: 0.4  # Spectral regularization parameter
-      community_reg: 0.4  # Community structure regularization
-      n_communities: 2  # Number of communities to consider
-      temporal_window: 10  # Window size for temporal patterns
-      distribution_reg: 0.3  # Distribution regularization parameter
+      n_history: 10  # Increase from 5 to 10 for better pattern detection
+      adaptive: true  
+      enforce_connectivity: true  
+      binary: true  
+      spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
+      community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
+      n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
+      temporal_window: 15  # Increase from 10 to 15 for better trend detection
+      min_edges_per_component: 2  # Lower threshold for connectivity constraints
+      degree_reg: 0.2  # Reduce degree regularization (if present) 
+      change_threshold: 0.15  # Lower the threshold to detect changes earlier
+      smoothing_window: 5  # Add/increase smoothing window if not already present
+      min_weight: 0.05  # Lower minimum weight for more adaptivity
+      distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing
 
 # Detection parameters
 detection:

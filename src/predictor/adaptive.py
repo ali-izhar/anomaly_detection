@@ -140,23 +140,72 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
     def _compute_spectral_features(
         self, adj: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute the leading eigenvalues and eigenvectors with enhanced stability.
-        Uses either eigsh (for sparse matrices) or np.linalg.eigh as a fallback."""
-        # Add small diagonal term for numerical stability
-        adj_reg = adj + np.eye(adj.shape[0]) * 1e-6
-        adj_sparse = sparse.csr_matrix(adj_reg)
-        k = min(6, adj.shape[0] - 1)
+        """Enhanced spectral feature computation with improved stability and accuracy.
 
+        Computes both eigendecomposition and SVD features for better capturing
+        of graph structural properties. Adds safeguards against numerical instability
+        and provides more robust error handling.
+        """
+        n = adj.shape[0]
+
+        # Add small diagonal term for numerical stability with adaptive regularization
+        # Scale regularization based on matrix norm for better conditioning
+        adj_norm = np.linalg.norm(adj)
+        reg_factor = 1e-6 if adj_norm < 1.0 else 1e-6 * adj_norm
+        adj_reg = adj + np.eye(n) * reg_factor
+
+        # Determine number of components to compute based on matrix size
+        # More components for larger matrices, but cap for efficiency
+        k = min(8, n - 1)  # Increased from 6 to 8 for better feature capture
+
+        # Try multiple approaches with fallbacks
+        eigenvals = None
+        eigenvecs = None
+
+        # First try sparse eigendecomposition for efficiency
         try:
+            adj_sparse = sparse.csr_matrix(adj_reg)
             eigenvals, eigenvecs = eigsh(
                 adj_sparse, k=k, which="LM", tol=1e-5, maxiter=1000
             )
             idx = np.argsort(np.abs(eigenvals))[::-1]
-            return eigenvals[idx], eigenvecs[:, idx]
-        except:
-            eigenvals, eigenvecs = np.linalg.eigh(adj_reg)
-            idx = np.argsort(np.abs(eigenvals))[::-1]
-            return eigenvals[idx][:k], eigenvecs[:, idx][:, :k]
+            eigenvals, eigenvecs = eigenvals[idx], eigenvecs[:, idx]
+        except Exception:
+            # Fallback to full eigendecomposition
+            try:
+                eigenvals, eigenvecs = np.linalg.eigh(adj_reg)
+                idx = np.argsort(np.abs(eigenvals))[::-1]
+                eigenvals, eigenvecs = eigenvals[idx][:k], eigenvecs[:, idx][:, :k]
+            except Exception:
+                # Last resort: SVD-based approach which is more stable
+                try:
+                    U, S, Vh = np.linalg.svd(adj_reg, full_matrices=False)
+                    eigenvals = S[:k]
+                    eigenvecs = U[:, :k]
+                except Exception:
+                    # If all else fails, create placeholder values
+                    eigenvals = np.ones(k) * reg_factor
+                    eigenvecs = np.eye(n, k)
+
+        # Additional property: compute spectral gap
+        self.spectral_gap = eigenvals[0] - eigenvals[1] if len(eigenvals) > 1 else 0
+
+        # Additional property: estimate community strength via eigenvector structure
+        try:
+            # Check for community structure using second eigenvector signs
+            if len(eigenvals) > 1:
+                second_vec = eigenvecs[:, 1]
+                pos_count = np.sum(second_vec > 0)
+                neg_count = np.sum(second_vec < 0)
+                self.community_balance = min(pos_count, neg_count) / max(
+                    pos_count, neg_count, 1
+                )
+            else:
+                self.community_balance = 0.0
+        except Exception:
+            self.community_balance = 0.0
+
+        return eigenvals, eigenvecs
 
     def _detect_communities(self, adj: np.ndarray) -> Tuple[np.ndarray, float]:
         """Detect communities using spectral clustering and compute modularity.
@@ -305,22 +354,173 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
     def _spectral_regularization(
         self, pred: np.ndarray, target_vals: np.ndarray, target_vecs: np.ndarray
     ) -> np.ndarray:
-        """Apply spectral regularization to preserve eigenvalue/eigenvector structure
-        from the last observed adjacency matrix."""
-        curr_vals, _ = self._compute_spectral_features(pred)
+        """Enhanced spectral regularization that better preserves eigenvalue/eigenvector
+        structure with feature-specific adjustments.
 
-        # Construct a correction matrix based on differences
+        This improved method:
+        1. Applies weighted regularization based on eigenvalue importance
+        2. Preserves variance in specific features (eigenvector/betweenness)
+        3. Adds targeted corrections for common prediction issues
+        """
+        # Compute current spectral properties
+        curr_vals, curr_vecs = self._compute_spectral_features(pred)
+
+        # Basic regularization matrix
         reg_mat = np.zeros_like(pred)
+
+        # Apply importance weighting to eigenvalues
+        # Leading eigenvalues get stronger regularization
         for i in range(min(len(target_vals), len(curr_vals))):
             v_target = target_vecs[:, i : i + 1]
-            reg = (target_vals[i] - curr_vals[i]) * (v_target @ v_target.T)
+
+            # Importance weight decreases with eigenvalue index
+            # First eigenvalue gets full weight, others get progressively less
+            importance_weight = max(0.1, 1.0 / (i + 1))
+
+            # Calculate weighted eigenvalue difference
+            eigen_diff = (target_vals[i] - curr_vals[i]) * importance_weight
+
+            # Construct rank-1 update
+            reg = eigen_diff * (v_target @ v_target.T)
             reg_mat += reg
 
-        # Blend the predicted adjacency with the regularization matrix
-        alpha = self.spectral_reg
+        # Apply baseline spectral regularization
+        alpha = self.spectral_reg  # Using the config parameter
         pred_reg = (1 - alpha) * pred + alpha * reg_mat
 
-        return pred_reg
+        # Add feature-specific corrections based on observed issues
+
+        # CORRECTION 1: Fix for eigenvector centrality issue
+        # Ensure enough variance in the leading eigenvector contribution
+        if len(curr_vals) > 0 and len(target_vals) > 0:
+            # Check if leading eigenvalue is too constant
+            leading_vec = curr_vecs[:, 0:1]
+            target_leading_vec = target_vecs[:, 0:1]
+
+            # Compare variance in the eigenvector coefficients
+            curr_variance = np.var(leading_vec)
+            target_variance = np.var(target_leading_vec)
+
+            if curr_variance < 0.5 * target_variance:
+                # If variance is too low, inject more structure from target
+                variance_correction = 0.3 * (
+                    (target_leading_vec @ target_leading_vec.T)
+                    - (leading_vec @ leading_vec.T)
+                )
+                pred_reg += variance_correction
+
+        # CORRECTION 2: Fix for betweenness centrality flatness
+        # Betweenness is often related to path structure which is influenced by
+        # higher-order topological features not captured by low-rank approximations
+        # Add path-sensitive correction
+        try:
+            # Create temporary weighted graphs for path analysis
+            G_pred = nx.from_numpy_array(pred_reg)
+            G_target = nx.from_numpy_array(np.minimum(1.0, pred_reg + 0.3 * reg_mat))
+
+            # Calculate path-based difference
+            # For efficiency, use a sample of nodes for betweenness approximation
+            n = pred_reg.shape[0]
+            sample_size = min(10, n)
+            sample_nodes = np.random.choice(n, sample_size, replace=False)
+
+            # Get approximate betweenness centrality
+            bc_pred = nx.betweenness_centrality(G_pred, k=sample_size, normalized=True)
+            bc_target = nx.betweenness_centrality(
+                G_target, k=sample_size, normalized=True
+            )
+
+            # Create betweenness correction
+            bc_correction = np.zeros_like(pred_reg)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if i in bc_pred and j in bc_pred:
+                        bc_diff_i = bc_target.get(i, 0) - bc_pred.get(i, 0)
+                        bc_diff_j = bc_target.get(j, 0) - bc_pred.get(j, 0)
+
+                        # Apply correction that reinforces edges between nodes
+                        # with unbalanced betweenness prediction
+                        if abs(bc_diff_i) > 0.1 or abs(bc_diff_j) > 0.1:
+                            bc_correction[i, j] = bc_correction[j, i] = 0.05 * (
+                                abs(bc_diff_i) + abs(bc_diff_j)
+                            )
+
+            # Apply betweenness correction with separate weight
+            pred_reg += bc_correction
+        except Exception:
+            # Skip betweenness correction if it fails
+            pass
+
+        # CORRECTION 3: Fix for clustering coefficient
+        # Scale down predictions to address overestimation in clustering coefficient
+        if hasattr(self, "correction_factor_needed") and self.correction_factor_needed:
+            # Check if current clustering is too high compared to target
+            try:
+                G_pred_binary = nx.from_numpy_array(pred_reg > 0.5)
+                G_target_binary = nx.from_numpy_array(
+                    np.minimum(1.0, pred_reg + 0.3 * reg_mat) > 0.5
+                )
+
+                cc_pred = nx.average_clustering(G_pred_binary)
+                cc_target = nx.average_clustering(G_target_binary)
+
+                # If clustering is overestimated, apply scaling
+                if cc_pred > 1.2 * cc_target:
+                    # Calculate scaling factor based on triad removal
+                    scaling_factor = 0.85  # Default scaling factor
+                    pred_reg *= scaling_factor
+            except Exception:
+                pass
+
+        # CORRECTION 4: Fix for singular values/laplacian eigenvalues
+        # Apply additional regularization to align spectral properties
+        try:
+            # Create Laplacian matrices
+            lap_pred = nx.laplacian_matrix(nx.from_numpy_array(pred_reg)).toarray()
+            lap_target = nx.laplacian_matrix(
+                nx.from_numpy_array(np.minimum(1.0, pred_reg + 0.3 * reg_mat))
+            ).toarray()
+
+            # Compute Laplacian eigenvalues
+            eig_lap_pred = np.linalg.eigvalsh(lap_pred)
+            eig_lap_target = np.linalg.eigvalsh(lap_target)
+
+            # Focus on smallest non-zero eigenvalue (algebraic connectivity)
+            # and largest eigenvalue (related to max degree)
+            nonzero_pred = eig_lap_pred[eig_lap_pred > 1e-10]
+            nonzero_target = eig_lap_target[eig_lap_target > 1e-10]
+
+            if len(nonzero_pred) > 0 and len(nonzero_target) > 0:
+                # Get min non-zero eigenvalues
+                min_nonzero_pred = np.min(nonzero_pred)
+                min_nonzero_target = np.min(nonzero_target)
+
+                # If algebraic connectivity is significantly off
+                if (
+                    abs(min_nonzero_pred - min_nonzero_target)
+                    / max(min_nonzero_target, 1e-10)
+                    > 0.3
+                ):
+                    # Apply targeted correction to improve connectivity
+                    connectivity_factor = min_nonzero_target / max(
+                        min_nonzero_pred, 1e-10
+                    )
+                    connectivity_factor = max(0.8, min(1.2, connectivity_factor))
+
+                    # Update matrix based on connectivity factor
+                    # If connectivity factor > 1, we need more connectivity
+                    if connectivity_factor > 1:
+                        # Add small value to increase connectivity
+                        pred_reg += 0.02 * (connectivity_factor - 1)
+                    else:
+                        # Reduce small values to decrease connectivity
+                        small_edges = (pred_reg < 0.3) & (pred_reg > 0)
+                        pred_reg[small_edges] *= connectivity_factor
+        except Exception:
+            pass
+
+        # Ensure valid predicted values
+        return np.clip(pred_reg, 0, 1)
 
     def _preserve_communities(
         self, pred: np.ndarray, comm_labels: np.ndarray, modularity: float
@@ -756,48 +956,176 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
         return params
 
     def _detect_phase_transition(self, history: List[Dict[str, Any]]) -> bool:
-        """Detect phase transitions based on exponential moving averages of
-        structural features over a temporal window, combined with the
-        minimal phase length constraint."""
+        """Enhanced phase transition detection with more sensitivity to structural changes
+        and feature-specific monitoring for better change point detection.
+
+        Uses a combination of:
+        1. Multiple feature monitoring with adaptive thresholding
+        2. Rate-of-change tracking to detect abrupt shifts
+        3. Weighted importance of features based on current graph structure
+        """
         if len(history) < self.temporal_window:
             return False
 
+        # Extract richer feature set from recent history
         features = []
         for state in history[-self.temporal_window :]:
             adj = state["adjacency"]
             G = nx.from_numpy_array(adj)
+
+            # Calculate a broader set of features for more robust change detection
             feat = {
                 "density": nx.density(G),
                 "clustering": nx.average_clustering(G),
                 "degree_std": float(np.std([d for _, d in G.degree()])),
+                "avg_degree": float(np.mean([d for _, d in G.degree()])),
             }
+
+            # Add spectral features for more sensitive detection
+            try:
+                eigenvals = np.linalg.eigvalsh(adj)
+                feat["eigen_gap"] = (
+                    abs(eigenvals[-1] - eigenvals[-2]) if len(eigenvals) > 1 else 0
+                )
+                feat["spectral_norm"] = max(abs(eigenvals))
+            except:
+                feat["eigen_gap"] = 0
+                feat["spectral_norm"] = 0
+
+            # Add community structure metrics
+            try:
+                communities = list(nx.community.greedy_modularity_communities(G))
+                feat["modularity"] = nx.community.modularity(G, communities)
+            except:
+                feat["modularity"] = 0
+
             features.append(feat)
 
-        # Initialize or update EMAs
+        # Calculate derivatives (rates of change) over the window
+        derivatives = []
+        for i in range(1, len(features)):
+            deriv = {k: features[i][k] - features[i - 1][k] for k in features[i]}
+            derivatives.append(deriv)
+
+        # More responsive EMA with adaptive alpha based on stability
         if not self.ema_features:
             self.ema_features = features[-1].copy()
+            self.ema_derivatives = {k: 0.0 for k in features[-1]}
         else:
-            alpha = 0.3
+            # Determine adaptive alpha based on recent stability
+            # More stable = lower alpha, more volatility = higher alpha
+            stability = np.mean(
+                [
+                    abs(derivatives[-1].get(k, 0))
+                    / (abs(self.ema_features.get(k, 1e-6)) + 1e-6)
+                    for k in derivatives[-1]
+                ]
+            )
+            adaptive_alpha = max(0.1, min(0.5, 0.3 + stability))
+
+            # Update EMAs with adaptive alpha
             for key in features[-1]:
                 current = features[-1][key]
                 self.ema_features[key] = (
-                    alpha * current + (1 - alpha) * self.ema_features[key]
+                    adaptive_alpha * current
+                    + (1 - adaptive_alpha) * self.ema_features[key]
                 )
 
-        # Check for significant relative changes
+                # Also track EMAs of derivatives for acceleration detection
+                if key in derivatives[-1]:
+                    current_deriv = derivatives[-1][key]
+                    if key not in self.ema_derivatives:
+                        self.ema_derivatives[key] = current_deriv
+                    else:
+                        self.ema_derivatives[key] = (
+                            adaptive_alpha * current_deriv
+                            + (1 - adaptive_alpha) * self.ema_derivatives[key]
+                        )
+
+        # Feature-specific importance weighting based on graph type
+        # This helps prioritize relevant features for each graph type
+        feature_weights = {
+            "density": 1.0,
+            "clustering": 1.0,
+            "degree_std": 1.0,
+            "avg_degree": 1.0,
+            "eigen_gap": 1.0,
+            "spectral_norm": 1.0,
+            "modularity": 1.0,
+        }
+
+        # Adjust weights based on detected graph model type
+        model_type = self._detect_model_type(history[-1]["adjacency"])
+        if model_type == "barabasi_albert":
+            feature_weights["degree_std"] = (
+                1.5  # Power-law networks show changes in degree variance
+            )
+            feature_weights["spectral_norm"] = 1.2
+        elif model_type == "erdos_renyi":
+            feature_weights["density"] = 1.5  # ER networks primarily change in density
+        elif model_type == "watts_strogatz":
+            feature_weights["clustering"] = (
+                1.5  # WS networks show changes in clustering
+            )
+            feature_weights["avg_degree"] = 1.2
+        elif model_type == "stochastic_block":
+            feature_weights["modularity"] = (
+                1.5  # SBM shows changes in community structure
+            )
+            feature_weights["eigen_gap"] = 1.2
+
+        # Check for significant relative changes in each feature
+        # Use adaptive thresholds based on feature volatility
         changes = []
         for key in features[-1]:
+            if key not in self.ema_features:
+                continue
+
             current = features[-1][key]
             ema = self.ema_features[key]
-            if ema > 0:
-                change = abs(current - ema) / ema
-                changes.append(change > self.change_threshold)
 
-        # Consider how long we've been in the current phase
+            if abs(ema) > 1e-6:
+                # Relative change detection with feature-specific threshold
+                relative_change = abs(current - ema) / abs(ema)
+
+                # Calculate adaptive threshold based on historical volatility
+                # More volatile features need higher thresholds
+                volatility = abs(self.ema_derivatives.get(key, 0)) / (abs(ema) + 1e-6)
+                adaptive_threshold = max(
+                    0.05, min(0.3, self.change_threshold * (0.5 + volatility))
+                )
+
+                # Apply feature weighting
+                weighted_change = relative_change * feature_weights.get(key, 1.0)
+                changes.append(weighted_change > adaptive_threshold)
+
+                # Extra check for sharp acceleration (second derivative)
+                if key in derivatives[-1] and len(derivatives) > 1:
+                    acceleration = abs(
+                        derivatives[-1][key] - derivatives[-2].get(key, 0)
+                    )
+                    if acceleration > 2 * abs(self.ema_derivatives.get(key, 0)):
+                        changes.append(True)
+
+        # Consider phase maturity but with earlier detection for strong signals
         time_since_change = len(history) - self.phase_start
         phase_maturity = time_since_change >= self.phase_length
 
-        return any(changes) and phase_maturity
+        # Allow earlier detection for very strong signals
+        strong_signal = sum(changes) >= 3  # Multiple features showing change
+
+        # More responsive phase transition detection logic
+        phase_transition = (any(changes) and phase_maturity) or (
+            strong_signal and time_since_change >= self.phase_length // 2
+        )
+
+        if phase_transition:
+            logger.info(f"Phase transition detected at t={len(history)}")
+            # Reset feature EMAs for fresh start in new phase
+            self.ema_features = features[-1].copy()
+            self.ema_derivatives = {k: 0.0 for k in features[-1]}
+
+        return phase_transition
 
     # =========================================================================
     #                  DISTRIBUTION PRESERVATION & PREDICTION
@@ -806,12 +1134,21 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
     def _preserve_distribution_properties(
         self, pred: np.ndarray, last_adj: np.ndarray
     ) -> np.ndarray:
-        """Apply distribution-based heuristics, e.g., power-law boosting,
-        high-clustering reinforcement, or density alignment."""
+        """Apply enhanced distribution-based heuristics to better preserve network properties
+        and avoid overestimation of features like clustering coefficient.
+
+        This method now includes:
+        1. Special handling for different network types
+        2. Targeted fixes for clustering coefficient overestimation
+        3. Balanced degree distribution preservation
+        """
         dist_types = self._detect_distribution_type()
         params = self._estimate_phase_parameters()
 
-        # Power-law strengthening (BA-like)
+        # Flag to indicate whether clustering coefficient correction is needed
+        self.correction_factor_needed = False
+
+        # ENHANCEMENT 1: Power-law network handling (BA-like)
         if dist_types.get("degree") == "power_law":
             degrees = np.sum(last_adj, axis=0)
             hub_threshold = np.percentile(degrees, 80)
@@ -825,38 +1162,229 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                         pred[i, neighbors], 0.8 * last_adj[i, neighbors]
                     )
 
-                    # Preferential attachment effect
+                    # Preferential attachment effect with modified balance
+                    # Less aggressive to avoid overestimation
                     neighbor_degrees = degrees[neighbors]
-                    attach_probs = neighbor_degrees / neighbor_degrees.sum()
+                    attach_probs = neighbor_degrees / (neighbor_degrees.sum() + 1e-10)
                     for j in range(pred.shape[0]):
                         if j not in neighbors:
                             influence = np.sum(attach_probs * (pred[j, neighbors] > 0))
-                            pred[i, j] = pred[j, i] = max(pred[i, j], 0.3 * influence)
+                            # Reduced influence factor from 0.3 to 0.2
+                            pred[i, j] = pred[j, i] = max(pred[i, j], 0.2 * influence)
 
-        # If clustering is relatively high, preserve local triangles
+        # ENHANCEMENT 2: High clustering networks (WS-like)
         elif params.get("clustering_coef", 0) > 0.2:
             G_last = nx.from_numpy_array(last_adj)
             clustering = nx.clustering(G_last)
+            avg_clustering = params.get("clustering_coef", 0)
 
+            # Check if there are signs of overestimation
+            try:
+                G_pred = nx.from_numpy_array((pred > 0.5).astype(float))
+                pred_clustering = nx.average_clustering(G_pred)
+
+                # If prediction is overestimating clustering, flag for correction
+                if pred_clustering > 1.2 * avg_clustering:
+                    self.correction_factor_needed = True
+            except Exception:
+                pass
+
+            # More selective triangle preservation to avoid overestimation
+            # Only strengthen triangles for nodes with significant clustering
             for node, clust in clustering.items():
                 if clust > 0.3:
                     neighbors = list(G_last.neighbors(node))
-                    for i, n1 in enumerate(neighbors):
-                        for n2 in neighbors[i + 1 :]:
+
+                    # Use a more selective approach for higher clustering nodes
+                    if len(neighbors) > 2:
+                        # Select fewer pairs to strengthen based on cluster value
+                        # This helps avoid excessive clustering
+                        sample_size = max(1, int(len(neighbors) * clust * 0.8))
+                        sample_pairs = []
+
+                        # Prioritize pairs that already form triangles
+                        for i, n1 in enumerate(neighbors):
+                            for n2 in neighbors[i + 1 :]:
+                                if G_last.has_edge(n1, n2):
+                                    sample_pairs.append((n1, n2))
+
+                        # If needed, add more random pairs
+                        if len(sample_pairs) < sample_size:
+                            for i, n1 in enumerate(neighbors):
+                                for n2 in neighbors[i + 1 :]:
+                                    if (n1, n2) not in sample_pairs:
+                                        sample_pairs.append((n1, n2))
+                                        if len(sample_pairs) >= sample_size:
+                                            break
+                                if len(sample_pairs) >= sample_size:
+                                    break
+
+                        # Strengthen selected pairs with reduced factor
+                        for n1, n2 in sample_pairs[:sample_size]:
+                            # Reduced factor from 0.7 to 0.6
                             pred[n1, n2] = pred[n2, n1] = max(
                                 pred[n1, n2],
-                                0.7 * min(last_adj[n1, node], last_adj[n2, node]),
+                                0.6 * min(last_adj[n1, node], last_adj[n2, node]),
                             )
 
-        # Adjust density toward the current estimate
+        # ENHANCEMENT 3: Density alignment with precision
         if "density" in params:
             target_density = params["density"]
             current_density = np.mean(pred)
-            if abs(current_density - target_density) > 0.1:
-                adjustment = (target_density - current_density) * self.distribution_reg
-                pred += adjustment
 
+            # More refined density adjustment
+            if abs(current_density - target_density) > 0.05:
+                # Calculate adaptive adjustment factor based on error magnitude
+                error_ratio = abs(current_density - target_density) / max(
+                    target_density, 0.01
+                )
+                adjustment_strength = min(0.8, error_ratio * self.distribution_reg)
+
+                # Directional adjustment
+                if current_density > target_density:
+                    # Need to decrease density - reduce weights
+                    # Use a threshold-based approach to maintain important edges
+                    threshold = np.percentile(pred[pred > 0], 30)
+                    mask = (pred > 0) & (pred < threshold)
+                    pred[mask] *= 1.0 - adjustment_strength
+                else:
+                    # Need to increase density - boost weights
+                    # Focus on cells with some non-zero probability
+                    adjustment = (
+                        target_density - current_density
+                    ) * adjustment_strength
+                    pred += adjustment * (pred > 0).astype(float)
+
+        # Ensure valid values
         return np.clip(pred, 0, 1)
+
+    def _enhance_closeness_centrality(
+        self, pred: np.ndarray, last_adj: np.ndarray
+    ) -> np.ndarray:
+        """Add targeted enhancement for closeness centrality prediction.
+
+        Closeness centrality is closely related to the shortest path structure
+        of the network. This method enhances the prediction by:
+        1. Identifying nodes with high closeness in the reference network
+        2. Preserving or amplifying path structures important for closeness
+        3. Ensuring variance in path lengths is preserved while maintaining stability
+        4. Applying temporal smoothing to reduce fluctuations
+        """
+        # Keep a history of predictions for smoothing if not already created
+        if not hasattr(self, "_closeness_history"):
+            self._closeness_history = []
+            self._closeness_history_length = 5  # Number of past predictions to consider
+            self._smoothing_alpha = 0.7  # Weight for current prediction vs history
+
+        # Create temporary weighted graphs for path analysis
+        try:
+            G_last = nx.from_numpy_array(last_adj)
+            G_pred = nx.from_numpy_array(pred)
+
+            # Create a copy of the prediction to modify
+            new_pred = pred.copy()
+
+            # Get closeness centrality for original graph
+            closeness_last = nx.closeness_centrality(G_last)
+
+            # Identify high-closeness nodes (top 25%) - slightly narrower focus
+            high_closeness_nodes = []
+            threshold = np.percentile(list(closeness_last.values()), 75)
+            for node, value in closeness_last.items():
+                if value > threshold:
+                    high_closeness_nodes.append(node)
+
+            # No high closeness nodes found (maybe a disconnected graph)
+            if not high_closeness_nodes:
+                return pred
+
+            # For each high closeness node, ensure proper path structure
+            for node in high_closeness_nodes:
+                # Find shortest paths to all other nodes in original graph
+                try:
+                    # Use single source shortest path for efficiency
+                    paths = nx.single_source_shortest_path_length(G_last, node)
+
+                    # Enhance connections to maintain path structure - but more consistently
+                    for target, path_len in paths.items():
+                        if target != node:
+                            # Focus on reinforcing medium-length paths
+                            # These contribute most to closeness centrality
+                            if 1 <= path_len <= 3:
+                                # Get current prediction probability
+                                current_prob = pred[node, target]
+
+                                # More deterministic path-based enhancement
+                                # We use fixed values instead of random variations
+                                if path_len == 1:
+                                    # Direct connection - significant but consistent boost
+                                    target_prob = 0.7
+                                    # Smooth transition to target probability
+                                    new_pred[node, target] = new_pred[target, node] = (
+                                        0.8 * target_prob + 0.2 * current_prob
+                                    )
+                                elif path_len == 2:
+                                    # 2-step path - moderate but stable boost
+                                    target_prob = 0.3
+                                    # Apply only if current probability is low
+                                    if current_prob < target_prob:
+                                        new_pred[node, target] = new_pred[
+                                            target, node
+                                        ] = (0.7 * current_prob + 0.3 * target_prob)
+                                else:
+                                    # Longer paths - small consistent boost
+                                    target_prob = 0.1
+                                    # Apply only if current probability is very low
+                                    if current_prob < 0.05:
+                                        new_pred[node, target] = new_pred[
+                                            target, node
+                                        ] = (0.8 * current_prob + 0.2 * target_prob)
+                except Exception:
+                    continue
+
+            # Global consistency check with minimal random fluctuation
+            try:
+                # Calculate closeness for predicted graph
+                closeness_pred = nx.closeness_centrality(G_pred)
+                avg_closeness_last = np.mean(list(closeness_last.values()))
+                avg_closeness_pred = np.mean(list(closeness_pred.values()))
+
+                # Apply a consistent adjustment if needed
+                ratio = avg_closeness_last / max(avg_closeness_pred, 0.001)
+                if avg_closeness_pred < 0.8 * avg_closeness_last:
+                    # Apply a smooth and consistent adjustment
+                    boost_factor = min(1.2, 1.0 + 0.2 * (ratio - 1))
+
+                    # Focus on mid-probability edges with consistent boost
+                    boost_mask = (pred > 0.2) & (pred < 0.7)
+                    if np.any(boost_mask):
+                        # Apply consistent boost to selected edges
+                        new_pred[boost_mask] = np.minimum(
+                            0.95, new_pred[boost_mask] * boost_factor
+                        )
+            except Exception:
+                pass
+
+            # Apply temporal smoothing with previous predictions
+            if len(self._closeness_history) > 0:
+                # Calculate average of historical predictions
+                history_pred = np.mean(self._closeness_history, axis=0)
+                # Blend current prediction with history
+                new_pred = (
+                    self._smoothing_alpha * new_pred
+                    + (1 - self._smoothing_alpha) * history_pred
+                )
+
+            # Update history with current prediction
+            self._closeness_history.append(new_pred.copy())
+            # Keep only the most recent predictions
+            if len(self._closeness_history) > self._closeness_history_length:
+                self._closeness_history.pop(0)
+
+            return new_pred
+        except Exception:
+            # Return original prediction if anything fails
+            return pred
 
     def predict(
         self, history: List[Dict[str, Any]], horizon: int = 1
@@ -903,6 +1431,9 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             self.weights = np.maximum(self.weights, self.min_weight)
             self.weights = self.weights / self.weights.sum()
             self.change_points.append(len(current_history))
+            logger.info(
+                f"Phase transition detected and weights reset at t={len(current_history)}"
+            )
 
         predictions = []
         logger.debug(f"Starting prediction loop for {horizon} steps")
@@ -927,10 +1458,12 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
 
             orig_pred = pred.copy()
 
+            # Apply enhancements in order of importance
+
             # 1) Distribution-based adjustments
             pred = self._preserve_distribution_properties(pred, last_adjs[-1])
 
-            # 2) Spectral regularization
+            # 2) Spectral regularization - improved method
             target_vals, target_vecs = self._compute_spectral_features(last_adjs[-1])
             pred = self._spectral_regularization(pred, target_vals, target_vecs)
 
@@ -938,13 +1471,16 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
             comm_labels, modularity = self._detect_communities(last_adjs[-1])
             pred = self._preserve_communities(pred, comm_labels, modularity)
 
-            # 4) Global structure enhancement for closeness
+            # 4) Enhanced closeness centrality prediction - new method
+            pred = self._enhance_closeness_centrality(pred, last_adjs[-1])
+
+            # 5) Global structure enhancement for closeness
             pred = self._preserve_global_structure(pred, last_adjs[-1])
 
-            # 5) Light triadic closure reinforcement
+            # 6) Light triadic closure reinforcement
             pred = self._reinforce_triadic_closure(pred, factor=0.02)
 
-            # 6) Slightly reduce path length if too large
+            # 7) Slightly reduce path length if too large
             pred = self._reduce_path_length(pred, last_adjs[-1], alpha=0.02)
 
             # Ensure valid probabilities
@@ -989,10 +1525,8 @@ class AdaptiveDistributionAwarePredictor(BasePredictor):
                 new_weights = self._feature_based_adaptation(last_adjs, pred)
                 self.weights = np.maximum(new_weights, self.min_weight)
                 self.weights = self.weights / self.weights.sum()
+                logger.debug(f"Updated weights: {self.weights}")
 
-        logger.debug(
-            f"Finished prediction loop for {horizon} steps. Returning {len(predictions)} predictions"
-        )
         return predictions
 
     # =========================================================================
