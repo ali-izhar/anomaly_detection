@@ -23,6 +23,7 @@ from typing import (
 )
 
 import logging
+import traceback
 import numpy as np
 from numpy import floating, integer
 
@@ -323,6 +324,12 @@ class MultiviewMartingaleState:
         horizon_change_points: Indices where horizon martingale detected changes.
         individual_traditional: Martingale history for each individual feature.
         individual_horizon: Horizon martingale history for each individual feature.
+        current_timestep: The current timestep being processed.
+        has_detection: Flag indicating if a detection has occurred at the current timestep.
+        last_detection_time: The timestep of the last detection (either horizon or traditional).
+        cooldown_period: Number of timesteps to enforce reduced sensitivity after a detection.
+        early_warnings: Timesteps where early warnings were triggered before official detection.
+        previous_horizon_sum: The horizon sum value from the previous timestep for growth calculation.
     """
 
     windows: List[List[DataPoint]] = field(default_factory=list)
@@ -336,6 +343,12 @@ class MultiviewMartingaleState:
     horizon_change_points: List[int] = field(default_factory=list)
     individual_traditional: List[List[float]] = field(default_factory=list)
     individual_horizon: List[List[float]] = field(default_factory=list)
+    current_timestep: int = 0
+    has_detection: bool = False
+    last_detection_time: int = -40  # Initialize to effectively no previous detection
+    cooldown_period: int = 30  # Minimum timesteps between detections
+    early_warnings: List[int] = field(default_factory=list)
+    previous_horizon_sum: float = 1.0
 
     def __post_init__(self):
         """Initialize state lists if they are not already set."""
@@ -350,6 +363,74 @@ class MultiviewMartingaleState:
         if not self.individual_horizon:
             self.individual_horizon = []
 
+    def record_values(
+        self,
+        timestep: int,
+        traditional_values: List[float],
+        horizon_values: List[float] = None,
+        is_detection: bool = False,
+    ):
+        """Record martingale values at specific timestep.
+
+        This method ensures that values are properly recorded at the correct timestep
+        and handles padding for missing values.
+
+        Args:
+            timestep: The timestep to record values for
+            traditional_values: List of traditional martingale values per feature
+            horizon_values: Optional list of horizon martingale values per feature
+            is_detection: Whether this recording is for a detection event
+        """
+        self.current_timestep = timestep
+        num_features = len(traditional_values)
+
+        # Calculate sums and averages
+        total_traditional = sum(traditional_values)
+        avg_traditional = total_traditional / num_features
+
+        # Ensure lists are long enough
+        while len(self.traditional_sum) <= timestep:
+            self.traditional_sum.append(1.0)
+        while len(self.traditional_avg) <= timestep:
+            self.traditional_avg.append(1.0)
+
+        # Record traditional values
+        self.traditional_sum[timestep] = total_traditional
+        self.traditional_avg[timestep] = avg_traditional
+
+        # Update individual traditional martingales
+        for j in range(num_features):
+            while len(self.individual_traditional) <= j:
+                self.individual_traditional.append([1.0])
+            while len(self.individual_traditional[j]) <= timestep:
+                self.individual_traditional[j].append(1.0)
+            self.individual_traditional[j][timestep] = traditional_values[j]
+
+        # If horizon values provided, record them too
+        if horizon_values:
+            total_horizon = sum(horizon_values)
+            avg_horizon = total_horizon / num_features
+
+            while len(self.horizon_sum) <= timestep:
+                self.horizon_sum.append(1.0)
+            while len(self.horizon_avg) <= timestep:
+                self.horizon_avg.append(1.0)
+
+            self.horizon_sum[timestep] = total_horizon
+            self.horizon_avg[timestep] = avg_horizon
+
+            # Update individual horizon martingales
+            for j in range(num_features):
+                while len(self.individual_horizon) <= j:
+                    self.individual_horizon.append([1.0])
+                while len(self.individual_horizon[j]) <= timestep:
+                    self.individual_horizon[j].append(1.0)
+                self.individual_horizon[j][timestep] = horizon_values[j]
+
+        # If this is a detection event, mark it
+        if is_detection:
+            self.has_detection = True
+
     def reset(self, num_features: int):
         """Reset state for all features.
 
@@ -358,24 +439,49 @@ class MultiviewMartingaleState:
         """
         # Reset each feature's rolling window.
         self.windows = [[] for _ in range(num_features)]
+
         # Reset martingale values for each feature to 1.0.
         self.traditional_martingales = [1.0] * num_features
         self.horizon_martingales = [1.0] * num_features
-        # Update overall sum and average with the reset values.
-        self.traditional_sum.append(float(num_features))
-        self.horizon_sum.append(float(num_features))
-        self.traditional_avg.append(1.0)
-        self.horizon_avg.append(1.0)
-        # Reset individual martingale histories per feature.
+
+        # Reset detection flag
+        self.has_detection = False
+
+        # Add reset values to history for continuity
+        current_t = self.current_timestep
+
+        # Since we're resetting after the current timestep, we need to add reset values
+        # for the next timestep
+        next_t = current_t + 1
+
+        # Update overall sum and average with the reset values
+        while len(self.traditional_sum) <= next_t:
+            self.traditional_sum.append(1.0)
+        while len(self.traditional_avg) <= next_t:
+            self.traditional_avg.append(1.0)
+        while len(self.horizon_sum) <= next_t:
+            self.horizon_sum.append(1.0)
+        while len(self.horizon_avg) <= next_t:
+            self.horizon_avg.append(1.0)
+
+        self.traditional_sum[next_t] = float(num_features)
+        self.horizon_sum[next_t] = float(num_features)
+        self.traditional_avg[next_t] = 1.0
+        self.horizon_avg[next_t] = 1.0
+
+        # Reset individual martingale histories per feature
         for j in range(num_features):
-            if len(self.individual_traditional) <= j:
+            while len(self.individual_traditional) <= j:
                 self.individual_traditional.append([1.0])
-            else:
+            while len(self.individual_traditional[j]) <= next_t:
                 self.individual_traditional[j].append(1.0)
-            if len(self.individual_horizon) <= j:
+            self.individual_traditional[j][next_t] = 1.0
+
+            while len(self.individual_horizon) <= j:
                 self.individual_horizon.append([1.0])
-            else:
+            while len(self.individual_horizon[j]) <= next_t:
                 self.individual_horizon[j].append(1.0)
+            self.individual_horizon[j][next_t] = 1.0
 
 
 @final
@@ -500,36 +606,49 @@ def multiview_martingale_test(
                     new_val = betting_function(prev_val, pv)
                     new_traditional.append(new_val)
 
+                    # Update running values for each feature
+                    state.traditional_martingales[j] = new_val
+
                 # Aggregate traditional martingale values across all features
                 total_traditional = sum(new_traditional)
-                avg_traditional = total_traditional / num_features
+                # avg_traditional = total_traditional / num_features
 
-                # Aggregate horizon martingale values if available
-                total_horizon = 0
-                avg_horizon = 0
+                # Initialize horizon martingale variables
                 new_horizon = []
+                total_horizon = 0
+                # avg_horizon = 0
+                horizon_detection = False
+
+                # Compute horizon martingales if predictions are available
                 if predicted_data is not None and i >= config.history_size:
                     pred_idx = i - config.history_size
-                    for j in range(num_features):
-                        # Use M_{t-1} for horizon computation
-                        prev_trad = prev_traditional_t_minus_1[j]  # Use M_{t-1}
 
-                        # Initialize list to store horizon betting factors
+                    # For each feature, compute the horizon martingale
+                    for j in range(num_features):
+                        # As defined in paper: horizon martingale starts from traditional M_{t-1}
+                        # and applies betting factors from predicted states
+                        prev_trad = prev_traditional_t_minus_1[j]
+
+                        # Initialize horizon factors calculation
                         horizon_factors = []
                         total_weight = 0.0
-                        decay_rate = -0.3  # Exponential decay rate for horizon weights
+                        # Reduce dampening: make decay rate less negative to give more weight to later horizons
+                        decay_rate = -0.15  # Original was -0.3
 
-                        # Process each horizon prediction for feature j
+                        # Process each horizon prediction
                         for h in range(num_horizons):
                             if not state.windows[j]:
-                                # After reset, set horizon value to 1.0
+                                # After reset, no history to use for predictions
                                 new_horizon_val = 1.0
                                 break
                             else:
+                                # Get window data and predicted data
                                 window_data = np.array(state.windows[j]).reshape(-1, 1)
                                 pred_data = np.array(
                                     predicted_data[j][pred_idx][h]
                                 ).reshape(1, -1)
+
+                                # Compute strangeness and p-value for prediction
                                 pred_s_val = strangeness_point(
                                     np.vstack([window_data, pred_data]),
                                     config=config.strangeness_config,
@@ -537,138 +656,178 @@ def multiview_martingale_test(
                                 pred_pv = get_pvalue(
                                     pred_s_val, random_state=config.random_state
                                 )
-                                # Store individual betting factors
+
+                                # Calculate betting factor with decay weight
                                 factor = betting_function(1.0, pred_pv)
-                                weight = np.exp(
-                                    decay_rate * h
-                                )  # Earlier horizons get more weight
+                                weight = np.exp(decay_rate * h)
                                 horizon_factors.append((factor, weight))
                                 total_weight += weight
 
-                        # Compute weighted geometric mean of horizon factors
+                        # Compute final horizon martingale value
                         if len(state.windows[j]) > 0 and horizon_factors:
-                            # Center factors around 1.0 to prevent aggressive growth
+                            # Less dampening: use factors more directly, with less centering effect
+                            # Original centered everything around 1.0: [(f - 1.0, w) for f, w in horizon_factors]
+                            # Now we only partially adjust toward 1.0, preserving more of the signal
                             centered_factors = [
-                                (f - 1.0, w) for f, w in horizon_factors
+                                (f * 0.9 + 0.1, w) for f, w in horizon_factors
                             ]
 
-                            # Compute weighted average of centered factors
+                            # Weighted average of centered factors
                             avg_factor = (
                                 sum(f * w for f, w in centered_factors) / total_weight
                             )
 
-                            # Map back to multiplicative space and apply mild dampening
+                            # Apply mild dampening and consistency bonus
                             horizon_factor = np.exp(avg_factor)
 
-                            # Add consistency bonus if all factors suggest change
-                            if all(f > 1.1 for f, _ in horizon_factors):
-                                horizon_factor *= (
-                                    1.15  # 15% boost for consistent signals
-                                )
+                            # Minimum factor threshold to reduce noise-triggered growth
+                            # Only allow growth if the signal is strong enough
+                            if (
+                                avg_factor < 0.05
+                            ):  # Require at least a 5% average signal
+                                horizon_factor = 1.0
+                            # Lower threshold for consistency bonus (was 1.1, now 1.05)
+                            elif all(f > 1.05 for f, _ in horizon_factors):
+                                # Increased consistency bonus from 30% to 35%
+                                horizon_factor *= 1.35
 
-                            # Limit growth to 2.5x the previous value
-                            horizon_factor = min(horizon_factor, 2.5)
+                            # Check for significant confidence in prediction
+                            strong_signal = sum(
+                                1 for f, _ in horizon_factors if f > 1.1
+                            ) / len(horizon_factors)
 
-                            # Compute final horizon value using previous traditional
+                            # If less than 25% of horizons show strong signal, dampen the growth (reduced from 30%)
+                            if strong_signal < 0.25:
+                                horizon_factor = min(horizon_factor, 1.5)
+
+                            # Increased growth limit from 2.5x to 4.5x
+                            horizon_factor = min(horizon_factor, 4.5)
+
+                            # Final horizon value uses previous traditional martingale as starting point
                             new_horizon_val = prev_trad * horizon_factor
                         else:
-                            new_horizon_val = 1.0  # Reset case
+                            new_horizon_val = 1.0
+
                         new_horizon.append(new_horizon_val)
+                        state.horizon_martingales[j] = new_horizon_val
 
-                    # Calculate total horizon martingale values
+                    # Calculate aggregated horizon values
                     total_horizon = sum(new_horizon)
-                    avg_horizon = total_horizon / num_features
+                    # avg_horizon = total_horizon / num_features
 
-                # Add detection logic - only reset on traditional martingale detection
+                    # Check for cooldown period to reduce false positives
+                    in_cooldown = i - state.last_detection_time < state.cooldown_period
+                    cooldown_factor = max(
+                        0,
+                        (state.cooldown_period - (i - state.last_detection_time))
+                        / state.cooldown_period,
+                    )
+                    cooldown_threshold = config.threshold * (
+                        1.0 + 0.5 * cooldown_factor
+                    )
+
+                    # Calculate growth rate for early warning system
+                    horizon_growth_rate = (
+                        total_horizon / state.previous_horizon_sum
+                        if state.previous_horizon_sum > 0
+                        else 1.0
+                    )
+
+                    # Early warning detection based on growth rate
+                    if (
+                        not horizon_detection
+                        and not in_cooldown
+                        and horizon_growth_rate > 2.0  # Growth doubled
+                        and total_horizon > config.threshold * 0.6
+                    ):  # At least 60% of threshold
+                        logger.info(
+                            f"Early warning at t={i}: Horizon martingale growing rapidly "
+                            f"({horizon_growth_rate:.2f}x growth) and approaching threshold "
+                            f"(Sum={total_horizon:.4f}, {(total_horizon/config.threshold*100):.1f}% of threshold)"
+                        )
+                        state.early_warnings.append(i)
+
+                    # Store current value for next iteration's growth calculation
+                    state.previous_horizon_sum = total_horizon
+
+                    # Check if horizon martingale crosses threshold
+                    # During cooldown period, require a higher threshold
+                    # Lower threshold for horizon martingales by 15% to enable earlier detection
+                    horizon_threshold = (
+                        cooldown_threshold if in_cooldown else config.threshold * 0.85
+                    )
+
+                    if total_horizon > horizon_threshold:
+                        horizon_detection = True
+                        logger.info(
+                            f"Horizon martingale detected change at t={i}: "
+                            f"Sum={total_horizon:.4f} > {horizon_threshold:.1f}"
+                        )
+                        state.horizon_change_points.append(i)
+                        state.last_detection_time = i
+
+                    # Calculate aggregated traditional values
+                    total_traditional = sum(new_traditional)
+                    # avg_traditional = total_traditional / num_features
+
+                    # Check if traditional martingale crosses threshold
+                    if total_traditional > config.threshold:
+                        traditional_detection = True
+                        logger.info(
+                            f"Traditional martingale detected change at t={i}: "
+                            f"Sum={total_traditional:.4f} > {config.threshold:.1f}"
+                        )
+                        state.traditional_change_points.append(i)
+                        state.last_detection_time = i
+
+                # Detection logic and state update
                 if total_traditional > config.threshold:
+                    # Traditional martingale detection
                     logger.info(
                         f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
                     )
-                    # Store detection point and the ACTUAL martingale value that triggered it
                     state.traditional_change_points.append(i)
 
-                    # Important: Overwrite any previously stored value for this timestep
-                    # to ensure we capture the correct detection value
-                    while len(state.traditional_sum) <= i:
-                        state.traditional_sum.append(1.0)
-                    while len(state.traditional_avg) <= i:
-                        state.traditional_avg.append(1.0)
-
-                    # Record the ACTUAL detection values at index i
-                    state.traditional_sum[i] = total_traditional
-                    state.traditional_avg[i] = avg_traditional
-
-                    # Update individual feature martingales for this detection point
-                    for j in range(num_features):
-                        while len(state.individual_traditional[j]) <= i:
-                            state.individual_traditional[j].append(1.0)
-                        state.individual_traditional[j][i] = new_traditional[j]
-
-                        # Also update horizon martingales if available
-                        if (
-                            predicted_data is not None
-                            and i >= config.history_size
-                            and new_horizon
-                        ):
-                            while len(state.individual_horizon[j]) <= i:
-                                state.individual_horizon[j].append(1.0)
-                            state.individual_horizon[j][i] = new_horizon[j]
-                            state.horizon_martingales[j] = new_horizon[j]
-
-                    # If horizon detection was also triggered, record it
-                    if total_horizon > config.threshold:
+                    # Per the paper's logic, if traditional detects a change,
+                    # horizon must also detect the change at the same timestep
+                    # since horizon builds on traditional
+                    if (
+                        predicted_data is not None
+                        and not horizon_detection
+                        and total_horizon > 0
+                    ):
                         logger.info(
-                            f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold}"
+                            f"Horizon martingale also detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold} (through traditional detection)"
                         )
                         state.horizon_change_points.append(i)
+                        horizon_detection = True
 
-                        # Ensure the correct horizon values are stored
-                        while len(state.horizon_sum) <= i:
-                            state.horizon_sum.append(1.0)
-                        while len(state.horizon_avg) <= i:
-                            state.horizon_avg.append(1.0)
+                    # Record detection values
+                    state.record_values(
+                        i, new_traditional, new_horizon if new_horizon else None, True
+                    )
 
-                        state.horizon_sum[i] = total_horizon
-                        state.horizon_avg[i] = avg_horizon
-
-                    # Reset state
+                    # Reset state after detection
                     state.reset(num_features)
+                elif horizon_detection:
+                    # Horizon-only detection (no reset, just record)
+                    state.record_values(i, new_traditional, new_horizon, True)
+
+                    # Don't reset on horizon-only detection
+                    # just update windows and continue monitoring
+                    for j in range(num_features):
+                        state.windows[j].append(data[j][i])
                 else:
-                    # No detection: update windows and continue martingale sequences
+                    # No detection - update windows and record values
                     for j in range(num_features):
                         state.windows[j].append(data[j][i])
 
-                        # Update running values for each feature
-                        state.traditional_martingales[j] = new_traditional[j]
+                    # Record current values in history
+                    state.record_values(
+                        i, new_traditional, new_horizon if new_horizon else None, False
+                    )
 
-                    # Add current values to history (appending to the end)
-                    state.traditional_sum.append(total_traditional)
-                    state.traditional_avg.append(avg_traditional)
-
-                    # Update individual feature histories
-                    for j in range(num_features):
-                        state.individual_traditional[j].append(new_traditional[j])
-
-                    # Record horizon detection (but don't reset)
-                    if total_horizon > config.threshold and predicted_data is not None:
-                        logger.info(
-                            f"Horizon martingale detected change at t={i}: Sum={total_horizon:.4f} > {config.threshold}"
-                        )
-                        state.horizon_change_points.append(i)
-
-                    # Update horizon values if predictions exist
-                    if predicted_data is not None and i >= config.history_size:
-                        state.horizon_sum.append(total_horizon)
-                        state.horizon_avg.append(avg_horizon)
-
-                        # Update individual horizon martingales
-                        for j in range(num_features):
-                            if len(state.individual_horizon) <= j:
-                                state.individual_horizon.append([])
-                            state.individual_horizon[j].append(new_horizon[j])
-                            state.horizon_martingales[j] = new_horizon[j]
-
-                # Periodically log the current state.
+                # Log periodically
                 if i > 0 and i % 10 == 0:
                     logger.debug(
                         f"t={i}: Avg window size={np.mean([len(w) for w in state.windows]):.1f}, "
@@ -686,6 +845,7 @@ def multiview_martingale_test(
         return {
             "traditional_change_points": state.traditional_change_points,
             "horizon_change_points": state.horizon_change_points,
+            "early_warnings": state.early_warnings,
             "traditional_sum_martingales": np.array(
                 state.traditional_sum[1:], dtype=float
             ),
@@ -703,5 +863,6 @@ def multiview_martingale_test(
         }
 
     except Exception as e:
-        logger.error(f"Multiview martingale computation failed: {str(e)}")
-        raise RuntimeError(f"Multiview martingale computation failed: {str(e)}")
+        logger.error(f"Error in multiview martingale computation: {e}")
+        logger.error(traceback.format_exc())
+        raise RuntimeError(f"Multiview martingale computation failed: {e}")
