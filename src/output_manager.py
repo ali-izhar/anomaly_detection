@@ -355,6 +355,25 @@ class OutputManager:
             "horizon_sum_martingales",
             "horizon_avg_martingales",
         ]
+        
+        # Add individual feature martingales if they exist
+        individual_martingale_keys = []
+        for key in detection_results.keys():
+            if key.startswith("individual_") and key.endswith("_martingales"):
+                individual_martingale_keys.append(key)
+
+        # Add individual feature martingales
+        for key in individual_martingale_keys:
+            if key in detection_results:
+                individual_martingales = detection_results[key]
+                # Each feature has its own array of martingales
+                for i, feature_martingales in enumerate(individual_martingales):
+                    if len(feature_martingales) > 0:
+                        feature_key = f"{key}_feature{i}"
+                        max_idx = min(len(feature_martingales), n_timesteps)
+                        df_data[feature_key] = list(feature_martingales[:max_idx]) + [
+                            None
+                        ] * (n_timesteps - max_idx)
 
         # Add traditional martingale values
         for martingale_key in traditional_martingale_keys:
@@ -422,6 +441,10 @@ class OutputManager:
 
         # Create the dataframe with a specific column order
         columns = ["timestep", "true_change_point"]
+        
+        # Add individual feature columns
+        individual_feature_columns = [col for col in df_data.keys() if col.startswith("individual_")]
+        columns.extend(sorted(individual_feature_columns))
 
         # Add traditional columns
         if "traditional_martingales" in df_data:
