@@ -6,19 +6,19 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: true  # Whether to use prediction for enhanced detection
+  enable_prediction: false  # Whether to use prediction for enhanced detection
   enable_visualization: false  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
 # Trial configuration
 trials:
-  n_trials: 2  # Number of times to run the detector
+  n_trials: 1  # Number of times to run the detector
   random_seeds: 99  # Optional list of seeds for reproducibility. If null, will generate random seeds
 
 # Model configuration
 model:
   type: "multiview"  # or "single_view"
-  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
+  network: "er"  # choices: ["ba", "ws", "er", "sbm"]
   predictor:
     type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
     config:
@@ -48,7 +48,7 @@ detection:
   
   # Betting function configuration
   betting_func_config:
-    name: "power"  # Available options: power, exponential, mixture, constant, beta, kernel
+    name: "beta"  # Available options: power, exponential, mixture, constant, beta, kernel
     power:  # Parameters specific to the power betting function
       epsilon: 0.7
     exponential:
@@ -71,8 +71,8 @@ detection:
 # Feature extraction
 features:
   - mean_degree  # Average node degree
-  - density  # Graph density
-  - mean_clustering  # Average clustering coefficient
+  # - density  # Graph density
+  # - mean_clustering  # Average clustering coefficient
   - mean_betweenness  # Average betweenness centrality
   - mean_eigenvector  # Average eigenvector centrality
   - mean_closeness  # Average closeness centrality
