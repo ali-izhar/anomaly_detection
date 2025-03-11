@@ -366,6 +366,13 @@ def create_martingale_comparison_plot(results, output_dir):
     # Use a perceptually uniform colormap for better distinction
     colors = plt.cm.viridis(np.linspace(0, 1, len(results["martingales"])))
 
+    # Get threshold if available
+    threshold = None
+    for combination, config in results["configs"].items():
+        if "detection" in config and "threshold" in config["detection"]:
+            threshold = float(config["detection"]["threshold"])
+            break
+
     # Plot each combination's martingale values with improved styling
     i = 0
     for combination, df in results["martingales"].items():
@@ -385,6 +392,58 @@ def create_martingale_comparison_plot(results, output_dir):
                 linewidth=1.0,
                 alpha=0.8,
             )
+
+            # Add arrow and annotation when martingale crosses threshold
+            if threshold is not None:
+                values = df[y_col].values
+                # Find first crossing point
+                for j in range(1, len(values)):
+                    if values[j - 1] <= threshold < values[j]:
+                        # Get exact timestep and value
+                        timestep = df[x_col].iloc[j]
+                        value = values[j]
+                        # Add arrow and annotation - placing boxes alternating on left/right
+                        # Place odd-indexed items on the left, even-indexed on the right
+                        if i % 2 == 0:  # Even index - place on right side
+                            x_offset = 7
+                        else:  # Odd index - place on left side
+                            x_offset = -7
+
+                        # Calculate a safe y position that doesn't go outside the plot
+                        max_val = max(values)
+                        y_pos = min(
+                            value + max_val * 0.15, max_val * 0.9
+                        )  # Cap at 90% of max height
+
+                        ax.annotate(
+                            f"t={timestep}",
+                            xy=(timestep, value),
+                            xytext=(
+                                timestep + x_offset,
+                                y_pos,
+                            ),  # Use bounded y position
+                            arrowprops=dict(
+                                facecolor=colors[i],
+                                shrink=0.05,
+                                width=0.5,  # Much thinner arrow
+                                headwidth=2,  # Smaller arrowhead width
+                                headlength=2,  # Shorter arrowhead
+                                alpha=0.8,
+                                edgecolor="none",  # Remove outline
+                            ),
+                            fontsize=6,
+                            bbox=dict(
+                                boxstyle="round,pad=0.4",
+                                fc="white",
+                                ec=colors[i],
+                                alpha=0.8,
+                            ),  # Increased padding
+                            horizontalalignment=(
+                                "center" if i % 2 == 0 else "right"
+                            ),  # Adjust text alignment
+                        )
+                        break
+
         elif "horizon_sum_martingales" in df.columns:
             x_col = "timestep" if "timestep" in df.columns else df.columns[0]
             y_col = "horizon_sum_martingales"
@@ -397,6 +456,57 @@ def create_martingale_comparison_plot(results, output_dir):
                 linewidth=1.0,
                 alpha=0.8,
             )
+
+            # Add arrow and annotation when martingale crosses threshold
+            if threshold is not None:
+                values = df[y_col].values
+                # Find first crossing point
+                for j in range(1, len(values)):
+                    if values[j - 1] <= threshold < values[j]:
+                        # Get exact timestep and value
+                        timestep = df[x_col].iloc[j]
+                        value = values[j]
+                        # Add arrow and annotation with alternating left/right positions
+                        if i % 2 == 0:  # Even index - place on right side
+                            x_offset = 7
+                        else:  # Odd index - place on left side
+                            x_offset = -7
+
+                        # Calculate a safe y position that doesn't go outside the plot
+                        max_val = max(values)
+                        y_pos = min(
+                            value + max_val * 0.15, max_val * 0.9
+                        )  # Cap at 90% of max height
+
+                        ax.annotate(
+                            f"t={timestep}",
+                            xy=(timestep, value),
+                            xytext=(
+                                timestep + x_offset,
+                                y_pos,
+                            ),  # Use bounded y position
+                            arrowprops=dict(
+                                facecolor=colors[i],
+                                shrink=0.05,
+                                width=0.5,  # Much thinner arrow
+                                headwidth=2,  # Smaller arrowhead width
+                                headlength=2,  # Shorter arrowhead
+                                alpha=0.8,
+                                edgecolor="none",  # Remove outline
+                            ),
+                            fontsize=6,
+                            bbox=dict(
+                                boxstyle="round,pad=0.4",
+                                fc="white",
+                                ec=colors[i],
+                                alpha=0.8,
+                            ),  # Increased padding
+                            horizontalalignment=(
+                                "center" if i % 2 == 0 else "right"
+                            ),  # Adjust text alignment
+                        )
+                        break
+
         else:
             martingale_cols = [
                 col for col in df.columns if "martingale" in str(col).lower()
@@ -414,6 +524,56 @@ def create_martingale_comparison_plot(results, output_dir):
                     linewidth=1.0,
                     alpha=0.8,
                 )
+
+                # Add arrow and annotation when martingale crosses threshold
+                if threshold is not None:
+                    values = df[y_col].values
+                    # Find first crossing point
+                    for j in range(1, len(values)):
+                        if values[j - 1] <= threshold < values[j]:
+                            # Get exact timestep and value
+                            timestep = df[x_col].iloc[j]
+                            value = values[j]
+                            # Add arrow and annotation with alternating left/right positions
+                            if i % 2 == 0:  # Even index - place on right side
+                                x_offset = 7
+                            else:  # Odd index - place on left side
+                                x_offset = -7
+
+                            # Calculate a safe y position that doesn't go outside the plot
+                            max_val = max(values)
+                            y_pos = min(
+                                value + max_val * 0.15, max_val * 0.9
+                            )  # Cap at 90% of max height
+
+                            ax.annotate(
+                                f"t={timestep}",
+                                xy=(timestep, value),
+                                xytext=(
+                                    timestep + x_offset,
+                                    y_pos,
+                                ),  # Use bounded y position
+                                arrowprops=dict(
+                                    facecolor=colors[i],
+                                    shrink=0.05,
+                                    width=0.5,  # Much thinner arrow
+                                    headwidth=2,  # Smaller arrowhead width
+                                    headlength=2,  # Shorter arrowhead
+                                    alpha=0.8,
+                                    edgecolor="none",  # Remove outline
+                                ),
+                                fontsize=6,
+                                bbox=dict(
+                                    boxstyle="round,pad=0.4",
+                                    fc="white",
+                                    ec=colors[i],
+                                    alpha=0.8,
+                                ),  # Increased padding
+                                horizontalalignment=(
+                                    "center" if i % 2 == 0 else "right"
+                                ),  # Adjust text alignment
+                            )
+                            break
             else:
                 logger.warning(f"No martingale column found for {combination}")
                 continue
@@ -789,16 +949,15 @@ def create_faceted_martingale_plot(results, output_dir):
         if current_max > max_y_value:
             max_y_value = current_max
 
-    # 1. Create a single-column layout with betting functions
-    # This uses vertical space more efficiently
+    # 1. Create a horizontal layout with betting functions (1 row, multiple columns)
     n_bf = len(betting_functions)
 
-    # Calculate figure size for a single column layout
-    col_width = 3.5  # Standard journal column width (inches)
-    row_height = 2.0  # Height per row in inches
+    # Calculate figure size for a row layout - wider but less tall
+    fig_width = 7.0  # Full journal page width (inches)
+    row_height = 2.5  # Height for a single row
 
     fig1, axes1 = plt.subplots(
-        n_bf, 1, figsize=(col_width, row_height * n_bf), sharex=True, sharey=True
+        1, n_bf, figsize=(fig_width, row_height), sharex=True, sharey=True
     )
 
     # Ensure axes1 is always an array even with a single subplot
@@ -856,8 +1015,65 @@ def create_faceted_martingale_plot(results, output_dir):
                         alpha=0.8,
                     )
 
+                    # Add arrow and annotation when martingale crosses threshold
+                    if threshold is not None:
+                        values = df[y_col].values
+                        # Find first crossing point
+                        for j in range(1, len(values)):
+                            if values[j - 1] <= threshold < values[j]:
+                                # Get exact timestep and value
+                                timestep = df[x_col].iloc[j]
+                                value = values[j]
+                                # Determine if annotation should be on left or right side
+                                distance_index = list(distance_measures).index(distance)
+                                if (
+                                    distance_index % 2 == 0
+                                ):  # Even index - place on right side
+                                    x_offset = 7
+                                else:  # Odd index - place on left side
+                                    x_offset = -7
+
+                                # Calculate a safe y position with vertical offset that stays in bounds
+                                max_val = max(values)
+                                vertical_factor = 0.15 + 0.08 * list(
+                                    distance_measures
+                                ).index(distance)
+                                # Cap at 90% of max height to stay within bounds
+                                y_pos = min(
+                                    value + max_val * vertical_factor, max_val * 0.9
+                                )
+
+                                ax.annotate(
+                                    f"t={timestep}",
+                                    xy=(timestep, value),
+                                    xytext=(
+                                        timestep + x_offset,
+                                        y_pos,
+                                    ),  # Use bounded y position
+                                    arrowprops=dict(
+                                        facecolor=color_map[distance],
+                                        shrink=0.05,
+                                        width=0.5,  # Much thinner arrow
+                                        headwidth=2,  # Smaller arrowhead width
+                                        headlength=2,  # Shorter arrowhead
+                                        alpha=0.8,
+                                        edgecolor="none",  # Remove outline
+                                    ),
+                                    fontsize=6,
+                                    bbox=dict(
+                                        boxstyle="round,pad=0.4",
+                                        fc="white",
+                                        ec=color_map[distance],
+                                        alpha=0.8,
+                                    ),
+                                    horizontalalignment=(
+                                        "center" if i % 2 == 0 else "right"
+                                    ),  # Adjust text alignment
+                                )
+                                break
+
             # Add title and styling to each subplot
-            ax.set_title(f"BF: {betting_func}", fontweight="bold", fontsize=8)
+            ax.set_title(f"betting: {betting_func}", fontweight="bold", fontsize=8)
             ax.grid(True, alpha=0.2, linestyle=":")
 
             # Add true change points and threshold
@@ -869,16 +1085,9 @@ def create_faceted_martingale_plot(results, output_dir):
                     y=threshold, color="k", linestyle="-.", linewidth=0.8, alpha=0.7
                 )
 
-            # Only add y-label to leftmost subplots
+            # Only add y-label to leftmost subplot
             if i == 0:
                 ax.set_ylabel("Martingale Value", fontweight="bold")
-
-            # Only add x-label to bottom subplots
-            if i >= n_bf - 1:
-                ax.set_xlabel("Timestep", fontweight="bold")
-
-            # Add a compact legend to the first subplot only
-            if i == 0:
                 leg = ax.legend(
                     title="Distance",
                     ncol=1,
@@ -896,14 +1105,14 @@ def create_faceted_martingale_plot(results, output_dir):
     for j in range(n_bf, len(axes1_flat)):
         axes1_flat[j].set_visible(False)
 
-    # Add overall title
-    fig1.suptitle(
-        "Martingale Values by Betting Function", fontsize=10, fontweight="bold", y=0.99
-    )
+    # # Add overall title
+    # fig1.suptitle(
+    #     "Martingale Values by Betting Function", fontsize=10, fontweight="bold", y=0.99
+    # )
 
-    # Adjust spacing for compact single-column layout
+    # Adjust spacing for compact horizontal layout
     fig1.tight_layout()
-    plt.subplots_adjust(top=0.90, hspace=0.4)
+    plt.subplots_adjust(top=0.85, wspace=0.2)
 
     # Save the plot
     output_path_png = os.path.join(output_dir, "martingale_by_betting_function.png")
@@ -994,8 +1203,65 @@ def create_faceted_martingale_plot(results, output_dir):
                         alpha=0.8,
                     )
 
+                    # Add arrow and annotation when martingale crosses threshold
+                    if threshold is not None:
+                        values = df[y_col].values
+                        # Find first crossing point
+                        for j in range(1, len(values)):
+                            if values[j - 1] <= threshold < values[j]:
+                                # Get exact timestep and value
+                                timestep = df[x_col].iloc[j]
+                                value = values[j]
+                                # Determine if annotation should be on left or right side
+                                bf_index = list(betting_functions).index(betting_func)
+                                if (
+                                    bf_index % 2 == 0
+                                ):  # Even index - place on right side
+                                    x_offset = 7
+                                else:  # Odd index - place on left side
+                                    x_offset = -7
+
+                                # Calculate a safe y position with vertical offset that stays in bounds
+                                max_val = max(values)
+                                vertical_factor = 0.15 + 0.08 * list(
+                                    betting_functions
+                                ).index(betting_func)
+                                # Cap at 90% of max height to stay within bounds
+                                y_pos = min(
+                                    value + max_val * vertical_factor, max_val * 0.9
+                                )
+
+                                ax.annotate(
+                                    f"t={timestep}",
+                                    xy=(timestep, value),
+                                    xytext=(
+                                        timestep + x_offset,
+                                        y_pos,
+                                    ),  # Use bounded y position
+                                    arrowprops=dict(
+                                        facecolor=color_map[betting_func],
+                                        shrink=0.05,
+                                        width=0.5,  # Much thinner arrow
+                                        headwidth=2,  # Smaller arrowhead width
+                                        headlength=2,  # Shorter arrowhead
+                                        alpha=0.8,
+                                        edgecolor="none",  # Remove outline
+                                    ),
+                                    fontsize=6,
+                                    bbox=dict(
+                                        boxstyle="round,pad=0.4",
+                                        fc="white",
+                                        ec=color_map[betting_func],
+                                        alpha=0.8,
+                                    ),
+                                    horizontalalignment=(
+                                        "center" if i % 2 == 0 else "right"
+                                    ),  # Adjust text alignment
+                                )
+                                break
+
             # Add title and styling to each subplot
-            ax.set_title(f"DM: {distance}", fontweight="bold", fontsize=8)
+            ax.set_title(f"distance: {distance}", fontweight="bold", fontsize=8)
             ax.grid(True, alpha=0.2, linestyle=":")
 
             # Add true change points and threshold
@@ -1034,10 +1300,10 @@ def create_faceted_martingale_plot(results, output_dir):
     for j in range(n_dm, len(axes2_flat)):
         axes2_flat[j].set_visible(False)
 
-    # Add overall title
-    fig2.suptitle(
-        "Martingale Values by Distance Measure", fontsize=10, fontweight="bold", y=0.99
-    )
+    # # Add overall title
+    # fig2.suptitle(
+    #     "Martingale Values by Distance Measure", fontsize=10, fontweight="bold", y=0.99
+    # )
 
     # Adjust spacing for compact layout
     fig2.tight_layout()

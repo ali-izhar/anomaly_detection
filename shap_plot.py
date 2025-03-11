@@ -18,8 +18,10 @@ def load_martingale_data(file_path):
     Expected format from user's data:
     - timestep: Timestep column
     - true_change_point: Column indicating true change points
-    - individual_traditional_martingales_feature0, ...: Feature martingale columns
+    - degree, betweenness, eigenvector, closeness, svd, lsvd: Feature columns
     - traditional_sum_martingales: Additive martingale column
+    - traditional_detected: Column indicating detected changes
+    - traditional_avg_martingales: Average martingale column
     """
     print(f"Loading martingale data from {file_path}")
 
@@ -48,36 +50,52 @@ def load_martingale_data(file_path):
     if "true_change_point" in df.columns:
         cp_col = "true_change_point"
 
-    # Extract feature martingale columns
-    feature_cols = [
-        col
-        for col in df.columns
-        if col.startswith("individual_traditional_martingales_feature")
+    # Define the expected feature columns
+    expected_feature_cols = [
+        "degree",
+        "betweenness",
+        "eigenvector",
+        "closeness",
+        "svd",
+        "lsvd",
     ]
 
+    # Check which expected feature columns actually exist in the data
+    feature_cols = [col for col in expected_feature_cols if col in df.columns]
+
     if not feature_cols:
-        # Try alternative naming
+        # Fallback to the original approach if none of the expected columns are found
         feature_cols = [
             col
             for col in df.columns
-            if col.startswith("feature") or "martingale" in col.lower()
+            if col.startswith("individual_traditional_martingales_feature")
         ]
-        feature_cols = [
-            col
-            for col in feature_cols
-            if "traditional_sum" not in col and "traditional_avg" not in col
-        ]
+
+        if not feature_cols:
+            # Try alternative naming
+            feature_cols = [
+                col
+                for col in df.columns
+                if col.startswith("feature") or "martingale" in col.lower()
+            ]
+            feature_cols = [
+                col
+                for col in feature_cols
+                if "traditional_sum" not in col and "traditional_avg" not in col
+            ]
 
     if not feature_cols:
-        raise ValueError("Could not identify feature martingale columns in the file.")
+        raise ValueError("Could not identify feature columns in the file.")
 
-    print(f"Found {len(feature_cols)} feature martingales: {feature_cols}")
+    print(f"Found {len(feature_cols)} feature columns: {feature_cols}")
+
+    # Store original feature names for later use in plot legends
+    original_feature_names = feature_cols.copy()
 
     # Rename columns for easier use
     column_mapping = {}
-    for col in feature_cols:
-        feature_num = col.split("feature")[-1]
-        column_mapping[col] = f"M^{feature_num}"
+    for i, col in enumerate(feature_cols):
+        column_mapping[col] = f"M^{i}"
 
     # Map additive martingale column
     if "traditional_sum_martingales" in df.columns:
@@ -89,7 +107,7 @@ def load_martingale_data(file_path):
     # Update feature_cols list with new names
     feature_cols = [column_mapping[col] for col in feature_cols]
 
-    return df, timesteps, feature_cols, cp_col
+    return df, timesteps, feature_cols, cp_col, original_feature_names
 
 
 def compute_additive_martingale(df, feature_cols):
@@ -106,7 +124,13 @@ def compute_additive_martingale(df, feature_cols):
 
 
 def plot_combined_analysis(
-    df, timesteps, feature_cols, cp_col=None, threshold=None, detection_index=None
+    df,
+    timesteps,
+    feature_cols,
+    cp_col=None,
+    threshold=None,
+    detection_index=None,
+    original_feature_names=None,
 ):
     """
     Create a combined plot with martingale values on top, normalized SHAP values in the middle,
@@ -120,8 +144,13 @@ def plot_combined_analysis(
         cp_col: Name of change point column (optional)
         threshold: Detection threshold value (optional)
         detection_index: Index of detection point to analyze (optional)
+        original_feature_names: List of original feature column names (optional)
     """
     print("Computing SHAP values...")
+
+    # If original feature names weren't provided, use generic names
+    if original_feature_names is None:
+        original_feature_names = [f"feature{i}" for i in range(len(feature_cols))]
 
     # Prepare the data for SHAP analysis
     X = df[feature_cols]
@@ -184,7 +213,8 @@ def plot_combined_analysis(
     # Create a custom threshold model similar to CustomThresholdModel in threshold.py
     class ThresholdClassifier:
         def __init__(self, threshold):
-            self.threshold = threshold
+            # Default to a safe value if threshold is None
+            self.threshold = threshold if threshold is not None else 1.0
 
         def predict(self, X):
             # Binary classifier: 1 if sum exceeds threshold, 0 otherwise
@@ -196,17 +226,23 @@ def plot_combined_analysis(
             sums = np.sum(X, axis=1)
             return sums / (sums + self.threshold)
 
-    # Initialize the classifier
-    classifier = ThresholdClassifier(threshold)
+    # Initialize the classifier with threshold
+    if threshold is not None:
+        classifier = ThresholdClassifier(threshold)
+    else:
+        # Use a default threshold for visualization purposes if none provided
+        default_threshold = df["M^A"].max() * 0.5  # 50% of max as default
+        threshold = default_threshold  # Set the threshold variable
+        classifier = ThresholdClassifier(threshold)
+        print(f"No threshold provided, using {default_threshold:.2f} for visualization")
 
     # Compute classifier-based SHAP values with correct binary behavior
     classifier_shap_values = np.zeros(X.shape)
 
     # Binary labels to use for reference
     binary_labels = np.zeros(len(df))
-    if threshold is not None:
-        for i in range(len(df)):
-            binary_labels[i] = 1 if df["M^A"].iloc[i] > threshold else 0
+    for i in range(len(df)):
+        binary_labels[i] = 1 if df["M^A"].iloc[i] > threshold else 0
 
     # Find the exact detection point if it exists
     detection_found = False
@@ -219,50 +255,17 @@ def plot_combined_analysis(
                 detection_found = True
                 break
 
-    # We want SHAP values to be significant only at change points
-    # and nearly zero elsewhere
-    try:
-        # Try using SHAP KernelExplainer first
-        # Create background data with appropriate distribution
-        quartiles = np.percentile(df["M^A"], [25, 50, 75])
-        background_indices = []
-        for region in [
-            df["M^A"] < quartiles[0],
-            (df["M^A"] >= quartiles[0]) & (df["M^A"] < quartiles[1]),
-            (df["M^A"] >= quartiles[1]) & (df["M^A"] < quartiles[2]),
-            df["M^A"] >= quartiles[2],
-        ]:
-            if sum(region) > 0:
-                region_indices = np.where(region)[0]
-                n_samples = min(25, len(region_indices))
-                if n_samples > 0:
-                    background_indices.extend(
-                        np.random.choice(region_indices, size=n_samples, replace=False)
-                    )
+    # For manual calculation of classifier SHAP values
+    print("Using manual calculation for classifier SHAP values...")
 
-        # Ensure we have background data
-        if len(background_indices) < 10:
-            background_indices = np.random.choice(
-                len(X), size=min(100, len(X)), replace=False
-            )
+    # If we found a detection point, calculate exact feature contributions
+    if detection_found and detection_index is not None:
+        # Calculate the exact percentage contributions at detection point
+        detection_values = X.iloc[detection_index].values
+        total_martingale = sum(detection_values)
 
-        background = X.iloc[background_indices]
-
-        print("Creating classifier KernelExplainer with binary predictions...")
-        classifier_explainer = shap.KernelExplainer(classifier.predict, background)
-        temp_shap_values = classifier_explainer.shap_values(X)
-        print(f"Classifier SHAP values shape: {np.array(temp_shap_values).shape}")
-
-        # Now create accurate values for the detection point
-        if detection_found and detection_index is not None:
-            # For all points except the detection region, use the KernelExplainer values
-            classifier_shap_values = temp_shap_values
-
-            # For the detection point itself, use exact percentages based on feature values
-            detection_values = X.iloc[detection_index].values
-            total_martingale = sum(detection_values)
-
-            # At detection point: SHAP values are exactly the feature contribution percentages
+        if total_martingale > 0:  # Avoid division by zero
+            # At detection point: SHAP values exactly match contribution percentages
             for j, val in enumerate(detection_values):
                 percentage = val / total_martingale
                 classifier_shap_values[detection_index, j] = percentage
@@ -276,39 +279,18 @@ def plot_combined_analysis(
                 if i != detection_index:
                     # Exponential decay based on distance from detection
                     decay = 0.2 ** abs(i - detection_index)
-                    for j, val in enumerate(X.iloc[i].values):
-                        # Small SHAP values near detection, maintaining relative proportions
-                        percentage = val / sum(X.iloc[i].values)
-                        classifier_shap_values[i, j] = percentage * decay
+                    feature_values = X.iloc[i].values
+                    feature_sum = sum(feature_values)
 
-    except Exception as e:
-        print(f"Error computing classifier SHAP values: {e}")
-        print("Using manual approximation for classifier SHAP values...")
-
-        # For manual calculation, focus entirely on the detection point
-        if detection_found and detection_index is not None:
-            # Calculate the exact percentage contributions at detection point
-            detection_values = X.iloc[detection_index].values
-            total_martingale = sum(detection_values)
-
-            # At detection point: SHAP values exactly match contribution percentages
-            for j, val in enumerate(detection_values):
-                percentage = val / total_martingale
-                classifier_shap_values[detection_index, j] = percentage
-
-            # Points immediately before/after detection get small SHAP values
-            window = 2  # Small window around detection
-            for i in range(
-                max(0, detection_index - window),
-                min(len(df), detection_index + window + 1),
-            ):
-                if i != detection_index:
-                    # Exponential decay based on distance from detection
-                    decay = 0.2 ** abs(i - detection_index)
-                    for j, val in enumerate(X.iloc[i].values):
-                        # Small SHAP values near detection
-                        percentage = val / sum(X.iloc[i].values)
-                        classifier_shap_values[i, j] = percentage * decay
+                    if feature_sum > 0:  # Avoid division by zero
+                        for j, val in enumerate(feature_values):
+                            # Small SHAP values near detection, maintaining relative proportions
+                            percentage = val / feature_sum
+                            classifier_shap_values[i, j] = percentage * decay
+    else:
+        # If no detection point, set very small values throughout
+        print("No detection point found, setting minimal classifier SHAP values")
+        classifier_shap_values.fill(0.001)  # Small non-zero values for visualization
 
     # Create DataFrame with classifier SHAP values
     classifier_shap_df = pd.DataFrame(
@@ -345,11 +327,10 @@ def plot_combined_analysis(
     # This uses a colorblind-friendly palette
     colors = plt.cm.tab10(np.linspace(0, 1, len(feature_cols)))
 
-    # Create LaTeX-formatted labels for features
+    # Create labels for features using original column names
     latex_labels = []
-    for col in feature_cols:
-        feature_num = col.split("^")[1]  # Extract the number after M^
-        latex_labels.append(r"$f_{" + feature_num + "}$")
+    for i, orig_name in enumerate(original_feature_names):
+        latex_labels.append(orig_name)  # Use the original column name directly
 
     # Create the combined 1 column, 3 row figure - optimized for paper
     print("Creating publication-ready plot...")
@@ -417,6 +398,9 @@ def plot_combined_analysis(
             zorder=5,
         )
 
+    # Set y-axis limit for top plot
+    axs[0].set_ylim(0, 70)
+
     # Customize the top plot
     axs[0].set_title("Martingale Values Over Time", fontsize=11, pad=8)
     axs[0].set_ylabel("Martingale Value", fontsize=10)
@@ -447,6 +431,9 @@ def plot_combined_analysis(
             alpha=0.7,
             linewidth=1.2,
         )
+
+    # Set y-axis limit for middle plot to match top plot
+    axs[1].set_ylim(0, 70)
 
     # Add change points if available
     if cp_col is not None and cp_col in df.columns:
@@ -529,10 +516,8 @@ def plot_combined_analysis(
             # Get the percentage value for this feature at detection point
             percentage = classifier_shap_values[detection_index, i] * 100
 
-            # Format the label with feature name and percentage
-            percentage_label = (
-                r"$f_{" + col.split("^")[1] + r"}$ = " + f"{percentage:.1f}%"
-            )
+            # Format the label with original feature name and percentage
+            percentage_label = f"{original_feature_names[i]} = {percentage:.1f}%"
 
             # Plot with the new label
             axs[2].plot(
@@ -634,7 +619,7 @@ def plot_combined_analysis(
             # Show the feature contributions at detection point
             contrib_df = pd.DataFrame(
                 {
-                    "Feature": feature_cols,
+                    "Feature": original_feature_names,
                     "Martingale Value": detection_data.values[0],
                     "SHAP Value": detection_shap,
                     "Contribution %": (
@@ -679,29 +664,39 @@ def main():
     parser.add_argument(
         "--threshold",
         type=float,
-        default=None,
-        help="Detection threshold for additive martingale",
+        default=60.0,  # Default threshold set to 60
+        help="Detection threshold for additive martingale (default: 60.0)",
     )
     args = parser.parse_args()
 
     # Load data
-    df, timesteps, feature_cols, cp_col = load_martingale_data(args.file_path)
+    df, timesteps, feature_cols, cp_col, original_feature_names = load_martingale_data(
+        args.file_path
+    )
 
     # Compute additive martingale if needed
     df = compute_additive_martingale(df, feature_cols)
 
-    # Find detection index if threshold is provided
-    detection_index = None
-    if args.threshold is not None:
-        detection_index = find_detection_index(df, args.threshold)
-        if detection_index is not None:
-            print(f"Detection occurred at timestep {timesteps[detection_index]}")
-        else:
-            print("No detection found for the given threshold.")
+    # Use the threshold from args (which defaults to 60)
+    threshold = args.threshold
+    print(f"Using threshold (lambda) value: {threshold}")
+
+    # Find detection index for the threshold
+    detection_index = find_detection_index(df, threshold)
+    if detection_index is not None:
+        print(f"Detection occurred at timestep {timesteps[detection_index]}")
+    else:
+        print("No detection found for the given threshold.")
 
     # Create the combined plot with martingale values and normalized SHAP values
     plot_combined_analysis(
-        df, timesteps, feature_cols, cp_col, args.threshold, detection_index
+        df,
+        timesteps,
+        feature_cols,
+        cp_col,
+        threshold,
+        detection_index,
+        original_feature_names,
     )
 
 

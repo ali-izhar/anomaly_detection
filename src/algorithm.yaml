@@ -48,7 +48,7 @@ detection:
   
   # Betting function configuration
   betting_func_config:
-    name: "beta"  # Available options: power, exponential, mixture, constant, beta, kernel
+    name: "mixture"  # Available options: power, exponential, mixture, constant, beta, kernel
     power:  # Parameters specific to the power betting function
       epsilon: 0.7
     exponential:
@@ -65,7 +65,7 @@ detection:
 
   # Distance configuration
   distance:
-    measure: "euclidean"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski", "chebyshev"]
+    measure: "mahalanobis"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski", "chebyshev"]
     p: 2.0  # Order for Minkowski distance
 
 # Feature extraction
