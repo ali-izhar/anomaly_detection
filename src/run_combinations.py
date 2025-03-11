@@ -15,12 +15,17 @@ from pathlib import Path
 from itertools import product
 import copy
 import random
+import glob
+import numpy as np
+import pickle
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from src.algorithm import GraphChangeDetection
+from src.changepoint.detector import ChangePointDetector, DetectorConfig
 from src.algorithm import main as run_algorithm
 
 # Configure logging
@@ -31,12 +36,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # set constant seed
-random.seed(42)
+SEED = 77
 
 
 def run_combinations(base_config_path, output_dir=None):
     """
-    Run the algorithm with multiple combinations of betting functions and distance measures.
+    Run the algorithm with multiple combinations of betting functions and distance measures
+    on the same data to ensure consistent change points.
 
     Args:
         base_config_path: Path to the base configuration YAML file
@@ -63,7 +69,48 @@ def run_combinations(base_config_path, output_dir=None):
     # Track results
     results = {}
 
-    # Run all combinations
+    # Step 1: Generate the data once using a single GraphChangeDetection instance
+    logger.info("Generating data once to use across all combinations...")
+
+    # Create data directory
+    data_dir = os.path.join(output_dir, "shared_data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    # Initialize the algorithm with the base configuration
+    algorithm = GraphChangeDetection(base_config_path)
+
+    # Initialize the graph generator
+    generator = algorithm._init_generator()
+
+    # Generate the graph sequence with fixed random seed for reproducibility
+    np.random.seed(SEED)  # Fixed seed for reproducible data generation
+    random.seed(SEED)
+    sequence_result = algorithm._generate_sequence(generator)
+
+    # Extract graph data and true change points
+    graphs = sequence_result["graphs"]
+    true_change_points = sequence_result["change_points"]
+
+    # Save the shared data
+    data_path = os.path.join(data_dir, "graph_sequence.pkl")
+    with open(data_path, "wb") as f:
+        pickle.dump({"graphs": graphs, "true_change_points": true_change_points}, f)
+
+    # Extract features to be used by all detectors
+    features_numeric, features_raw = algorithm._extract_features(graphs)
+
+    # Save the features
+    features_path = os.path.join(data_dir, "features.pkl")
+    with open(features_path, "wb") as f:
+        pickle.dump(
+            {"features_numeric": features_numeric, "features_raw": features_raw}, f
+        )
+
+    logger.info(f"Generated graph sequence with change points at: {true_change_points}")
+    logger.info(f"Extracted features with shape: {features_numeric.shape}")
+    logger.info(f"Shared data saved to: {data_dir}")
+
+    # Step 2: Run all combinations using the same data
     total_combinations = len(betting_functions) * len(distance_measures)
     current_combination = 0
 
@@ -74,40 +121,91 @@ def run_combinations(base_config_path, output_dir=None):
             f"betting_func={betting_func}, distance={distance}"
         )
 
-        # Create a deep copy of the base configuration
-        config = copy.deepcopy(base_config)
-
-        # Modify the configuration for this combination
-        config["detection"]["betting_func_config"]["name"] = betting_func
-        config["detection"]["distance"]["measure"] = distance
-
         # Create a subfolder for this combination
         combination_dir = os.path.join(output_dir, f"{betting_func}_{distance}")
-        config["output"]["directory"] = combination_dir
         os.makedirs(combination_dir, exist_ok=True)
 
-        # Create a temporary configuration file
-        temp_config_path = os.path.join(combination_dir, "config.yaml")
-        with open(temp_config_path, "w") as f:
+        # Create a deep copy of the base configuration for this combination
+        config = copy.deepcopy(base_config)
+
+        # Update the configuration
+        config["detection"]["betting_func_config"]["name"] = betting_func
+        config["detection"]["distance"]["measure"] = distance
+        config["output"]["directory"] = combination_dir
+
+        # Save the configuration
+        config_path = os.path.join(combination_dir, "config.yaml")
+        with open(config_path, "w") as f:
             yaml.dump(config, f)
 
-        # Run the algorithm with this configuration
+        # Initialize a detector with the specific combination
+        detector_config = DetectorConfig(
+            method=config["model"]["type"],
+            threshold=config["detection"]["threshold"],
+            history_size=config["model"]["predictor"]["config"]["n_history"],
+            batch_size=config["detection"]["batch_size"],
+            reset=config["detection"]["reset"],
+            max_window=config["detection"]["max_window"],
+            betting_func_config={
+                "name": betting_func,
+                "params": config["detection"]["betting_func_config"].get(
+                    betting_func, {}
+                ),
+            },
+            distance_measure=distance,
+            distance_p=config["detection"]["distance"]["p"],
+            random_state=SEED,  # Use consistent random state
+        )
+
+        detector = ChangePointDetector(detector_config)
+
         try:
-            logger.info(
-                f"Starting algorithm with betting_func={betting_func}, distance={distance}"
+            # Run detection on the shared features
+            detection_result = detector.run(data=features_numeric)
+
+            if detection_result is None:
+                raise RuntimeError(
+                    f"Detection failed for combination {betting_func}_{distance}"
+                )
+
+            # Save results for this combination
+            # Create algorithm instance for output management
+            algorithm_instance = GraphChangeDetection(config_path)
+
+            # Manually construct results for output
+            trial_results = {
+                "individual_trials": [detection_result],
+                "aggregated": detection_result,  # For single trial, aggregated is the same
+                "random_seeds": [SEED],
+            }
+
+            # Create output manager and export to CSV/Excel
+            from src.output_manager import OutputManager
+
+            output_manager = OutputManager(combination_dir, config)
+            output_manager.export_to_csv(
+                detection_result,
+                true_change_points,
+                individual_trials=[detection_result],
             )
-            result = run_algorithm(temp_config_path)
-            results[f"{betting_func}_{distance}"] = result
+
+            # Store the results
+            results[f"{betting_func}_{distance}"] = detection_result
+
             logger.info(
                 f"Successfully completed combination: betting_func={betting_func}, distance={distance}"
             )
+
         except Exception as e:
             logger.error(
                 f"Error running combination betting_func={betting_func}, distance={distance}: {str(e)}"
             )
+            import traceback
+
+            logger.error(traceback.format_exc())
 
     # Log completion
-    logger.info(f"Completed all {total_combinations} combinations")
+    logger.info(f"Completed all {total_combinations} combinations on the same dataset")
     return results
 
 

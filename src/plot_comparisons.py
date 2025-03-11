@@ -46,6 +46,11 @@ def load_combination_results(combinations_dir):
     # Find all combination directories
     combination_dirs = glob.glob(os.path.join(combinations_dir, "*_*"))
 
+    # Filter out any directories that don't follow the betting_distance naming pattern
+    combination_dirs = [
+        d for d in combination_dirs if os.path.basename(d).count("_") == 1
+    ]
+
     if not combination_dirs:
         logger.error(f"No combination directories found in {combinations_dir}")
         return None
@@ -62,6 +67,31 @@ def load_combination_results(combinations_dir):
 
     # Initialize true change points if we need to extract them manually
     true_cp_positions = None
+
+    # Check for shared_data directory that might contain true change points
+    shared_data_dir = os.path.join(combinations_dir, "shared_data")
+    if os.path.exists(shared_data_dir):
+        logger.info(f"Found shared_data directory: {shared_data_dir}")
+
+        # Try to load graph_sequence.pkl which contains true change points
+        graph_sequence_path = os.path.join(shared_data_dir, "graph_sequence.pkl")
+        if os.path.exists(graph_sequence_path):
+            try:
+                import pickle
+
+                with open(graph_sequence_path, "rb") as f:
+                    shared_data = pickle.load(f)
+                    if "true_change_points" in shared_data:
+                        true_cp_positions = shared_data["true_change_points"]
+                        logger.info(
+                            f"Loaded true change points from shared data: {true_cp_positions}"
+                        )
+                        # Create a DataFrame for the true change points
+                        results["change_points"]["true"] = pd.DataFrame(
+                            {"Position": true_cp_positions}
+                        )
+            except Exception as e:
+                logger.warning(f"Could not load shared graph sequence data: {str(e)}")
 
     # Load results from each combination directory
     for comb_dir in combination_dirs:
@@ -85,121 +115,127 @@ def load_combination_results(combinations_dir):
             with open(config_path, "r") as f:
                 results["configs"][combination_key] = yaml.safe_load(f)
 
-        # Find the results directory (one level deeper)
-        result_dirs = glob.glob(os.path.join(comb_dir, "*"))
-        for result_dir in result_dirs:
-            if os.path.isdir(result_dir):
-                # Find the Excel results file
-                excel_files = glob.glob(
-                    os.path.join(result_dir, "detection_results.xlsx")
-                )
+        # Find the Excel results file directly in the combination directory
+        excel_files = glob.glob(os.path.join(comb_dir, "detection_results.xlsx"))
 
-                if not excel_files:
-                    logger.warning(f"No detection_results.xlsx found in {result_dir}")
-                    continue
+        if not excel_files:
+            logger.warning(f"No detection_results.xlsx found in {comb_dir}")
+            continue
 
-                excel_path = excel_files[0]
-                logger.info(f"Found Excel results file: {excel_path}")
+        excel_path = excel_files[0]
+        logger.info(f"Found Excel results file: {excel_path}")
 
-                try:
-                    # Load the Excel file and extract data from different sheets
-                    xls = pd.ExcelFile(excel_path)
-                    sheet_names = xls.sheet_names
-                    logger.info(f"Excel file contains sheets: {sheet_names}")
+        try:
+            # Load the Excel file and extract data from different sheets
+            xls = pd.ExcelFile(excel_path)
+            sheet_names = xls.sheet_names
+            logger.info(f"Excel file contains sheets: {sheet_names}")
 
-                    # Load data from each sheet based on the actual sheet names
-                    if "Trial1" in sheet_names:
-                        # Trial1 typically contains martingale values over time
-                        df = pd.read_excel(excel_path, sheet_name="Trial1")
+            # Load data from each sheet based on the actual sheet names
+            if "Trial1" in sheet_names:
+                # Trial1 typically contains martingale values over time
+                df = pd.read_excel(excel_path, sheet_name="Trial1")
 
-                        # Check if this has Time/Step and martingale value columns
-                        if len(df.columns) >= 2:
-                            results["martingales"][combination_key] = df
-                            logger.info(
-                                f"Loaded martingale data for {combination_key} from Trial1 sheet"
-                            )
+                # Check if this has Time/Step and martingale value columns
+                if len(df.columns) >= 2:
+                    results["martingales"][combination_key] = df
+                    logger.info(
+                        f"Loaded martingale data for {combination_key} from Trial1 sheet"
+                    )
 
-                            # Attempt to extract true change points from vertical lines or markers
-                            # For now we'll assume this isn't available directly in this format
+                    # If true change points were in the data, add them to the dataframe
+                    if (
+                        true_cp_positions is not None
+                        and "true_change_point" not in df.columns
+                    ):
+                        df["true_change_point"] = 0
+                        for cp in true_cp_positions:
+                            if cp < len(df):
+                                df.loc[cp, "true_change_point"] = 1
+                        logger.info(
+                            f"Added true change points from shared data to martingale data"
+                        )
 
-                    if "Detection Summary" in sheet_names:
-                        # Detection Summary would contain detection rate, false positives, etc.
-                        df = pd.read_excel(excel_path, sheet_name="Detection Summary")
-                        results["detection_summaries"][combination_key] = df
-                        logger.info(f"Loaded detection summary for {combination_key}")
+            if "Detection Summary" in sheet_names:
+                # Detection Summary would contain detection rate, false positives, etc.
+                df = pd.read_excel(excel_path, sheet_name="Detection Summary")
+                results["detection_summaries"][combination_key] = df
+                logger.info(f"Loaded detection summary for {combination_key}")
 
-                        # Try to find info about detected change points in this sheet
-                        # Look for columns that might contain change point positions
-                        cp_cols = [
-                            col
-                            for col in df.columns
-                            if any(
-                                term in col.lower()
-                                for term in ["change", "position", "detection", "cp"]
-                            )
-                        ]
+                # Try to find info about detected change points in this sheet
+                # Look for columns that might contain change point positions
+                cp_cols = [
+                    col
+                    for col in df.columns
+                    if any(
+                        term in col.lower()
+                        for term in ["change", "position", "detection", "cp"]
+                    )
+                ]
 
-                        if cp_cols:
-                            # Extract detected change points
-                            cp_df = df[cp_cols].copy()
-                            results["change_points"][combination_key] = cp_df
-                            logger.info(
-                                f"Extracted change points for {combination_key} from Detection Summary"
-                            )
+                if cp_cols:
+                    # Extract detected change points
+                    cp_df = df[cp_cols].copy()
+                    results["change_points"][combination_key] = cp_df
+                    logger.info(
+                        f"Extracted change points for {combination_key} from Detection Summary"
+                    )
 
-                            # If we find a column with "true" and "change point" or similar, use as true change points
-                            true_cp_cols = [
-                                col for col in cp_cols if "true" in col.lower()
-                            ]
-                            if true_cp_cols and "true" not in results["change_points"]:
-                                true_cp_df = df[true_cp_cols].copy()
-                                results["change_points"]["true"] = true_cp_df
-                                logger.info(
-                                    f"Extracted true change points from Detection Summary"
-                                )
+                    # If we find a column with "true" and "change point" or similar, use as true change points
+                    true_cp_cols = [col for col in cp_cols if "true" in col.lower()]
+                    if (
+                        true_cp_cols
+                        and "true" not in results["change_points"]
+                        and true_cp_positions is None
+                    ):
+                        true_cp_df = df[true_cp_cols].copy()
+                        results["change_points"]["true"] = true_cp_df
+                        logger.info(
+                            f"Extracted true change points from Detection Summary"
+                        )
 
-                    if "Detection Details" in sheet_names:
-                        # Detection Details would contain more granular info about each detection
-                        df = pd.read_excel(excel_path, sheet_name="Detection Details")
+            if "Detection Details" in sheet_names:
+                # Detection Details would contain more granular info about each detection
+                df = pd.read_excel(excel_path, sheet_name="Detection Details")
 
-                        # This could contain detection frequencies or detailed change point info
-                        # Check for frequency-like columns
-                        freq_cols = [
-                            col
-                            for col in df.columns
-                            if any(
-                                term in col.lower()
-                                for term in ["freq", "count", "occurrence"]
-                            )
-                        ]
+                # This could contain detection frequencies or detailed change point info
+                # Check for frequency-like columns
+                freq_cols = [
+                    col
+                    for col in df.columns
+                    if any(
+                        term in col.lower() for term in ["freq", "count", "occurrence"]
+                    )
+                ]
 
-                        if freq_cols and len(df) > 0:
-                            # If we have position/time and frequency columns, this is likely detection frequency data
-                            pos_cols = [
-                                col
-                                for col in df.columns
-                                if any(
-                                    term in col.lower()
-                                    for term in ["position", "time", "step", "timestep"]
-                                )
-                            ]
+                if freq_cols and len(df) > 0:
+                    # If we have position/time and frequency columns, this is likely detection frequency data
+                    pos_cols = [
+                        col
+                        for col in df.columns
+                        if any(
+                            term in col.lower()
+                            for term in ["position", "time", "step", "timestep"]
+                        )
+                    ]
 
-                            if pos_cols:
-                                # Create a dataframe with position and frequency columns
-                                freq_df = df[[pos_cols[0], freq_cols[0]]].copy()
-                                freq_df.columns = [
-                                    "Position",
-                                    "Frequency",
-                                ]  # Standardize column names
-                                results["detection_frequencies"][
-                                    combination_key
-                                ] = freq_df
-                                logger.info(
-                                    f"Extracted detection frequencies for {combination_key} from Detection Details"
-                                )
+                    if pos_cols:
+                        # Create a dataframe with position and frequency columns
+                        freq_df = df[[pos_cols[0], freq_cols[0]]].copy()
+                        freq_df.columns = [
+                            "Position",
+                            "Frequency",
+                        ]  # Standardize column names
+                        results["detection_frequencies"][combination_key] = freq_df
+                        logger.info(
+                            f"Extracted detection frequencies for {combination_key} from Detection Details"
+                        )
 
-                except Exception as e:
-                    logger.error(f"Error processing Excel file {excel_path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error processing Excel file {excel_path}: {str(e)}")
+            import traceback
+
+            logger.error(traceback.format_exc())
 
     # If we haven't found any martingale data yet, try to infer it from sheet data
     if not results["martingales"]:
