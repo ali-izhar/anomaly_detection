@@ -15,6 +15,25 @@ def load_martingale_data(file_path):
     """
     Load martingale values from a CSV or Excel file.
 
+    This function reads martingale data from the specified file, identifies relevant columns,
+    and processes them for SHAP analysis. It handles different column naming conventions and
+    performs necessary preprocessing.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the CSV or Excel file containing martingale data
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - df: DataFrame with the loaded martingale data
+        - timesteps: Array of timestep values
+        - feature_cols: List of column names for individual feature martingales
+        - cp_col: Name of change point column (or None if not found)
+        - original_feature_names: List of original feature column names for reference
+
     Expected format from user's data:
     - timestep: Timestep column
     - true_change_point: Column indicating true change points
@@ -113,6 +132,23 @@ def load_martingale_data(file_path):
 def compute_additive_martingale(df, feature_cols):
     """
     Compute the additive martingale if not already in the data.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing individual feature martingales
+    feature_cols : list
+        List of column names for individual feature martingales
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame with added 'M^A' column if it wasn't already present
+
+    Notes
+    -----
+    If 'M^A' is already in the DataFrame, it is used as is. Otherwise, it's computed
+    as the sum of all individual feature martingales.
     """
     if "M^A" in df.columns:
         print("Using existing additive martingale column 'M^A'")
@@ -135,16 +171,41 @@ def plot_combined_analysis(
     """
     Create a combined plot with martingale values on top, normalized SHAP values in the middle,
     and classifier-based SHAP values on the bottom.
-    Optimized for publication-quality figures in research papers.
 
-    Args:
-        df: DataFrame containing martingale values
-        timesteps: Array of timestep values
-        feature_cols: List of column names for individual feature martingales
-        cp_col: Name of change point column (optional)
-        threshold: Detection threshold value (optional)
-        detection_index: Index of detection point to analyze (optional)
-        original_feature_names: List of original feature column names (optional)
+    This function generates publication-quality figures in a 3-panel layout that shows the
+    contribution of each feature to the overall change detection process.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing martingale values
+    timesteps : numpy.ndarray
+        Array of timestep values
+    feature_cols : list
+        List of column names for individual feature martingales
+    cp_col : str, optional
+        Name of change point column (default: None)
+    threshold : float, optional
+        Detection threshold value (default: None)
+    detection_index : int, optional
+        Index of detection point to analyze (default: None)
+    original_feature_names : list, optional
+        List of original feature column names for better plot labeling (default: None)
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        If detection_index is provided, returns a DataFrame with feature contributions
+        at the detection point; otherwise, returns None
+
+    Notes
+    -----
+    This function generates two output files:
+    - combined_analysis.png: Raster image suitable for screen display
+    - combined_analysis.pdf: Vector graphics suitable for publication
+
+    If a detection point is provided, it also saves a CSV file with feature contributions:
+    - detection_contributions.csv
     """
     print("Computing SHAP values...")
 
@@ -191,6 +252,28 @@ def plot_combined_analysis(
         for i, col in enumerate(feature_cols):
             shap_values[:, i] = X[col].values * model.coef_[i]
 
+    # Compute the actual R² between SHAP values and individual martingale values
+    shap_vs_martingale_r2_values = []
+    feature_r2_dict = {}  # Create dictionary earlier for wider scope
+    for i, col in enumerate(feature_cols):
+        feature_martingale = X[col].values
+        feature_shap = shap_values[:, i]
+        # Calculate R² for this feature's SHAP vs martingale
+        if len(np.unique(feature_martingale)) > 1:  # Only if there's variance
+            feature_r2 = sklearn.metrics.r2_score(feature_martingale, feature_shap)
+            shap_vs_martingale_r2_values.append(feature_r2)
+            print(f"R² between {col} martingale and SHAP: {feature_r2:.6f}")
+            # Store R² for each feature
+            feature_r2_dict[col] = feature_r2
+
+    # Calculate average R² across all features
+    if shap_vs_martingale_r2_values:
+        avg_shap_r2 = np.mean(shap_vs_martingale_r2_values)
+        print(f"Average R² between SHAP and martingale values: {avg_shap_r2:.6f}")
+    else:
+        avg_shap_r2 = 0.0
+        print("Could not calculate R² between SHAP and martingale values")
+
     # Create a DataFrame with SHAP values over time
     shap_df = pd.DataFrame(shap_values, columns=[f"SHAP_{col}" for col in feature_cols])
     shap_df["timestep"] = timesteps
@@ -212,6 +295,12 @@ def plot_combined_analysis(
 
     # Create a custom threshold model similar to CustomThresholdModel in threshold.py
     class ThresholdClassifier:
+        """
+        Simple binary classifier that predicts 1 if sum of features exceeds a threshold.
+
+        This mimics the behavior of threshold-based change detection in the martingale framework.
+        """
+
         def __init__(self, threshold):
             # Default to a safe value if threshold is None
             self.threshold = threshold if threshold is not None else 1.0
@@ -423,10 +512,16 @@ def plot_combined_analysis(
 
     # Middle plot: Normalized SHAP values
     for i, col in enumerate(feature_cols):
+        # Create legend label with R² value for this feature
+        if col in feature_r2_dict:
+            r2_label = f"{latex_labels[i]} (R²={feature_r2_dict[col]:.4f})"
+        else:
+            r2_label = latex_labels[i]
+
         axs[1].plot(
             timesteps,
             shap_df[f"SHAP_{col}"],
-            label=latex_labels[i],
+            label=r2_label,
             color=colors[i],
             alpha=0.7,
             linewidth=1.2,
@@ -458,10 +553,12 @@ def plot_combined_analysis(
         axs[1].text(
             0.02,
             0.95,
-            f"SHAP values = direct feature contributions (R²={r2:.4f})",
+            f"SHAP value approximations of Shapley values\nbased on KernelExplainer",
             fontsize=8,
             style="italic",
             transform=axs[1].transAxes,
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=2),
         )
 
     # Add a legend outside the plot to maximize data visibility
@@ -550,11 +647,13 @@ def plot_combined_analysis(
     if detection_index is not None:
         axs[2].text(
             0.02,
-            0.95,
-            f"Values show exact feature contribution percentages at detection",
+            0.92,
+            f"Feature percentage contributions at\ndetection threshold crossing point",
             fontsize=8,
             style="italic",
             transform=axs[2].transAxes,
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=2),
         )
 
     # Add a legend outside the plot to maximize data visibility
@@ -648,7 +747,21 @@ def plot_combined_analysis(
 
 
 def find_detection_index(df, threshold):
-    """Find the index where the additive martingale first exceeds the threshold."""
+    """
+    Find the index where the additive martingale first exceeds the threshold.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing martingale values
+    threshold : float
+        Detection threshold for the additive martingale
+
+    Returns
+    -------
+    int or None
+        Index where detection occurs, or None if no detection found
+    """
     for i in range(1, len(df)):
         if df["M^A"].iloc[i - 1] < threshold and df["M^A"].iloc[i] >= threshold:
             return i
@@ -656,6 +769,13 @@ def find_detection_index(df, threshold):
 
 
 def main():
+    """
+    Main function to parse arguments and execute the SHAP analysis workflow.
+
+    This function handles command-line arguments, loads the data, computes the
+    additive martingale if needed, finds the detection index, and creates the
+    visualizations.
+    """
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Analyze martingale data with SHAP.")
     parser.add_argument(
