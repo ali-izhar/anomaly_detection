@@ -39,11 +39,9 @@ import numpy.typing as npt
 from numpy import floating, integer
 
 from .betting import BettingFunctionConfig
-from .martingale import (
-    compute_martingale,
-    multiview_martingale_test,
-    MartingaleConfig,
-)
+from .martingale import compute_martingale, multiview_martingale_test, MartingaleConfig
+from .distance import DistanceConfig
+from .strangeness import StrangenessConfig
 
 logger = logging.getLogger(__name__)
 
@@ -162,14 +160,14 @@ class ChangePointDetector(Generic[ScalarType]):
 
     def _reset_state(self) -> None:
         """Reset the detector's internal state."""
-        # Initialize the traditional martingale value.
-        self._traditional_martingale = 1.0
-        # Initialize the horizon martingale value.
-        self._horizon_martingale = 1.0
-        # Initialize the window to hold recent strangeness or p-values.
-        self._window: List[float] = []
-        # Initialize the list to store detected change point indices.
+        # Initialize state tracking
+        self._state: Dict[str, Any] = {
+            "traditional": None,
+            "horizon": None,
+        }
+        # Initialize the list to store detected change points.
         self._change_points: List[int] = []
+        self._early_warnings: List[int] = []
 
     @property
     def change_points(self) -> List[int]:
@@ -177,11 +175,18 @@ class ChangePointDetector(Generic[ScalarType]):
         # Return a copy to prevent external modifications of the internal list.
         return self._change_points.copy()
 
+    @property
+    def early_warnings(self) -> List[int]:
+        """Get the detected early warnings."""
+        # Return a copy to prevent external modifications of the internal list.
+        return self._early_warnings.copy()
+
     @final
     def run(
         self,
         data: Array,
         predicted_data: Optional[Array] = None,
+        reset_state: bool = False,
     ) -> Dict[str, Any]:
         """Run the change point detection algorithm.
 
@@ -195,11 +200,13 @@ class ChangePointDetector(Generic[ScalarType]):
             predicted_data: Optional predicted values of shape
                           (n_predictions, horizon, n_features) for multiview
                           or (n_predictions, horizon) for single-view.
+            reset_state: Whether to reset the detector state before running.
 
         Returns:
             Dictionary containing:
             - traditional_change_points: List of indices where traditional martingale detected changes
             - horizon_change_points: List of indices where horizon martingale detected changes
+            - early_warnings: List of indices where early warning signals were detected
             - traditional_martingales: Array of traditional martingale values
             - horizon_martingales: Array of horizon martingale values (if predictions provided)
             For multiview detection, also includes:
@@ -215,6 +222,10 @@ class ChangePointDetector(Generic[ScalarType]):
             RuntimeError: If detection fails.
         """
         try:
+            # Reset state if requested
+            if reset_state:
+                self._reset_state()
+
             # Validate input dimensions and types.
             self._validate_input(data, predicted_data)
             # Log the dimensions of the input for debugging.
@@ -222,9 +233,19 @@ class ChangePointDetector(Generic[ScalarType]):
 
             # Run the appropriate detection method based on the configuration.
             if self.config.method == "single_view":
-                return self._run_single_view(data, predicted_data)
+                results = self._run_single_view(data, predicted_data)
             else:  # For multiview detection.
-                return self._run_multiview(data, predicted_data)
+                results = self._run_multiview(data, predicted_data)
+
+            # Update internal state from results
+            if "state" in results:
+                self._state = results.pop("state")
+
+            # Update internal change points and early warnings tracking
+            self._change_points.extend(results.get("traditional_change_points", []))
+            self._early_warnings.extend(results.get("early_warnings", []))
+
+            return results
 
         except Exception as e:
             logger.error(f"Detection failed: {str(e)}")
@@ -310,7 +331,9 @@ class ChangePointDetector(Generic[ScalarType]):
             Detection results dictionary.
         """
         # Convert predicted_data to list-of-lists if provided (required by compute_martingale).
-        pred_data_list = predicted_data.tolist() if predicted_data is not None else None
+        pred_data_list = None
+        if predicted_data is not None:
+            pred_data_list = [pred.tolist() for pred in predicted_data]
 
         # Create martingale config from detector config
         martingale_config = MartingaleConfig(
@@ -318,7 +341,19 @@ class ChangePointDetector(Generic[ScalarType]):
             history_size=self.config.history_size,
             reset=self.config.reset,
             window_size=self.config.max_window,
+            random_state=self.config.random_state,
             betting_func_config=self.config.betting_func_config,
+            distance_measure=self.config.distance_measure,
+            distance_p=self.config.distance_p,
+            strangeness_config=StrangenessConfig(
+                n_clusters=1,
+                batch_size=None,
+                random_state=self.config.random_state,
+                distance_config=DistanceConfig(
+                    metric=self.config.distance_measure,
+                    p=self.config.distance_p,
+                ),
+            ),
         )
 
         # Call the compute_martingale function from the martingale module.
@@ -326,6 +361,7 @@ class ChangePointDetector(Generic[ScalarType]):
             data=data.tolist(),  # Convert data to a list.
             predicted_data=pred_data_list,
             config=martingale_config,
+            state=self._state,
         )
         return results
 
@@ -342,29 +378,31 @@ class ChangePointDetector(Generic[ScalarType]):
             Detection results dictionary.
         """
         # Split each feature (column) into a separate view.
-        views = [data[:, i : i + 1] for i in range(data.shape[1])]
+        views = []
+        for i in range(data.shape[1]):
+            # Extract the i-th column and convert to list of scalars
+            views.append([float(x) for x in data[:, i]])
+
         logger.debug("Multiview Processing:")
         logger.debug(f"  Number of views: {len(views)}")
-        logger.debug(f"  Each view shape (Tx1): {views[0].shape}")
+        logger.debug(f"  Each view length: {len(views[0])}")
 
         # Split predicted data into separate views if provided.
         predicted_views = None
         if predicted_data is not None:
-            predicted_views = [
-                predicted_data[..., i : i + 1] for i in range(predicted_data.shape[-1])
-            ]
-            logger.debug(
-                f"  Each predicted view shape (T'xHx1): {predicted_views[0].shape}"
-            )
-        logger.debug("-" * 50)
+            predicted_views = []
+            for i in range(predicted_data.shape[-1]):
+                feature_preds = []
+                for t in range(predicted_data.shape[0]):
+                    # Convert horizons for this feature at time t to list
+                    horizons = [float(x) for x in predicted_data[t, :, i]]
+                    feature_preds.append(horizons)
+                predicted_views.append(feature_preds)
 
-        # Convert each view (and predicted view) to a list format.
-        data_lists = [view.tolist() for view in views]
-        pred_data_lists = (
-            [view.tolist() for view in predicted_views]
-            if predicted_views is not None
-            else None
-        )
+            logger.debug(f"  Number of prediction features: {len(predicted_views)}")
+            logger.debug(f"  Predictions per feature: {len(predicted_views[0])}")
+            logger.debug(f"  Horizons per prediction: {len(predicted_views[0][0])}")
+        logger.debug("-" * 50)
 
         # Create martingale config from detector config
         martingale_config = MartingaleConfig(
@@ -372,13 +410,27 @@ class ChangePointDetector(Generic[ScalarType]):
             history_size=self.config.history_size,
             reset=self.config.reset,
             window_size=self.config.max_window,
+            random_state=self.config.random_state,
             betting_func_config=self.config.betting_func_config,
+            distance_measure=self.config.distance_measure,
+            distance_p=self.config.distance_p,
+            strangeness_config=StrangenessConfig(
+                n_clusters=1,
+                batch_size=None,
+                random_state=self.config.random_state,
+                distance_config=DistanceConfig(
+                    metric=self.config.distance_measure,
+                    p=self.config.distance_p,
+                ),
+            ),
         )
 
         # Call the multiview martingale test function.
         results = multiview_martingale_test(
-            data=data_lists,
-            predicted_data=pred_data_lists,
+            data=views,
+            predicted_data=predicted_views,
             config=martingale_config,
+            state=self._state,
+            batch_size=self.config.batch_size,
         )
         return results

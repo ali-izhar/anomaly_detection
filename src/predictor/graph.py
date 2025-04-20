@@ -5,6 +5,7 @@ from scipy.optimize import minimize
 from scipy.sparse.linalg import eigsh
 import warnings
 from itertools import combinations
+from typing import Dict, Any
 
 # Handle community detection package import
 try:
@@ -64,6 +65,7 @@ class GraphPredictor:
         self.optimization_iterations = optimization_iterations
         self.threshold = threshold
         self.n_history = n_history
+        self.history_size = n_history  # compatibility with algorithm.py
 
     def predict(self, history, horizon=5):
         """
@@ -126,6 +128,14 @@ class GraphPredictor:
 
             # Update history with new prediction for subsequent predictions
             adj_matrices.append(binary_pred)
+
+        # Store the first prediction as the last_prediction for update_state method
+        if predicted_adjs:
+            self.last_prediction = predicted_adjs[0]
+
+        # Initialize or update adj_history if not available yet
+        if not hasattr(self, "adj_history"):
+            self.adj_history = adj_matrices[: self.n_history]
 
         return predicted_adjs
 
@@ -826,9 +836,58 @@ class GraphPredictor:
             "n_history": self.n_history,
         }
 
+    def update_state(self, actual_state: Dict[str, Any]) -> None:
+        """
+        Update predictor's internal state with new observation.
+
+        This method allows the predictor to update its parameters based on the
+        actual observed network state, improving future predictions by:
+        1. Updating the beta parameter based on prediction accuracy
+        2. Recalculating community structure if needed
+        3. Updating historical statistics for structural constraints
+
+        Args:
+            actual_state (Dict[str, Any]): The actual observed network state,
+                                          containing at least an 'adjacency' key
+        """
+        # Extract the adjacency matrix from the state
+        if "adjacency" not in actual_state:
+            raise ValueError("The actual state must contain an 'adjacency' key")
+
+        actual_adj = actual_state["adjacency"]
+        if not isinstance(actual_adj, np.ndarray):
+            actual_adj = np.array(actual_adj)
+
+        # If we have a previous prediction, update the beta parameter
+        if hasattr(self, "last_prediction") and self.last_prediction is not None:
+            self.update_beta(actual_adj, self.last_prediction)
+
+        # Re-identify communities in the latest graph
+        self._identify_communities(actual_adj)
+
+        # Update historical statistics based on new observation
+        # We need to maintain a history of adjacency matrices for this
+        if not hasattr(self, "adj_history"):
+            self.adj_history = []
+
+        # Add new adjacency matrix to history (limiting length to n_history)
+        self.adj_history.append(actual_adj)
+        if len(self.adj_history) > self.n_history:
+            self.adj_history.pop(0)
+
+        # Recalculate historical statistics
+        self._calculate_historical_stats(self.adj_history)
+
+        # Adaptively update parameters based on new observations
+        self._set_adaptive_parameters(self.adj_history)
+
     def reset(self):
         self.beta = 0.5
         self.prediction_error_history = []
+        if hasattr(self, "adj_history"):
+            self.adj_history = []
+        if hasattr(self, "last_prediction"):
+            self.last_prediction = None
 
 
 def predict_graphs(
