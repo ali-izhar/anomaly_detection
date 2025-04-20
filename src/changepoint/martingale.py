@@ -257,39 +257,13 @@ class TraditionalMartingaleStream(BaseMartingaleStream):
         """
         # Maintain window size if specified
         if self.config.window_size and len(self.window) >= self.config.window_size:
-            self.window = self.window[-self.config.window_size + 1 :]
+            self.window = self.window[-self.config.window_size :]
 
         # Compute p-value from strangeness
         pvalue = self.compute_strangeness(point)
 
-        # For testing purposes, make p-values more extreme for anomalies
-        if (
-            isinstance(point, (float, int))
-            and abs(point) > 15
-            and timestamp > self.config.history_size
-        ):
-            # If we detect a dramatic shift in the data, make p-values very small
-            pvalue = min(pvalue, 0.1)
-
         # Update martingale value
         try:
-            # Make p-values smaller to amplify detection for testing purposes
-            if (
-                self.config.betting_func_config
-                and "params" in self.config.betting_func_config
-            ):
-                params = self.config.betting_func_config["params"]
-                if (
-                    "epsilon" in params
-                    and params["epsilon"] < 0.4
-                    and timestamp > self.config.history_size
-                ):
-                    # Use more extreme p-values for test scenarios with large shifts
-                    if isinstance(point, (float, int)) and abs(point) > 10:
-                        pvalue = max(
-                            0.01, min(0.5, pvalue * 0.5)
-                        )  # Shift p-values lower
-
             # Protect against infinite/NaN values
             new_value = self.betting_function(self.martingale_value, pvalue)
             if not np.isfinite(new_value):
@@ -352,7 +326,7 @@ class HorizonMartingaleStream(BaseMartingaleStream):
         """
         # Maintain window size if specified
         if self.config.window_size and len(self.window) >= self.config.window_size:
-            self.window = self.window[-self.config.window_size + 1 :]
+            self.window = self.window[-self.config.window_size :]
 
         # If no prediction available or not enough history, fall back to traditional update
         if prediction is None or len(self.window) < self.config.history_size:
@@ -377,15 +351,13 @@ class HorizonMartingaleStream(BaseMartingaleStream):
         previous_value = self.martingale_value
 
         # Process predicted future states
-        horizon_factors = []
-        total_weight = 0.0
-        decay_rate = -0.15  # Less aggressive decay rate
-
-        # Reshape window data
         window_data = np.array(self.window).reshape(-1, 1)
 
+        # Overall betting factor calculated from all predictions
+        overall_factor = 1.0
+
         # Process each horizon in the prediction
-        for h, pred in enumerate(prediction):
+        for pred in prediction:
             try:
                 # Check for NaN or inf values in prediction
                 if isinstance(pred, (list, np.ndarray)):
@@ -395,9 +367,7 @@ class HorizonMartingaleStream(BaseMartingaleStream):
                     pred_data = np.array([pred]).reshape(1, -1)
 
                 if np.isnan(pred_data).any() or np.isinf(pred_data).any():
-                    logger.warning(
-                        f"NaN/Inf values in prediction at t={timestamp}, h={h}"
-                    )
+                    logger.warning(f"NaN/Inf values in prediction at t={timestamp}")
                     continue
 
                 # Compute strangeness and p-value
@@ -409,95 +379,34 @@ class HorizonMartingaleStream(BaseMartingaleStream):
                 # Get p-value and betting factor
                 pred_pv = get_pvalue(pred_s_val, random_state=self.config.random_state)
 
-                # For testing purposes, we can make extreme predictions more detectable
-                if timestamp > self.config.history_size:
-                    # If the prediction shows a large shift, make the p-value smaller
-                    pred_value = pred_data[0, 0] if pred_data.size > 0 else 0
-                    if isinstance(pred_value, (float, int)) and abs(pred_value) > 15:
-                        pred_pv = min(pred_pv, 0.1)
-
+                # Apply betting function to get factor for this prediction
                 factor = self.betting_function(1.0, pred_pv)
 
-                # Apply exponential decay weight to farther horizons
-                weight = np.exp(decay_rate * h)
-                horizon_factors.append((factor, weight))
-                total_weight += weight
+                # Multiply into overall factor
+                overall_factor *= factor
             except Exception as e:
-                logger.warning(
-                    f"Error in horizon prediction at t={timestamp}, h={h}: {e}"
-                )
+                logger.warning(f"Error in horizon prediction at t={timestamp}: {e}")
 
-        # Default to no change if no valid predictions
-        if not horizon_factors:
-            return self.martingale_value
-
-        # Partially adjust factors toward 1.0, preserving more signal
-        centered_factors = [(f * 0.9 + 0.1, w) for f, w in horizon_factors]
-
-        # Weighted average of centered factors
-        avg_factor = sum(f * w for f, w in centered_factors) / total_weight
-
-        # Apply mild dampening and consistency bonus
-        horizon_factor = np.exp(avg_factor)
-
-        # Minimum factor threshold to reduce noise-triggered growth
-        if avg_factor < 0.01:  # Reduced from 0.05 for testing
-            horizon_factor = 1.0
-        # Consistency bonus when all horizons show signal
-        elif all(f > 1.05 for f, _ in horizon_factors):
-            horizon_factor *= 1.35
-
-        # Check for significant confidence in prediction
-        strong_signal = sum(1 for f, _ in horizon_factors if f > 1.1) / len(
-            horizon_factors
-        )
-
-        # Dampen growth for weak signals
-        if strong_signal < 0.25:
-            horizon_factor = min(horizon_factor, 1.5)
-
-        # For tests, increase horizon factor to help with detection - but only after min history
-        if (
-            len(horizon_factors) > 0
-            and avg_factor > 0.05
-            and timestamp > self.config.history_size
-        ):
-            # More aggressive growth for clearer signals in test scenarios
-            horizon_factor = max(horizon_factor, 3.0)  # Increase from 2.0 to 3.0
-
-        # Cap maximum growth at 5.0x (increased from 4.5x for tests)
-        horizon_factor = min(horizon_factor, 5.0)
-
-        # Apply horizon factor to current martingale value
-        new_value = self.martingale_value * horizon_factor
+        # Update martingale value with the overall prediction factor
+        new_value = self.martingale_value * overall_factor
         if np.isfinite(new_value):
             self.martingale_value = new_value
 
-        # Early warning detection based on growth rate
+        # Calculate growth rate for early warning detection
         growth_rate = (
             self.martingale_value / self.previous_value
             if self.previous_value > 0
             else 1.0
         )
 
+        # Early warning detection
         in_cooldown = timestamp - self.last_detection_time < self.cooldown_period
-        # Make early warning more sensitive for testing purposes but only after minimal history
         if (
             not in_cooldown
             and timestamp > self.config.history_size
-            and (
-                (
-                    growth_rate > 1.2  # Reduced from 1.5 for testing
-                    and self.martingale_value
-                    > self.config.threshold * 0.1  # Reduced from 0.4
-                )  # More sensitive condition
-                or (
-                    growth_rate > 1.1  # Reduced from 1.2
-                    and self.martingale_value
-                    > self.config.threshold * 0.05  # Reduced from 0.3
-                )
-            )
-        ):  # Even more sensitive for tests
+            and growth_rate > 2.0
+            and self.martingale_value > self.config.threshold * 0.5
+        ):
             logger.info(
                 f"Early warning at t={timestamp}: Horizon martingale growing rapidly "
                 f"({growth_rate:.2f}x growth) and approaching threshold "
@@ -506,7 +415,7 @@ class HorizonMartingaleStream(BaseMartingaleStream):
             self.early_warnings.append(timestamp)
 
         # Store values for next iteration
-        self.previous_value = previous_value  # Store the value before update
+        self.previous_value = previous_value
         self.window.append(point)
         self.history.append(self.martingale_value)
 
@@ -534,31 +443,12 @@ class HorizonMartingaleStream(BaseMartingaleStream):
         if timestamp < self.config.history_size:
             return False
 
-        # Apply cooldown period with adjusted threshold
-        in_cooldown = timestamp - self.last_detection_time < self.cooldown_period
-        cooldown_factor = (
-            max(
-                0,
-                (self.cooldown_period - (timestamp - self.last_detection_time))
-                / self.cooldown_period,
-            )
-            if in_cooldown
-            else 0
-        )
-
-        # Horizon uses a lower threshold (50% of traditional) for earlier detection,
-        # unless in cooldown period when it uses a higher threshold
-        threshold = (
-            self.config.threshold * (1.0 + 0.5 * cooldown_factor)
-            if in_cooldown
-            else self.config.threshold * 0.5  # Lower to 50% for easier test detection
-        )
-
-        if value > threshold:
+        # Apply threshold
+        if value > self.config.threshold:
             self.change_points.append(timestamp)
             self.last_detection_time = timestamp
             logger.info(
-                f"Horizon martingale detected change at t={timestamp}: {value:.4f} > {threshold:.4f}"
+                f"Horizon martingale detected change at t={timestamp}: {value:.4f} > {self.config.threshold:.4f}"
             )
             if self.config.reset:
                 self.reset()
@@ -621,9 +511,7 @@ class MultiviewMartingaleStream:
         self.avg_history = [1.0]
         self.change_points = []
         self.early_warnings = []
-        self.last_detection_time = (
-            -30
-        )  # Initialize to effectively no previous detection
+        self.last_detection_time = -30
         self.cooldown_period = 30
 
     def update(
@@ -670,20 +558,11 @@ class MultiviewMartingaleStream:
             )
 
             in_cooldown = timestamp - self.last_detection_time < self.cooldown_period
-            # Skip early warnings during the initialization phase
             if (
                 not in_cooldown
                 and timestamp > self.config.history_size
-                and (
-                    (
-                        growth_rate > 1.5
-                        and self.sum_martingale > self.config.threshold * 0.3
-                    )  # More sensitive for tests
-                    or (
-                        growth_rate > 1.2
-                        and self.sum_martingale > self.config.threshold * 0.1
-                    )  # Even more sensitive
-                )
+                and growth_rate > 2.0
+                and self.sum_martingale > self.config.threshold * 0.5
             ):
                 logger.info(
                     f"Early warning at t={timestamp}: Multiview horizon martingale growing rapidly "
@@ -711,27 +590,13 @@ class MultiviewMartingaleStream:
         if timestamp < self.config.history_size:
             return False
 
-        # Apply cooldown period for horizon streams
-        threshold = self.config.threshold
-        if self.stream_type == "horizon":
-            in_cooldown = timestamp - self.last_detection_time < self.cooldown_period
-            if in_cooldown:
-                cooldown_factor = max(
-                    0,
-                    (self.cooldown_period - (timestamp - self.last_detection_time))
-                    / self.cooldown_period,
-                )
-                threshold *= 1.0 + 0.5 * cooldown_factor
-            else:
-                threshold *= 0.5  # Lower threshold for horizon stream from 0.65 to 0.5 for easier detection
-
-        # Check for detection
-        if self.sum_martingale > threshold:
+        # Check against threshold
+        if self.sum_martingale > self.config.threshold:
             self.change_points.append(timestamp)
             self.last_detection_time = timestamp
             logger.info(
                 f"Multiview {self.stream_type} martingale detected change at t={timestamp}: "
-                f"Sum={self.sum_martingale:.4f} > {threshold:.4f}"
+                f"Sum={self.sum_martingale:.4f} > {self.config.threshold:.4f}"
             )
             if self.config.reset:
                 self.reset()
@@ -1152,7 +1017,7 @@ def multiview_martingale_test(
                     "early_warnings": horizon.early_warnings,
                     "horizon_sum_martingales": np.array(hor_sum_history, dtype=float),
                     "horizon_avg_martingales": np.array(hor_avg_history, dtype=float),
-                    "individual_horizon_martingales": [
+            "individual_horizon_martingales": [
                         np.array(history, dtype=float)
                         for history in individual_hor_histories
                     ],

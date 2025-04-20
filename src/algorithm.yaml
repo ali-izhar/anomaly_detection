@@ -7,7 +7,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 # Algorithm execution mode
 execution:
   enable_prediction: true  # Whether to use prediction for enhanced detection
-  enable_visualization: false  # Whether to create visualizations
+  enable_visualization: true  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
 # Trial configuration
@@ -52,7 +52,7 @@ model:
 
 # Detection parameters
 detection:
-  threshold: 60.0  # Detection threshold for martingale
+  threshold: 60.0  # Increased detection threshold to reduce false positives with pure implementation
   batch_size: 1000  # Batch size for multiview processing
   reset: true  # Reset martingales after detection
   max_window: null  # Maximum window size (null for adaptive)
@@ -60,13 +60,13 @@ detection:
   
   # Betting function configuration
   betting_func_config:
-    name: "mixture"  # Available options: power, exponential, mixture, constant, beta, kernel
+    name: "power"  # Using power betting function as it showed better results in tests
     power:  # Parameters specific to the power betting function
-      epsilon: 0.7
+      epsilon: 0.9  # Higher epsilon for more sensitivity with pure implementation
     exponential:
       lambd: 1.0  # Rate parameter controlling sensitivity
     mixture:
-      epsilons: [0.5, 0.6, 0.7, 0.8, 0.9]  # List of sensitivity parameters
+      epsilons: [0.7, 0.8, 0.9]  # Reduced number of epsilons, focused on higher values
     constant: {}  # No parameters needed
     beta:
       a: 0.5  # Alpha parameter of Beta distribution
@@ -83,13 +83,13 @@ detection:
 # Feature extraction
 features:
   - mean_degree  # Average node degree
-  # - density  # Graph density
-  # - mean_clustering  # Average clustering coefficient
+  - density  # Graph density
+  - mean_clustering  # Average clustering coefficient
   - mean_betweenness  # Average betweenness centrality
   - mean_eigenvector  # Average eigenvector centrality
   - mean_closeness  # Average closeness centrality
-  - max_singular_value  # Largest singular value
-  - min_nonzero_laplacian  # Smallest non-zero Laplacian eigenvalue
+  # - max_singular_value  # Largest singular value
+  # - min_nonzero_laplacian  # Smallest non-zero Laplacian eigenvalue
 
 # Output configuration
 output:

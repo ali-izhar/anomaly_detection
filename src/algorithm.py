@@ -17,6 +17,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.changepoint.detector import DetectorConfig, ChangePointDetector
+from src.changepoint.martingale import BettingFunctionConfig
 from src.configs import get_config, get_full_model_name
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
@@ -153,7 +154,6 @@ class GraphChangeDetection:
             else self.config["execution"].get("save_csv", True)
         )
 
-        # logger.info(f"Starting {self.config['name']}, {self.config['description']}")
         logger.debug(
             f"Running with prediction={enable_prediction}, visualize={enable_visualization}, save_csv={enable_csv_export}"
         )
@@ -307,6 +307,11 @@ class GraphChangeDetection:
 
             # Initialize detector with current trial seed
             detector = self._init_detector(random_state=seed)
+            
+            # Log detector settings
+            logger.info(f"Using threshold: {detector.config.threshold:.2f}")
+            betting_func_name = self.config["detection"]["betting_func_config"]["name"]
+            logger.info(f"Using betting function: {betting_func_name}")
 
             # Run detection
             detection_result = detector.run(
@@ -315,6 +320,16 @@ class GraphChangeDetection:
 
             if detection_result is None:
                 raise RuntimeError(f"Detection failed for trial {trial_idx + 1}")
+                
+            # Log detection results
+            if "traditional_change_points" in detection_result:
+                cp = detection_result["traditional_change_points"]
+                logger.info(f"Traditional change points detected: {len(cp)} at {cp}")
+                
+            if "horizon_change_points" in detection_result:
+                cp = detection_result["horizon_change_points"]
+                if cp:
+                    logger.info(f"Horizon change points detected: {len(cp)} at {cp}")
 
             individual_results.append(detection_result)
 
@@ -469,7 +484,21 @@ class GraphChangeDetection:
         det_config = self.config["detection"]
         logger.info(f"Initializing detector with {self.config['model']['type']} method")
 
-        # Create DetectorConfig with all necessary parameters
+        # Ensure random_state is compatible type
+        if random_state is not None:
+            random_state = int(random_state)
+
+        # Get betting function config parameters
+        betting_func_name = det_config["betting_func_config"]["name"]
+        betting_func_params = det_config["betting_func_config"].get(betting_func_name, {})
+
+        # Create a proper BettingFunctionConfig instance
+        betting_func_config = BettingFunctionConfig(
+            name=betting_func_name,
+            params=betting_func_params
+        )
+
+        # Create DetectorConfig with proper configuration objects
         detector_config = DetectorConfig(
             method=self.config["model"]["type"],
             threshold=det_config["threshold"],
@@ -477,12 +506,7 @@ class GraphChangeDetection:
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
             max_window=det_config["max_window"],
-            betting_func_config={
-                "name": det_config["betting_func_config"]["name"],
-                "params": det_config["betting_func_config"].get(
-                    det_config["betting_func_config"]["name"], {}
-                ),
-            },
+            betting_func_config=betting_func_config,
             distance_measure=det_config["distance"]["measure"],
             distance_p=det_config["distance"]["p"],
             random_state=random_state,  # Use provided random state
@@ -490,7 +514,7 @@ class GraphChangeDetection:
 
         logger.info(f"Using distance measure: {detector_config.distance_measure}")
         logger.info(
-            f"Using betting function: {detector_config.betting_func_config['name']}"
+            f"Using betting function: {betting_func_name}"
         )
 
         return ChangePointDetector(detector_config)
@@ -570,11 +594,13 @@ class GraphChangeDetection:
         det_config = self.config["detection"]
 
         # Get betting function configuration
+        betting_func_name = det_config["betting_func_config"]["name"]
+        betting_func_params = det_config["betting_func_config"].get(betting_func_name, {})
+        
+        # Create a clean betting config for visualization
         betting_config = {
-            "function": det_config["betting_func_config"]["name"],
-            "params": det_config["betting_func_config"].get(
-                det_config["betting_func_config"]["name"], {}
-            ),
+            "function": betting_func_name,
+            "params": betting_func_params
         }
 
         visualizer = MartingaleVisualizer(
