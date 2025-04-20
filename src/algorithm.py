@@ -80,7 +80,7 @@ class GraphChangeDetection:
 
         # Validate predictor configuration
         predictor_config = model_config["predictor"]
-        if predictor_config["type"] not in ["adaptive", "auto", "statistical"]:
+        if predictor_config["type"] not in ["adaptive", "auto", "statistical", "graph"]:
             raise ValueError("Invalid predictor type specified")
 
         # Validate detection configuration
@@ -529,10 +529,14 @@ class GraphChangeDetection:
         horizon = self.config["detection"]["prediction_horizon"]
 
         for t in range(len(graphs)):
-            history_start = max(0, t - predictor.history_size)
+            history_size = (
+                self.config["model"]["predictor"]["config"]["n_history"]
+                or predictor.history_size
+            )
+            history_start = max(0, t - history_size)
             history = [{"adjacency": g} for g in graphs[history_start:t]]
 
-            if t >= predictor.history_size:
+            if t >= history_size:
                 predictions = predictor.predict(history, horizon=horizon)
                 predicted_graphs.append(predictions)
 

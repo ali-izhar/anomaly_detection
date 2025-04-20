@@ -7,6 +7,7 @@ from .base import BasePredictor
 from .adaptive import AdaptiveDistributionAwarePredictor
 from .auto import AutoChangepointPredictor
 from .statistical import StatisticalAdaptivePredictor
+from .graph import GraphPredictor
 
 
 class PredictorFactory:
@@ -22,6 +23,7 @@ class PredictorFactory:
         "adaptive": AdaptiveDistributionAwarePredictor,
         "auto": AutoChangepointPredictor,
         "statistical": StatisticalAdaptivePredictor,
+        "graph": GraphPredictor,
     }
 
     # Default configurations for each predictor type
@@ -49,6 +51,16 @@ class PredictorFactory:
             "change_threshold": 5,
             "min_phase_length": 40,
             "history_size": 40,
+        },
+        "graph": {
+            "alpha": 0.8,
+            "gamma": 0.5,
+            "omega": None,
+            "beta_init": 0.5,
+            "enforce_connectivity": True,
+            "adaptive": True,
+            "optimization_iterations": 3,
+            "threshold": 0.5,
         },
     }
 

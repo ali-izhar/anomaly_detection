@@ -6,7 +6,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: false  # Whether to use prediction for enhanced detection
+  enable_prediction: true  # Whether to use prediction for enhanced detection
   enable_visualization: false  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
@@ -18,25 +18,37 @@ trials:
 # Model configuration
 model:
   type: "multiview"  # or "single_view"
-  network: "er"  # choices: ["ba", "ws", "er", "sbm"]
+  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
   predictor:
-    type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
+    type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph"]
     config:
-      # AdaptiveDistributionAwarePredictor configuration
-      n_history: 10  # Increase from 5 to 10 for better pattern detection
-      adaptive: true  
-      enforce_connectivity: true  
-      binary: true  
-      spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
-      community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
-      n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
-      temporal_window: 15  # Increase from 10 to 15 for better trend detection
-      min_edges_per_component: 2  # Lower threshold for connectivity constraints
-      degree_reg: 0.2  # Reduce degree regularization (if present) 
-      change_threshold: 0.15  # Lower the threshold to detect changes earlier
-      smoothing_window: 5  # Add/increase smoothing window if not already present
-      min_weight: 0.05  # Lower minimum weight for more adaptivity
-      distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing
+      alpha: 0.8
+      gamma: 0.5
+      omega: null
+      beta_init: 0.5
+      enforce_connectivity: true
+      adaptive: true
+      optimization_iterations: 3
+      threshold: 0.5
+      n_history: 10
+
+    # type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
+    # config:
+    #   # AdaptiveDistributionAwarePredictor configuration
+    #   n_history: 10  # Increase from 5 to 10 for better pattern detection
+    #   adaptive: true  
+    #   enforce_connectivity: true  
+    #   binary: true  
+    #   spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
+    #   community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
+    #   n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
+    #   temporal_window: 15  # Increase from 10 to 15 for better trend detection
+    #   min_edges_per_component: 2  # Lower threshold for connectivity constraints
+    #   degree_reg: 0.2  # Reduce degree regularization (if present) 
+    #   change_threshold: 0.15  # Lower the threshold to detect changes earlier
+    #   smoothing_window: 5  # Add/increase smoothing window if not already present
+    #   min_weight: 0.05  # Lower minimum weight for more adaptivity
+    #   distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing
 
 # Detection parameters
 detection:

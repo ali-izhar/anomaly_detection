@@ -48,14 +48,14 @@ erdos_renyi:
   clustering_std: 0.02  # Standard deviation for clustering coefficient noise
 
 stochastic_block_model:
-  n: 50  # Number of nodes in the graph
-  seq_len: 200  # Total length of the time series
-  min_segment: 40  # Minimum length of each stable segment
+  n: 20  # Number of nodes in the graph
+  seq_len: 100  # Total length of the time series
+  min_segment: 50  # Minimum length of each stable segment
   min_changes: 1  # Minimum number of change points
   max_changes: 2  # Maximum number of change points
   num_blocks: 2  # Number of communities/blocks
-  min_block_size: 50  # Minimum size of each block (n//2)
-  max_block_size: 50  # Maximum size of each block (n//2)
+  min_block_size: 10  # Minimum size of each block (n//2)
+  max_block_size: 10  # Maximum size of each block (n//2)
   intra_prob: 0.95  # Probability of edge within blocks
   inter_prob: 0.01  # Probability of edge between blocks
   min_intra_prob: 0.3  # Minimum intra-block edge probability
