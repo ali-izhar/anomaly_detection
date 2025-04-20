@@ -18,6 +18,7 @@ from .martingale_base import (
 )
 
 from .martingale_traditional import (
+    compute_traditional_martingale,
     multiview_traditional_martingale,
 )
 
@@ -39,6 +40,7 @@ def compute_horizon_martingale(
     predicted_data: List[Array],
     config: Optional[MartingaleConfig] = None,
     state: Optional[HorizonMartingaleState] = None,
+    traditional_martingale_values: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     """Compute a horizon martingale for online change detection over a univariate data stream.
 
@@ -50,6 +52,7 @@ def compute_horizon_martingale(
         predicted_data: List of predicted feature vectors for future timesteps.
         config: Configuration for martingale computation.
         state: Optional state for continuing computation from a previous run.
+        traditional_martingale_values: List of traditional martingale values to use as base.
 
     Returns:
         Dictionary containing:
@@ -72,6 +75,18 @@ def compute_horizon_martingale(
     if state is None:
         state = HorizonMartingaleState()
 
+    # Calculate traditional martingale values if not provided
+    if traditional_martingale_values is None:
+        # Compute traditional martingale
+        trad_result = compute_traditional_martingale(data, config, None)
+        traditional_martingale_values = trad_result.get("traditional_martingales", np.ones(len(data))).tolist()
+        logger.info(f"Computed traditional martingale values, length: {len(traditional_martingale_values)}")
+
+    # Ensure traditional_martingale_values has the right length
+    if len(traditional_martingale_values) < len(data):
+        padding = [1.0] * (len(data) - len(traditional_martingale_values))
+        traditional_martingale_values = padding + traditional_martingale_values
+    
     # Obtain the betting function callable based on the betting_func_config.
     betting_function = get_betting_function(config.betting_func_config)
 
@@ -131,6 +146,13 @@ def compute_horizon_martingale(
                 state.saved_horizon.append(1.0)
                 continue
                 
+            # Get the traditional martingale value from previous timestep as base
+            # Use 1.0 for the first timestep
+            trad_base = traditional_martingale_values[i-1] if i > 0 else 1.0
+            
+            # Log the traditional martingale base we're using
+            logger.info(f"Time {i}, Using traditional martingale base: {trad_base:.4f}")
+            
             # Check predictions at multiple horizons
             horizon_martingales_at_t = []
             
@@ -143,7 +165,8 @@ def compute_horizon_martingale(
                 
                 # Skip if we don't have enough history
                 if past_time < config.history_size:
-                    m_h = state.horizon_martingales_h[h] if h < len(state.horizon_martingales_h) else 1.0
+                    # Initialize with traditional martingale base times a neutral betting factor
+                    m_h = trad_base
                     horizon_martingales_at_t.append(m_h)
                     continue
                 
@@ -159,7 +182,7 @@ def compute_horizon_martingale(
                 
                 # Skip if prediction is not available
                 if pred_idx < 0 or pred_idx >= len(predicted_data) or h >= len(predicted_data[0]):
-                    m_h = state.horizon_martingales_h[h] if h < len(state.horizon_martingales_h) else 1.0
+                    m_h = trad_base
                     horizon_martingales_at_t.append(m_h)
                     continue
                 
@@ -190,25 +213,19 @@ def compute_horizon_martingale(
                     
                     logger.info(f"Time {i}, Horizon {h}, p-value: {pred_pv:.6f}, adj: {adjusted_pv:.6f}, diff: {diff:.4f}")
                     
-                    # Update horizon-specific martingale
-                    if h < len(state.horizon_martingales_h):
-                        m_h = state.horizon_martingales_h[h] * betting_function(1.0, adjusted_pv)
-                    else:
-                        while len(state.horizon_martingales_h) <= h:
-                            state.horizon_martingales_h.append(1.0)
-                        m_h = betting_function(1.0, adjusted_pv)
+                    # Update martingale for this horizon using traditional as base
+                    m_h = trad_base * betting_function(1.0, adjusted_pv)
                 except Exception as e:
                     logger.error(f"Error processing horizon {h} at time {i}: {e}")
-                    m_h = state.horizon_martingales_h[h] if h < len(state.horizon_martingales_h) else 1.0
+                    m_h = trad_base
                 
                 horizon_martingales_at_t.append(m_h)
                 
             # Ensure we have the right number of horizon martingales
             if len(horizon_martingales_at_t) < num_horizons:
-                # Pad with existing values or 1.0
+                # Pad with traditional base value
                 for h in range(len(horizon_martingales_at_t), num_horizons):
-                    val = state.horizon_martingales_h[h] if h < len(state.horizon_martingales_h) else 1.0
-                    horizon_martingales_at_t.append(val)
+                    horizon_martingales_at_t.append(trad_base)
             
             # Log horizon martingales
             logger.info(f"Time {i}, Horizon martingales: {[round(m, 4) for m in horizon_martingales_at_t]}")
@@ -219,12 +236,14 @@ def compute_horizon_martingale(
                     w * m for w, m in zip(horizon_weights, horizon_martingales_at_t)
                 )
             else:
-                horizon_val = 1.0
+                horizon_val = trad_base
                 
             logger.info(f"Time {i}, Combined horizon martingale: {horizon_val:.4f}")
             
-            # Update state
+            # Update state for horizon-specific martingales (for tracking)
             state.horizon_martingales_h = horizon_martingales_at_t
+            
+            # Store the combined horizon martingale value
             state.horizon_martingale = horizon_val
             state.saved_horizon.append(horizon_val)
             horizon_martingales.append(horizon_val)
@@ -241,11 +260,6 @@ def compute_horizon_martingale(
                     logger.info(f"Resetting horizon martingale state after detection at t={i}")
                     state.horizon_martingales_h = [1.0] * num_horizons
                     state.window = []
-
-        logger.info(
-            f"Horizon martingale computation complete. "
-            f"Horizon change points: {len(horizon_change_points)}."
-        )
 
         # Return the computed martingale histories and detected change points
         return {
@@ -264,11 +278,12 @@ def multiview_horizon_martingale(
     config: Optional[MartingaleConfig] = None,
     state: Optional[MultiviewHorizonMartingaleState] = None,
     batch_size: int = 1000,
+    traditional_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute a multivariate (multiview) horizon martingale test by aggregating evidence across features.
 
     For d features, each feature maintains its own martingale for each horizon h:
-    M_{t,h}^{(k)} = \prod_{i=1}^t g(p_{i,h}^{(k)})
+    M_{t,h}^{(k)} = M_{t-1}^{trad,(k)} * g(p_{t,h}^{(k)})
 
     These are combined across horizons:
     M_{t}^{(k)} = \sum_{h \in \mathcal{H}} w_h M_{t,h}^{(k)}
@@ -284,6 +299,7 @@ def multiview_horizon_martingale(
         config: Configuration for martingale computation.
         state: Optional state for continuing computation from a previous run.
         batch_size: Size of batches for processing.
+        traditional_result: Optional pre-computed traditional martingale results.
 
     Returns:
         Dictionary containing change points and martingale values.
@@ -322,9 +338,17 @@ def multiview_horizon_martingale(
     logger.info("-" * 50)
 
     try:
-        # Get change points from traditional martingale for reset logic
-        trad_result = multiview_traditional_martingale(data, config, None, batch_size)
+        # Get traditional martingale results
+        if traditional_result is None:
+            # Compute traditional martingale
+            trad_result = multiview_traditional_martingale(data, config, None, batch_size)
+        else:
+            trad_result = traditional_result
+            
         trad_change_points = trad_result["traditional_change_points"]
+        trad_individual_martingales = trad_result["individual_traditional_martingales"]
+        
+        logger.info(f"Using traditional martingale values as base. Features: {len(trad_individual_martingales)}")
 
         num_features = len(data)
         num_samples = len(data[0])
@@ -390,15 +414,21 @@ def multiview_horizon_martingale(
                     # Limit window size if needed
                     if config.window_size and len(state.windows[j]) > config.window_size:
                         state.windows[j] = state.windows[j][-config.window_size:]
+                    
+                    # Get traditional martingale value from previous timestep as base
+                    trad_base = (
+                        trad_individual_martingales[j][i-1] if i > 0 and i-1 < len(trad_individual_martingales[j]) 
+                        else 1.0
+                    )
                 
                     # Initialize horizon-specific martingales for this feature
                     horizon_martingales_j = []
                     
                     # Skip feature if window is too small
                     if len(state.windows[j]) < 2:
-                        horizon_martingales_j = [1.0] * num_horizons
-                        feature_martingales.append(1.0)
-                        individual_horizon_martingales[j].append(1.0)
+                        horizon_martingales_j = [trad_base] * num_horizons
+                        feature_martingales.append(trad_base)
+                        individual_horizon_martingales[j].append(trad_base)
                         continue
                     
                     # For each horizon h, check if there's evidence of a change in the next h steps
@@ -408,11 +438,7 @@ def multiview_horizon_martingale(
                         
                         # Skip if we don't have enough history
                         if past_time < config.history_size:
-                            if j < len(state.feature_horizon_martingales) and h < len(state.feature_horizon_martingales[j]):
-                                m_jh = state.feature_horizon_martingales[j][h]
-                            else:
-                                m_jh = 1.0
-                            horizon_martingales_j.append(m_jh)
+                            horizon_martingales_j.append(trad_base)
                             continue
                         
                         # The prediction index is past_time - history_size
@@ -429,11 +455,7 @@ def multiview_horizon_martingale(
                         if (j >= len(predicted_data) or 
                             pred_idx < 0 or pred_idx >= len(predicted_data[j]) or 
                             h >= len(predicted_data[j][0])):
-                            if j < len(state.feature_horizon_martingales) and h < len(state.feature_horizon_martingales[j]):
-                                m_jh = state.feature_horizon_martingales[j][h]
-                            else:
-                                m_jh = 1.0
-                            horizon_martingales_j.append(m_jh)
+                            horizon_martingales_j.append(trad_base)
                             continue
                         
                         try:
@@ -464,35 +486,25 @@ def multiview_horizon_martingale(
                             if j == 0 and i % 10 == 0:
                                 logger.info(f"Feature {j}, Time {i}, Horizon {h}, p-value: {pred_pv:.6f}, adj: {adjusted_pv:.6f}, diff: {diff:.4f}")
                             
-                            # Update horizon-specific martingale
-                            if j < len(state.feature_horizon_martingales) and h < len(state.feature_horizon_martingales[j]):
-                                m_jh = state.feature_horizon_martingales[j][h] * betting_function(1.0, adjusted_pv)
-                            else:
-                                # Initialize missing martingales
-                                while j >= len(state.feature_horizon_martingales):
-                                    state.feature_horizon_martingales.append([])
-                                while h >= len(state.feature_horizon_martingales[j]):
-                                    state.feature_horizon_martingales[j].append(1.0)
-                                m_jh = betting_function(1.0, adjusted_pv)
-                                
+                            # Update martingale for this horizon using the traditional martingale as base
+                            m_jh = trad_base * betting_function(1.0, adjusted_pv)
                         except Exception as e:
                             logger.error(f"Error processing feature {j}, horizon {h} at time {i}: {e}")
-                            if j < len(state.feature_horizon_martingales) and h < len(state.feature_horizon_martingales[j]):
-                                m_jh = state.feature_horizon_martingales[j][h]
-                            else:
-                                m_jh = 1.0
+                            m_jh = trad_base
                         
                         horizon_martingales_j.append(m_jh)
                     
                     # Ensure we have the right number of horizon martingales
                     if len(horizon_martingales_j) < num_horizons:
-                        # Pad with existing values or 1.0
+                        # Pad with traditional base values
                         for h in range(len(horizon_martingales_j), num_horizons):
-                            if j < len(state.feature_horizon_martingales) and h < len(state.feature_horizon_martingales[j]):
-                                val = state.feature_horizon_martingales[j][h]
-                            else:
-                                val = 1.0
-                            horizon_martingales_j.append(val)
+                            horizon_martingales_j.append(trad_base)
+                    
+                    # Update feature horizons state
+                    if j < len(state.feature_horizon_martingales):
+                        state.feature_horizon_martingales[j] = horizon_martingales_j
+                    else:
+                        state.feature_horizon_martingales.append(horizon_martingales_j)
                     
                     # Combine horizons for this feature
                     if horizon_weights and horizon_martingales_j:
@@ -500,13 +512,7 @@ def multiview_horizon_martingale(
                             w * m for w, m in zip(horizon_weights, horizon_martingales_j)
                         )
                     else:
-                        feature_m = 1.0
-                    
-                    # Update state
-                    if j < len(state.feature_horizon_martingales):
-                        state.feature_horizon_martingales[j] = horizon_martingales_j
-                    else:
-                        state.feature_horizon_martingales.append(horizon_martingales_j)
+                        feature_m = trad_base
                     
                     feature_martingales.append(feature_m)
                     individual_horizon_martingales[j].append(feature_m)
