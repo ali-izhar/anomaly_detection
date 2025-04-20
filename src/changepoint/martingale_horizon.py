@@ -271,10 +271,17 @@ def multiview_horizon_martingale(
         horizon_change_points = []
 
         # Initialize martingale state for each feature-horizon combination
-        if not hasattr(state, "feature_horizon_martingales"):
+        # Ensure we always have proper initialization of feature_horizon_martingales
+        if not hasattr(state, "feature_horizon_martingales") or len(state.feature_horizon_martingales) != num_features:
             state.feature_horizon_martingales = [
                 [1.0] * num_horizons for _ in range(num_features)
             ]
+        # Ensure each feature's martingale list has the right number of horizons
+        for j in range(num_features):
+            if j >= len(state.feature_horizon_martingales):
+                state.feature_horizon_martingales.append([1.0] * num_horizons)
+            elif len(state.feature_horizon_martingales[j]) != num_horizons:
+                state.feature_horizon_martingales[j] = [1.0] * num_horizons
 
         # Equal weights by default
         horizon_weights = (
@@ -302,6 +309,10 @@ def multiview_horizon_martingale(
 
                     # For each feature, compute horizon martingales
                     for j in range(num_features):
+                        # Ensure this feature has a spot in the feature_horizon_martingales
+                        if j >= len(state.feature_horizon_martingales):
+                            state.feature_horizon_martingales.append([1.0] * num_horizons)
+                        
                         # Initialize horizon-specific martingales for this feature
                         horizon_martingales_j = []
 
@@ -327,23 +338,36 @@ def multiview_horizon_martingale(
                                 )
 
                                 # Update martingale for this feature-horizon combination
-                                # M_{t,h}^{(j)} = M_{t-1,h}^{(j)} * g(p_{t,h}^{(j)})
-                                m_jh = state.feature_horizon_martingales[j][
-                                    h
-                                ] * betting_function(1.0, pred_pv)
+                                # Make sure we have a valid index for h
+                                if h < len(state.feature_horizon_martingales[j]):
+                                    m_jh = state.feature_horizon_martingales[j][h] * betting_function(1.0, pred_pv)
+                                else:
+                                    # Add missing horizons if needed
+                                    while h >= len(state.feature_horizon_martingales[j]):
+                                        state.feature_horizon_martingales[j].append(1.0)
+                                    m_jh = betting_function(1.0, pred_pv)
 
                             # Store this horizon's martingale
                             horizon_martingales_j.append(m_jh)
 
                         # Update state for this feature's horizon martingales
-                        state.feature_horizon_martingales[j] = horizon_martingales_j
+                        # Ensure we have a valid spot in the array
+                        if j < len(state.feature_horizon_martingales):
+                            state.feature_horizon_martingales[j] = horizon_martingales_j
+                        else:
+                            # This should not happen with our checks above, but just in case
+                            state.feature_horizon_martingales.append(horizon_martingales_j)
 
                         # Combine horizons for this feature using weighted sum
                         # M_{t}^{(j)} = \sum_{h \in \mathcal{H}} w_h M_{t,h}^{(j)}
-                        feature_m = sum(
-                            w * m
-                            for w, m in zip(horizon_weights, horizon_martingales_j)
-                        )
+                        if horizon_weights and horizon_martingales_j:
+                            feature_m = sum(
+                                w * m
+                                for w, m in zip(horizon_weights, horizon_martingales_j)
+                            )
+                        else:
+                            feature_m = 1.0  # Default value if no weights or horizons
+                        
                         feature_martingales.append(feature_m)
 
                         # Store in individual results
@@ -378,7 +402,7 @@ def multiview_horizon_martingale(
                 # If this time step had a traditional detection, apply a reset
                 if i in trad_change_points:
                     state.reset(num_features)
-                    # Reset feature-horizon martingales
+                    # Reset feature-horizon martingales with proper dimensions
                     state.feature_horizon_martingales = [
                         [1.0] * num_horizons for _ in range(num_features)
                     ]
