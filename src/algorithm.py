@@ -259,6 +259,7 @@ class GraphChangeDetection:
             history_size=self.config["model"]["predictor"]["config"]["n_history"],
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
+            reset_on_traditional=False,
             max_window=det_config["max_window"],
             betting_func_config=betting_func_config,
             distance_measure=det_config["distance"]["measure"],
@@ -310,7 +311,11 @@ class GraphChangeDetection:
                 [numeric_features[name] for name in self.config["features"]]
             )
 
-        return np.array(features_numeric), features_raw
+        features_array = np.array(features_numeric)
+        logger.info(
+            f"Dimension of actual data: {features_array.shape} (timesteps × features)"
+        )
+        return features_array, features_raw
 
     def _generate_predictions(self, graphs, predictor):
         """Generate predictions for the graph sequence.
@@ -325,19 +330,29 @@ class GraphChangeDetection:
         logger.info("Generating graph predictions")
         predicted_graphs = []
         horizon = self.config["detection"]["prediction_horizon"]
+        history_size = (
+            self.config["model"]["predictor"]["config"]["n_history"]
+            or predictor.history_size
+        )
+
+        logger.info(
+            f"Predictions will be available after timestep {history_size-1} (need {history_size} history points)"
+        )
+        logger.info(
+            f"For each available timestep, {horizon} predictions will be generated"
+        )
 
         for t in range(len(graphs)):
-            history_size = (
-                self.config["model"]["predictor"]["config"]["n_history"]
-                or predictor.history_size
-            )
             history_start = max(0, t - history_size)
             history = [{"adjacency": g} for g in graphs[history_start:t]]
 
             if t >= history_size:
                 predictions = predictor.predict(history, horizon=horizon)
                 predicted_graphs.append(predictions)
+                if t == history_size:
+                    logger.info(f"First predictions available at timestep {t}")
 
+        logger.info(f"Generated predictions for {len(predicted_graphs)} timesteps")
         return predicted_graphs
 
     def _process_predictions(self, predicted_graphs):
@@ -364,7 +379,14 @@ class GraphChangeDetection:
                 timestep_features.append(feature_vector)
             predicted_features.append(timestep_features)
 
-        return np.array(predicted_features)
+        predicted_array = np.array(predicted_features)
+        if predicted_array.size > 0:
+            logger.info(
+                f"Dimension of predictions: {predicted_array.shape} (timesteps × horizon × features)"
+            )
+        else:
+            logger.info("No predictions were generated")
+        return predicted_array
 
     def _run_detection_trials(
         self, features_numeric, predicted_features, true_change_points
@@ -428,6 +450,7 @@ class GraphChangeDetection:
                 history_size=self.config["model"]["predictor"]["config"]["n_history"],
                 batch_size=self.config["detection"]["batch_size"],
                 reset=self.config["detection"]["reset"],
+                reset_on_traditional=False,
                 max_window=self.config["detection"]["max_window"],
                 betting_func_config={
                     "name": self.config["detection"]["betting_func_config"]["name"],

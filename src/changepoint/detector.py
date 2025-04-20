@@ -70,6 +70,7 @@ class DetectorConfig:
         history_size: Minimum number of observations before using predictions
         batch_size: Batch size for multiview processing
         reset: Whether to reset after detection
+        reset_on_traditional: Whether horizon martingales should reset when traditional detects a change
         max_window: Maximum window size for strangeness computation
         betting_func_config: Configuration for the betting function
         distance_measure: Distance metric for strangeness computation
@@ -82,6 +83,7 @@ class DetectorConfig:
     history_size: int = 10
     batch_size: int = 1000
     reset: bool = True
+    reset_on_traditional: bool = False
     max_window: Optional[int] = None
     betting_func_config: Optional[BettingFunctionConfig] = None
     distance_measure: str = "euclidean"
@@ -160,6 +162,7 @@ class ChangePointDetector(Generic[ScalarType]):
         logger.debug(f"  History size: {self.config.history_size}")
         logger.debug(f"  Batch size: {self.config.batch_size}")
         logger.debug(f"  Reset: {self.config.reset}")
+        logger.debug(f"  Reset on traditional: {self.config.reset_on_traditional}")
         logger.debug(f"  Max window: {self.config.max_window}")
         logger.debug(
             f"  Distance: {self.config.distance_measure} (p={self.config.distance_p})"
@@ -342,6 +345,7 @@ class ChangePointDetector(Generic[ScalarType]):
             threshold=self.config.threshold,
             history_size=self.config.history_size,
             reset=self.config.reset,
+            reset_on_traditional=self.config.reset_on_traditional,
             window_size=self.config.max_window,
             random_state=self.config.random_state,
             betting_func_config=self.config.betting_func_config,
@@ -441,6 +445,7 @@ class ChangePointDetector(Generic[ScalarType]):
             threshold=self.config.threshold,
             history_size=self.config.history_size,
             reset=self.config.reset,
+            reset_on_traditional=self.config.reset_on_traditional,
             window_size=self.config.max_window,
             random_state=self.config.random_state,
             betting_func_config=self.config.betting_func_config,

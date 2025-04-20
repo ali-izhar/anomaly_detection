@@ -35,6 +35,7 @@ class MartingaleConfig:
         threshold: Detection threshold for martingale values.
         history_size: Minimum number of observations before using predictions.
         reset: Whether to reset after detection.
+        reset_on_traditional: Whether horizon martingales should reset when traditional detects a change.
         window_size: Maximum window size for strangeness computation.
         random_state: Random seed for reproducibility.
         betting_func_config: Configuration for betting function.
@@ -46,6 +47,7 @@ class MartingaleConfig:
     threshold: float
     history_size: int
     reset: bool = True
+    reset_on_traditional: bool = False
     window_size: Optional[int] = None
     random_state: Optional[int] = None
     betting_func_config: Optional[BettingFunctionConfig] = None
