@@ -1,4 +1,4 @@
-# src/algorithm.yaml
+# src/configs/algorithm.yaml
 
 name: forecast_based_graph_cpd
 version: 1.0
@@ -77,7 +77,7 @@ detection:
 
   # Distance configuration
   distance:
-    measure: "euclidean"  # Distance measure
+    measure: "mahalanobis"  # Distance measure
     p: 2.0  # Order for Minkowski distance
 
 # Feature extraction

@@ -1,10 +1,14 @@
+# src/predictor/graph.py
+
+#################################
+#### DEFAULT GRAPH PREDICTOR ####
+#################################
+
 import numpy as np
 import networkx as nx
 from sklearn.cluster import KMeans
-from scipy.optimize import minimize
 from scipy.sparse.linalg import eigsh
 import warnings
-from itertools import combinations
 from typing import Dict, Any
 
 # Handle community detection package import

@@ -1,5 +1,9 @@
 # src/predictor/statistical.py
 
+############################################
+#### EXPERIMENTAL STATISTICAL PREDICTOR ####
+############################################
+
 from typing import List, Dict, Any
 from collections import deque
 

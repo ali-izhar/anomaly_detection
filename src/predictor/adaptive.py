@@ -1,5 +1,9 @@
 # src/predictor/adaptive.py
 
+#########################################
+#### EXPERIMENTAL ADAPTIVE PREDICTOR ####
+#########################################
+
 """Adaptive distribution-aware predictor with multi-constraint structural preservation."""
 
 from typing import List, Dict, Any, Optional, Tuple

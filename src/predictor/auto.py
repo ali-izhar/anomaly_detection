@@ -1,5 +1,11 @@
 # src/predictor/auto.py
 
+#####################################
+#### EXPERIMENTAL AUTO PREDICTOR ####
+#####################################
+
+"""Predictor with automatic changepoint detection using feature distribution monitoring."""
+
 from typing import List, Dict, Any
 from collections import deque
 

@@ -180,7 +180,7 @@ def run_combinations(base_config_path, output_dir=None):
             }
 
             # Create output manager and export to CSV/Excel
-            from src.output_manager import OutputManager
+            from src.utils.output_manager import OutputManager
 
             output_manager = OutputManager(combination_dir, config)
             output_manager.export_to_csv(

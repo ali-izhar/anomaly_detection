@@ -4,7 +4,6 @@
 
 from dataclasses import dataclass, field
 from typing import (
-    Any,
     List,
     Optional,
     Protocol,
@@ -104,16 +103,24 @@ class HorizonMartingaleState(MartingaleState):
         horizon_martingale: Current horizon martingale value.
         saved_horizon: History of horizon martingale values.
         horizon_change_points: Indices where horizon martingale detected changes.
+        horizon_martingales_h: List of martingale values, one per horizon.
     """
 
     horizon_martingale: float = 1.0
     saved_horizon: List[float] = field(default_factory=lambda: [1.0])
     horizon_change_points: List[int] = field(default_factory=list)
+    horizon_martingales_h: List[float] = field(default_factory=list)
 
     def reset(self):
         """Reset martingale state after a detection event."""
         super().reset()
         self.horizon_martingale = 1.0
+        # Maintain horizon-specific martingales but reset them
+        self.horizon_martingales_h = (
+            [1.0] * len(self.horizon_martingales_h)
+            if self.horizon_martingales_h
+            else []
+        )
         # Append reset values to the history for continuity
         self.saved_horizon.append(1.0)
 
@@ -261,6 +268,7 @@ class MultiviewHorizonMartingaleState(MultiviewMartingaleState):
         cooldown_period: Number of timesteps to enforce reduced sensitivity after a detection.
         early_warnings: Timesteps where early warnings were triggered before official detection.
         previous_horizon_sum: The horizon sum value from the previous timestep for growth calculation.
+        feature_horizon_martingales: 2D list of martingales with values for each feature-horizon combination.
     """
 
     horizon_martingales: List[float] = field(default_factory=list)
@@ -272,6 +280,7 @@ class MultiviewHorizonMartingaleState(MultiviewMartingaleState):
     cooldown_period: int = 30  # Minimum timesteps between detections
     early_warnings: List[int] = field(default_factory=list)
     previous_horizon_sum: float = 1.0
+    feature_horizon_martingales: List[List[float]] = field(default_factory=list)
 
     def __post_init__(self):
         """Initialize state lists if they are not already set."""
@@ -280,6 +289,8 @@ class MultiviewHorizonMartingaleState(MultiviewMartingaleState):
             self.horizon_martingales = []
         if not self.individual_horizon:
             self.individual_horizon = []
+        if not self.feature_horizon_martingales:
+            self.feature_horizon_martingales = []
 
     def record_values(
         self,
@@ -333,6 +344,17 @@ class MultiviewHorizonMartingaleState(MultiviewMartingaleState):
 
         # Reset horizon martingale values for each feature to 1.0
         self.horizon_martingales = [1.0] * num_features
+
+        # Reset feature-horizon martingales
+        if self.feature_horizon_martingales:
+            num_horizons = (
+                len(self.feature_horizon_martingales[0])
+                if self.feature_horizon_martingales
+                else 0
+            )
+            self.feature_horizon_martingales = [
+                [1.0] * num_horizons for _ in range(num_features)
+            ]
 
         # Get the next timestep (already calculated in parent)
         next_t = self.current_timestep + 1
