@@ -251,8 +251,8 @@ class MartingaleVisualizer:
         ax1 = fig.add_subplot(gs[0, 0])
         ax2 = fig.add_subplot(gs[0, 1])
 
-        self._plot_detection_subplot(ax1, "traditional", "Traditional Analysis")
-        self._plot_detection_subplot(ax2, "horizon", "Horizon Analysis")
+        self._plot_detection_subplot(ax1, "traditional", "Traditional")
+        self._plot_detection_subplot(ax2, "horizon", "Horizon")
 
         # Ensure consistent y-axis limits across subplots
         self._synchronize_axis_limits([ax1, ax2])

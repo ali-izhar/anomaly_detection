@@ -452,14 +452,7 @@ class GraphChangeDetection:
                 reset=self.config["detection"]["reset"],
                 reset_on_traditional=False,
                 max_window=self.config["detection"]["max_window"],
-                betting_func_config={
-                    "name": self.config["detection"]["betting_func_config"]["name"],
-                    "params": {
-                        "epsilon": self.config["detection"]["betting_func_config"][
-                            "power"
-                        ]["epsilon"]
-                    },
-                },
+                betting_func_config=self.config["detection"]["betting_func_config"],
                 distance_measure=self.config["detection"]["distance"]["measure"],
                 distance_p=self.config["detection"]["distance"]["p"],
                 random_state=int_seed,

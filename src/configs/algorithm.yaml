@@ -60,7 +60,7 @@ detection:
   
   # Betting function configuration
   betting_func_config:
-    name: "power"  # Using power betting function
+    name: "mixture"  # Using power betting function
     power:  # Parameters specific to the power betting function
       epsilon: 0.7  # Epsilon
     exponential:
