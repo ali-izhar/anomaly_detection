@@ -39,7 +39,15 @@ import numpy.typing as npt
 from numpy import floating, integer
 
 from .betting import BettingFunctionConfig
-from .martingale import compute_martingale, multiview_martingale_test, MartingaleConfig
+from .martingale_base import MartingaleConfig
+from .martingale_traditional import (
+    compute_traditional_martingale,
+    multiview_traditional_martingale,
+)
+from .martingale_horizon import (
+    compute_horizon_martingale,
+    multiview_horizon_martingale,
+)
 from .distance import DistanceConfig
 from .strangeness import StrangenessConfig
 
@@ -161,10 +169,8 @@ class ChangePointDetector(Generic[ScalarType]):
     def _reset_state(self) -> None:
         """Reset the detector's internal state."""
         # Initialize state tracking
-        self._state: Dict[str, Any] = {
-            "traditional": None,
-            "horizon": None,
-        }
+        self._traditional_state = None
+        self._horizon_state = None
         # Initialize the list to store detected change points.
         self._change_points: List[int] = []
         self._early_warnings: List[int] = []
@@ -236,10 +242,6 @@ class ChangePointDetector(Generic[ScalarType]):
                 results = self._run_single_view(data, predicted_data)
             else:  # For multiview detection.
                 results = self._run_multiview(data, predicted_data)
-
-            # Update internal state from results
-            if "state" in results:
-                self._state = results.pop("state")
 
             # Update internal change points and early warnings tracking
             self._change_points.extend(results.get("traditional_change_points", []))
@@ -330,7 +332,7 @@ class ChangePointDetector(Generic[ScalarType]):
         Returns:
             Detection results dictionary.
         """
-        # Convert predicted_data to list-of-lists if provided (required by compute_martingale).
+        # Convert predicted_data to list-of-lists if provided
         pred_data_list = None
         if predicted_data is not None:
             pred_data_list = [pred.tolist() for pred in predicted_data]
@@ -356,14 +358,44 @@ class ChangePointDetector(Generic[ScalarType]):
             ),
         )
 
-        # Call the compute_martingale function from the martingale module.
-        results = compute_martingale(
-            data=data.tolist(),  # Convert data to a list.
+        # First, compute traditional martingale
+        trad_results = compute_traditional_martingale(
+            data=data.tolist(),  # Convert data to a list
+            config=martingale_config,
+            state=self._traditional_state,
+        )
+
+        # Update traditional state for future calls
+        self._traditional_state = trad_results.get("state")
+
+        # If no predictions provided, return only traditional results
+        if predicted_data is None:
+            return trad_results
+
+        # Otherwise, compute horizon martingale
+        horizon_results = compute_horizon_martingale(
+            data=data.tolist(),
             predicted_data=pred_data_list,
             config=martingale_config,
-            state=self._state,
+            state=self._horizon_state,
         )
-        return results
+
+        # Update horizon state for future calls
+        self._horizon_state = horizon_results.get("state")
+
+        # Merge both results
+        combined_results = {
+            "traditional_change_points": trad_results.get(
+                "traditional_change_points", []
+            ),
+            "traditional_martingales": trad_results.get("traditional_martingales"),
+            "horizon_change_points": horizon_results.get("horizon_change_points", []),
+            "horizon_martingales": horizon_results.get("horizon_martingales"),
+            # Add early warnings if present
+            "early_warnings": horizon_results.get("early_warnings", []),
+        }
+
+        return combined_results
 
     def _run_multiview(
         self, data: Array, predicted_data: Optional[Array]
@@ -425,12 +457,56 @@ class ChangePointDetector(Generic[ScalarType]):
             ),
         )
 
-        # Call the multiview martingale test function.
-        results = multiview_martingale_test(
+        # First, call the multiview traditional martingale
+        trad_results = multiview_traditional_martingale(
+            data=views,
+            config=martingale_config,
+            state=self._traditional_state,
+            batch_size=self.config.batch_size,
+        )
+
+        # Update traditional state for future calls
+        self._traditional_state = trad_results.get("state")
+
+        # If no predictions provided, return only traditional results
+        if predicted_data is None or predicted_views is None:
+            return trad_results
+
+        # Otherwise, call the multiview horizon martingale
+        horizon_results = multiview_horizon_martingale(
             data=views,
             predicted_data=predicted_views,
             config=martingale_config,
-            state=self._state,
+            state=self._horizon_state,
             batch_size=self.config.batch_size,
         )
-        return results
+
+        # Update horizon state for future calls
+        self._horizon_state = horizon_results.get("state")
+
+        # Merge results from both functions
+        combined_results = {
+            # Traditional results
+            "traditional_change_points": trad_results.get(
+                "traditional_change_points", []
+            ),
+            "traditional_sum_martingales": trad_results.get(
+                "traditional_sum_martingales"
+            ),
+            "traditional_avg_martingales": trad_results.get(
+                "traditional_avg_martingales"
+            ),
+            "individual_traditional_martingales": trad_results.get(
+                "individual_traditional_martingales"
+            ),
+            # Horizon results
+            "horizon_change_points": horizon_results.get("horizon_change_points", []),
+            "early_warnings": horizon_results.get("early_warnings", []),
+            "horizon_sum_martingales": horizon_results.get("horizon_sum_martingales"),
+            "horizon_avg_martingales": horizon_results.get("horizon_avg_martingales"),
+            "individual_horizon_martingales": horizon_results.get(
+                "individual_horizon_martingales"
+            ),
+        }
+
+        return combined_results

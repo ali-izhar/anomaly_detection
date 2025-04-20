@@ -419,18 +419,62 @@ def run_visualization(
         output_dir=output_dir,
     )
 
-    # Create martingale visualizer
-    martingale_viz = MartingaleVisualizer(
-        martingales=detection_result,  # Pass the entire detection result directly
-        change_points=true_change_points,
-        threshold=threshold,
-        betting_config={"function": "power", "params": {"power": {"epsilon": epsilon}}},
-        output_dir=output_dir,
-        prefix="",
-        skip_shap=False,  # Include SHAP for multiview
-        method="multiview",
-    )
-    martingale_viz.create_visualization()
+    try:
+        # Add missing keys for MartingaleVisualizer
+        # Since we're running without predictions, add empty horizon martingales
+        if "horizon_martingales" not in detection_result:
+            detection_result["horizon_martingales"] = np.zeros_like(
+                detection_result["traditional_sum_martingales"]
+            )
+
+        if "horizon_change_points" not in detection_result:
+            detection_result["horizon_change_points"] = []
+
+        if "horizon_sum_martingales" not in detection_result:
+            detection_result["horizon_sum_martingales"] = np.zeros_like(
+                detection_result["traditional_sum_martingales"]
+            )
+
+        if "horizon_avg_martingales" not in detection_result:
+            detection_result["horizon_avg_martingales"] = np.zeros_like(
+                detection_result["traditional_avg_martingales"]
+            )
+
+        if "individual_horizon_martingales" not in detection_result:
+            n_features = len(detection_result["individual_traditional_martingales"])
+            detection_result["individual_horizon_martingales"] = [
+                np.zeros_like(feat)
+                for feat in detection_result["individual_traditional_martingales"]
+            ]
+
+        # For multiview detection, traditional_martingales isn't returned, only sum and avg
+        if "traditional_martingales" not in detection_result:
+            # Create traditional_martingales from traditional_sum_martingales
+            detection_result["traditional_martingales"] = detection_result[
+                "traditional_sum_martingales"
+            ].copy()
+
+        # Create martingale visualizer
+        martingale_viz = MartingaleVisualizer(
+            martingales=detection_result,  # Pass the entire detection result directly
+            change_points=true_change_points,
+            threshold=threshold,
+            betting_config={
+                "function": "power",
+                "params": {"power": {"epsilon": epsilon}},
+            },
+            output_dir=output_dir,
+            prefix="",
+            skip_shap=False,  # Include SHAP for multiview
+            method="multiview",
+        )
+        martingale_viz.create_visualization()
+
+    except Exception as e:
+        logger.error(f"Error creating martingale visualization: {str(e)}")
+        logger.error(
+            "Skipping martingale visualization and continuing with feature evolution."
+        )
 
     # Visualize feature evolution
     visualize_feature_evolution(

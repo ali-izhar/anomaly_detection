@@ -216,9 +216,6 @@ class MartingaleVisualizer:
 
     def create_visualization(self) -> None:
         """Create all visualizations."""
-        # Always plot combined martingales
-        self._plot_combined_martingales()
-
         # Create detection analysis plots
         self._plot_detection_analysis()
 
@@ -244,65 +241,6 @@ class MartingaleVisualizer:
         )
         height_inches = FD["STANDARD_HEIGHT"] * height_scale
         return plt.figure(figsize=(width_inches, height_inches))
-
-    def _plot_combined_martingales(self) -> None:
-        """Create publication-quality combined martingales plot."""
-        fig = self._create_research_figure(width="single", height_scale=1.2)
-        ax = fig.add_subplot(111)
-
-        # Track crossing points for annotations with improved positioning
-        crossing_points = []
-
-        if self.method == "multiview":
-            combined_results = self.martingales["combined"]
-
-            # Plot traditional martingales with enhanced styling
-            sum_martingale = combined_results.get("martingales_sum")
-            if sum_martingale is not None and len(sum_martingale) > 0:
-                ax.plot(
-                    sum_martingale,
-                    color=self.colors["actual"],
-                    label="Trad. Sum",  # Updated label
-                    linewidth=LS["LINE_WIDTH"],
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=10,
-                )
-                # Find threshold crossings with improved annotation
-                crossing_points.extend(self._find_threshold_crossings(sum_martingale))
-
-            # Plot prediction martingales with enhanced visibility
-            pred_sum_martingale = combined_results.get("prediction_martingale_sum")
-            if pred_sum_martingale is not None and len(pred_sum_martingale) > 0:
-                history_size = len(sum_martingale) - len(pred_sum_martingale)
-                time_points = np.arange(
-                    history_size, history_size + len(pred_sum_martingale)
-                )
-                ax.plot(
-                    time_points,
-                    pred_sum_martingale,
-                    color=self.colors["predicted"],
-                    label="Horizon. Sum",  # Updated label
-                    linewidth=LS["LINE_WIDTH"],
-                    linestyle=LS["PREDICTION_LINE_STYLE"],
-                    alpha=LS["LINE_ALPHA"],
-                    zorder=9,
-                )
-
-        # Add threshold and change points with improved visibility
-        self._add_threshold_line(ax)
-        self._add_change_point_lines(ax)
-
-        # Add crossing point annotations with optimal positioning
-        self._add_crossing_annotations(ax, crossing_points)
-
-        # Optimize axis settings
-        self._optimize_axis_settings(ax)
-
-        # Add optimized legend
-        self._add_optimized_legend(ax)
-
-        # Save with publication settings
-        self._save_research_figure(fig, "combined_martingales.png")
 
     def _plot_detection_analysis(self) -> None:
         """Create publication-quality detection analysis visualization."""
@@ -432,20 +370,31 @@ class MartingaleVisualizer:
             ax.plot(values, color=self.colors["actual"], label="Martingale")
 
             # Mark detection points
-            for cp in changes:
-                ax.plot(
-                    cp,
-                    values[cp],
-                    "ro",
-                    markersize=10,
-                    label="Detection" if cp == changes[0] else "",
-                )
-                ax.annotate(
-                    f"t={cp}",
-                    (cp, values[cp]),
-                    xytext=(10, 10),
-                    textcoords="offset points",
-                )
+            for idx, cp in enumerate(changes):
+                # Make sure cp is a scalar index
+                if isinstance(cp, (np.ndarray, list)):
+                    continue  # Skip if cp is an array
+
+                # Safely access the value at the change point
+                if 0 <= cp < len(values):
+                    value_at_cp = values[cp]
+
+                    # Create a label only for the first change point
+                    is_first = idx == 0
+
+                    ax.plot(
+                        cp,
+                        value_at_cp,
+                        "ro",
+                        markersize=10,
+                        label="Detection" if is_first else "",
+                    )
+                    ax.annotate(
+                        f"t={cp}",
+                        (cp, value_at_cp),
+                        xytext=(10, 10),
+                        textcoords="offset points",
+                    )
 
         # Add threshold line
         ax.axhline(
@@ -796,22 +745,6 @@ class MartingaleVisualizer:
         title += ")"
         return title
 
-    def _find_threshold_crossings(self, values: np.ndarray) -> List[Dict[str, Any]]:
-        """Find points where the martingale crosses the threshold."""
-        crossing_points = []
-        if isinstance(values, (list, np.ndarray)) and len(values) > 0:
-            for i in range(1, len(values)):
-                if values[i] > self.threshold and values[i - 1] <= self.threshold:
-                    crossing_points.append(
-                        {
-                            "x": i,
-                            "y": values[i],
-                            "color": self.colors["actual"],
-                            "label": f"t={i}",
-                        }
-                    )
-        return crossing_points
-
     def _add_threshold_line(self, ax: plt.Axes) -> None:
         """Add threshold line with enhanced visibility."""
         ax.axhline(
@@ -834,49 +767,6 @@ class MartingaleVisualizer:
                 alpha=0.3,
                 linewidth=LS["LINE_WIDTH"] * 0.8,
                 zorder=4,
-            )
-
-    def _add_crossing_annotations(
-        self, ax: plt.Axes, crossing_points: List[Dict[str, Any]]
-    ) -> None:
-        """Add annotations for threshold crossing points."""
-        arrow_props = dict(
-            arrowstyle="->",
-            linewidth=LS["LINE_WIDTH"] * 0.8,
-            shrinkA=0,
-            shrinkB=0,
-            color=self.colors["text"],
-            alpha=0.7,
-        )
-
-        for point in crossing_points:
-            # Add arrow pointing to crossing point
-            ax.annotate(
-                "",
-                xy=(point["x"], self.threshold),  # Arrow tip at threshold
-                xytext=(
-                    point["x"],
-                    point["y"] + (point["y"] - self.threshold) * 0.2,
-                ),  # Dynamic offset
-                arrowprops=arrow_props,
-                zorder=15,
-            )
-
-            # Add text label with enhanced positioning
-            ax.annotate(
-                point["label"],
-                xy=(
-                    point["x"],
-                    point["y"] + (point["y"] - self.threshold) * 0.25,
-                ),  # Dynamic positioning
-                xytext=(0, 0),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=TYPO["ANNOTATION_SIZE"],
-                color=point["color"],
-                weight="bold",
-                zorder=16,
             )
 
     def _synchronize_axis_limits(self, axes: List[plt.Axes]) -> None:

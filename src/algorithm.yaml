@@ -13,7 +13,7 @@ execution:
 # Trial configuration
 trials:
   n_trials: 1  # Number of times to run the detector
-  random_seeds: 99  # Optional list of seeds for reproducibility. If null, will generate random seeds
+  random_seeds: 42 # Random seeds for reproducibility
 
 # Model configuration
 model:
@@ -52,7 +52,7 @@ model:
 
 # Detection parameters
 detection:
-  threshold: 60.0  # Increased detection threshold to reduce false positives with pure implementation
+  threshold: 60.0  # Threshold
   batch_size: 1000  # Batch size for multiview processing
   reset: true  # Reset martingales after detection
   max_window: null  # Maximum window size (null for adaptive)
@@ -60,9 +60,9 @@ detection:
   
   # Betting function configuration
   betting_func_config:
-    name: "power"  # Using power betting function as it showed better results in tests
+    name: "power"  # Using power betting function
     power:  # Parameters specific to the power betting function
-      epsilon: 0.9  # Higher epsilon for more sensitivity with pure implementation
+      epsilon: 0.7  # Epsilon
     exponential:
       lambd: 1.0  # Rate parameter controlling sensitivity
     mixture:
@@ -77,19 +77,19 @@ detection:
 
   # Distance configuration
   distance:
-    measure: "mahalanobis"  # choices: ["euclidean", "mahalanobis", "manhattan", "cosine", "minkowski", "chebyshev"]
+    measure: "euclidean"  # Distance measure
     p: 2.0  # Order for Minkowski distance
 
 # Feature extraction
 features:
-  - mean_degree  # Average node degree
-  - density  # Graph density
-  - mean_clustering  # Average clustering coefficient
-  - mean_betweenness  # Average betweenness centrality
-  - mean_eigenvector  # Average eigenvector centrality
-  - mean_closeness  # Average closeness centrality
-  # - max_singular_value  # Largest singular value
-  # - min_nonzero_laplacian  # Smallest non-zero Laplacian eigenvalue
+  - mean_degree           # Average node degree
+  - density               # Graph density
+  - mean_clustering       # Average clustering coefficient
+  - mean_betweenness      # Average betweenness centrality
+  - mean_eigenvector      # Average eigenvector centrality
+  - mean_closeness        # Average closeness centrality
+  - max_singular_value    # Largest singular value
+  - min_nonzero_laplacian # Smallest non-zero Laplacian eigenvalue
 
 # Output configuration
 output:

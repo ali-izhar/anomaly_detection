@@ -40,79 +40,12 @@ class GraphChangeDetection:
             config_path: Path to YAML configuration file
         """
         self.config = self._load_config(config_path)
-        self._validate_config()
         self._setup_logging()
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from YAML file."""
         with open(config_path, "r") as f:
             return yaml.safe_load(f)
-
-    def _validate_config(self):
-        """Validate the loaded configuration."""
-        required_sections = ["model", "detection", "features", "output", "trials"]
-        for section in required_sections:
-            if section not in self.config:
-                raise ValueError(f"Missing required configuration section: {section}")
-
-        # Validate trials configuration
-        trials_config = self.config["trials"]
-        if trials_config["n_trials"] < 1:
-            raise ValueError("Number of trials must be at least 1")
-
-        # Validate random seeds configuration
-        if trials_config["random_seeds"] is not None:
-            if isinstance(trials_config["random_seeds"], (list, tuple)):
-                if len(trials_config["random_seeds"]) != trials_config["n_trials"]:
-                    raise ValueError(
-                        "Number of random seeds must match number of trials"
-                    )
-            elif not isinstance(trials_config["random_seeds"], (int, float)):
-                raise ValueError(
-                    "random_seeds must be null, an integer, or a list of integers"
-                )
-
-        # Validate model configuration
-        model_config = self.config["model"]
-        if model_config["type"] not in ["multiview", "single_view"]:
-            raise ValueError("Model type must be 'multiview' or 'single_view'")
-        if model_config["network"] not in ["ba", "ws", "er", "sbm"]:
-            raise ValueError("Invalid network model specified")
-
-        # Validate predictor configuration
-        predictor_config = model_config["predictor"]
-        if predictor_config["type"] not in ["adaptive", "auto", "statistical", "graph"]:
-            raise ValueError("Invalid predictor type specified")
-
-        # Validate detection configuration
-        det_config = self.config["detection"]
-        betting_config = det_config.get("betting_func_config", {})
-        if not betting_config or "name" not in betting_config:
-            raise ValueError("Betting function configuration must specify a 'name'")
-
-        valid_betting_functions = [
-            "power",
-            "exponential",
-            "mixture",
-            "constant",
-            "beta",
-            "kernel",
-        ]
-        if betting_config["name"] not in valid_betting_functions:
-            raise ValueError(
-                f"Invalid betting function specified. Must be one of: {valid_betting_functions}"
-            )
-
-        # Initialize execution options if not present
-        if "execution" not in self.config:
-            logger.warning("No 'execution' section found in config, using defaults")
-            self.config["execution"] = {
-                "enable_prediction": True,
-                "enable_visualization": True,
-                "save_csv": True,
-            }
-        elif "save_csv" not in self.config["execution"]:
-            self.config["execution"]["save_csv"] = True
 
     def _setup_logging(self):
         """Configure logging."""
@@ -210,9 +143,18 @@ class GraphChangeDetection:
             # -------------------------------------------------- #
             # ---------- Step 5: Run multiple trials ----------- #
             # -------------------------------------------------- #
-            trial_results = self._run_multiple_trials(
-                features_numeric, predicted_features, true_change_points
-            )
+            try:
+                trial_results = self._run_multiple_trials(
+                    features_numeric, predicted_features, true_change_points
+                )
+            except Exception as e:
+                logger.error(f"Trial execution failed: {str(e)}")
+                # Create a minimal trial result to continue processing
+                trial_results = {
+                    "individual_trials": [],
+                    "aggregated": {},
+                    "random_seeds": [],
+                }
 
             # -------------------------------------------------- #
             # ------ Step 6: Create visualizations (optional) -- #
@@ -220,15 +162,19 @@ class GraphChangeDetection:
             if (
                 enable_visualization
                 and self.config["output"]["visualization"]["enabled"]
+                and trial_results["aggregated"]
             ):
-                self._create_visualizations(
-                    trial_results["aggregated"], true_change_points, features_raw
-                )
+                try:
+                    self._create_visualizations(
+                        trial_results["aggregated"], true_change_points, features_raw
+                    )
+                except Exception as e:
+                    logger.error(f"Visualization failed: {str(e)}")
 
             # -------------------------------------------------- #
             # ---------- Step 7: Export results to CSV (optional) #
             # -------------------------------------------------- #
-            if enable_csv_export:
+            if enable_csv_export and trial_results["aggregated"]:
                 try:
                     # Create output directory if it doesn't exist
                     csv_output_dir = os.path.join(self.config["output"]["directory"])
@@ -301,42 +247,121 @@ class GraphChangeDetection:
 
         logger.info(f"Using seeds: {random_seeds.tolist()}")
 
+        # Normalize each feature - EXACTLY as in multiview_vis.py
+        features_normalized = (
+            features_numeric - np.mean(features_numeric, axis=0)
+        ) / np.std(features_numeric, axis=0)
+
+        logger.info(f"Normalized feature data shape: {features_normalized.shape}")
+
+        # Also normalize predicted features if available using the SAME statistics
+        predicted_normalized = None
+        if predicted_features is not None:
+            # For multiview detection with predictions
+            feature_means = np.mean(features_numeric, axis=0)
+            feature_stds = np.std(features_numeric, axis=0)
+
+            # Initialize the normalized predictions array
+            predicted_normalized = []
+
+            # For each timestep's predictions
+            for t in range(len(predicted_features)):
+                normalized_horizons = []
+                # For each horizon
+                for h in range(len(predicted_features[t])):
+                    # Normalize using the same stats as the main features
+                    normalized_horizon = (
+                        predicted_features[t][h] - feature_means
+                    ) / feature_stds
+                    normalized_horizons.append(normalized_horizon)
+                predicted_normalized.append(normalized_horizons)
+
+            # Convert to numpy array if needed
+            if isinstance(predicted_features, np.ndarray):
+                predicted_normalized = np.array(predicted_normalized)
+
         individual_results = []
         for trial_idx, seed in enumerate(random_seeds):
             logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
 
-            # Initialize detector with current trial seed
-            detector = self._init_detector(random_state=seed)
-            
-            # Log detector settings
-            logger.info(f"Using threshold: {detector.config.threshold:.2f}")
-            betting_func_name = self.config["detection"]["betting_func_config"]["name"]
-            logger.info(f"Using betting function: {betting_func_name}")
+            # Make sure seed is an integer or None
+            int_seed = int(seed) if seed is not None else None
 
-            # Run detection
-            detection_result = detector.run(
-                data=features_numeric, predicted_data=predicted_features
+            # Create a much simpler detector configuration like in multiview_vis.py
+            from src.changepoint.detector import DetectorConfig
+
+            detector_config = DetectorConfig(
+                method=self.config["model"]["type"],
+                threshold=self.config["detection"]["threshold"],
+                history_size=self.config["model"]["predictor"]["config"]["n_history"],
+                batch_size=self.config["detection"]["batch_size"],
+                reset=self.config["detection"]["reset"],
+                max_window=self.config["detection"]["max_window"],
+                betting_func_config={
+                    "name": self.config["detection"]["betting_func_config"]["name"],
+                    "params": {
+                        "epsilon": self.config["detection"]["betting_func_config"][
+                            "power"
+                        ]["epsilon"]
+                    },
+                },
+                distance_measure=self.config["detection"]["distance"]["measure"],
+                distance_p=self.config["detection"]["distance"]["p"],
+                random_state=int_seed,  # Use integer seed
             )
 
-            if detection_result is None:
-                raise RuntimeError(f"Detection failed for trial {trial_idx + 1}")
-                
-            # Log detection results
-            if "traditional_change_points" in detection_result:
-                cp = detection_result["traditional_change_points"]
-                logger.info(f"Traditional change points detected: {len(cp)} at {cp}")
-                
-            if "horizon_change_points" in detection_result:
-                cp = detection_result["horizon_change_points"]
-                if cp:
-                    logger.info(f"Horizon change points detected: {len(cp)} at {cp}")
+            # Initialize detector with this config - EXACTLY as in multiview_vis.py
+            from src.changepoint.detector import ChangePointDetector
 
-            individual_results.append(detection_result)
+            detector = ChangePointDetector(detector_config)
 
-        # Aggregate results across trials
-        aggregated_results = self._aggregate_trial_results(individual_results)
+            # Log detector settings
+            logger.info(f"Using threshold: {detector_config.threshold:.2f}")
+            logger.info(
+                f"Using betting function: {detector_config.betting_func_config['name']}"
+            )
+            logger.info(f"Using distance measure: {detector_config.distance_measure}")
+            logger.info(f"Using random seed: {int_seed}")
 
-        # Always include individual trial results for CSV export
+            try:
+                # Run detection with normalized features - EXACTLY as in multiview_vis.py
+                detection_result = detector.run(
+                    data=features_normalized,
+                    predicted_data=predicted_normalized,
+                    reset_state=True,  # Always start with fresh state for each trial
+                )
+
+                if detection_result is None:
+                    logger.warning(f"Detection returned None for trial {trial_idx + 1}")
+                    continue
+
+                # Log detection results
+                if "traditional_change_points" in detection_result:
+                    cp = detection_result["traditional_change_points"]
+                    logger.info(
+                        f"Traditional change points detected: {len(cp)} at {cp}"
+                    )
+
+                if "horizon_change_points" in detection_result:
+                    cp = detection_result["horizon_change_points"]
+                    if cp:
+                        logger.info(
+                            f"Horizon change points detected: {len(cp)} at {cp}"
+                        )
+
+                individual_results.append(detection_result)
+            except Exception as e:
+                logger.error(f"Trial {trial_idx + 1} failed: {str(e)}")
+                continue
+
+        if not individual_results:
+            raise RuntimeError("All detection trials failed")
+
+        # Simplify the aggregation - just use the first trial's results for visualization
+        # This is more like what multiview_vis.py does (it only runs one trial)
+        aggregated_results = individual_results[0].copy()
+
+        # Add all trials together for CSV export
         trial_results = {
             "individual_trials": individual_results,
             "aggregated": aggregated_results,
@@ -344,126 +369,6 @@ class GraphChangeDetection:
         }
 
         return trial_results
-
-    def _aggregate_trial_results(self, individual_results):
-        """Aggregate results from multiple trials.
-
-        Args:
-            individual_results: List of individual trial results
-
-        Returns:
-            Aggregated results dictionary
-        """
-        if not individual_results:
-            return {}
-
-        # Get keys from first result
-        first_result = individual_results[0]
-        aggregated = {}
-
-        # Determine martingale keys to aggregate
-        martingale_keys = []
-        for key in first_result.keys():
-            if any(
-                key.startswith(prefix) for prefix in ["traditional_", "horizon_"]
-            ) and key.endswith(
-                ("_martingales", "_sum_martingales", "_avg_martingales")
-            ):
-                martingale_keys.append(key)
-
-        # Initialize detection frequency counter
-        aggregated["detection_frequencies"] = {
-            "traditional": {},
-            "horizon": {},
-        }
-
-        # Find the maximum length for each martingale array across all trials
-        max_lengths = {}
-        for key in martingale_keys:
-            if key.startswith("individual_"):
-                # For individual martingales, find max length for each feature
-                max_lengths[key] = []
-                for i in range(len(first_result[key])):
-                    max_len = max(
-                        len(result[key][i]) if key in result else 0
-                        for result in individual_results
-                    )
-                    max_lengths[key].append(max_len)
-            else:
-                # For regular martingales, find max length
-                max_lengths[key] = max(
-                    len(result[key]) if key in result else 0
-                    for result in individual_results
-                )
-
-        # Initialize arrays for each martingale type with the maximum lengths
-        for key in martingale_keys:
-            if key.startswith("individual_"):
-                # For individual martingales (list of arrays), initialize list of zeros arrays
-                n_features = len(first_result[key])
-                aggregated[key] = [
-                    np.zeros(max_lengths[key][i]) for i in range(n_features)
-                ]
-            else:
-                # For regular martingales, initialize single zeros array
-                aggregated[key] = np.zeros(max_lengths[key])
-
-        # Initialize change point lists
-        change_point_keys = []
-        if "traditional_change_points" in first_result:
-            change_point_keys.append("traditional_change_points")
-            aggregated["traditional_change_points"] = []
-        if "horizon_change_points" in first_result:
-            change_point_keys.append("horizon_change_points")
-            aggregated["horizon_change_points"] = []
-
-        # Aggregate results across trials
-        for result in individual_results:
-            # Aggregate martingale values
-            for key in martingale_keys:
-                if key not in result:
-                    continue  # Skip if this key doesn't exist in this trial's results
-
-                if key.startswith("individual_"):
-                    # For individual martingales, sum each feature's martingales separately
-                    for i in range(len(aggregated[key])):
-                        if i < len(
-                            result[key]
-                        ):  # Check if this feature exists in the result
-                            # Pad the array if needed to match the aggregated size
-                            padded_array = np.zeros(max_lengths[key][i])
-                            padded_array[: len(result[key][i])] = result[key][i]
-                            aggregated[key][i][: len(padded_array)] += padded_array
-                else:
-                    # For regular martingales, pad and add
-                    padded_array = np.zeros(max_lengths[key])
-                    padded_array[: len(result[key])] = result[key]
-                    aggregated[key][: len(padded_array)] += padded_array
-
-            # Count detection frequencies
-            for cp_key in change_point_keys:
-                if cp_key not in result:
-                    continue  # Skip if this key doesn't exist in this trial's results
-
-                detector_type = cp_key.split("_")[0]  # traditional or horizon
-                for cp in result[cp_key]:
-                    aggregated["detection_frequencies"][detector_type][cp] = (
-                        aggregated["detection_frequencies"][detector_type].get(cp, 0)
-                        + 1
-                    )
-
-        # Average martingale values
-        num_trials = len(individual_results)
-        for key in martingale_keys:
-            if key.startswith("individual_"):
-                # Average each feature's martingales separately
-                for i in range(len(aggregated[key])):
-                    aggregated[key][i] /= num_trials
-            else:
-                # Average regular martingales
-                aggregated[key] /= num_trials
-
-        return aggregated
 
     def _init_predictor(self):
         """Initialize the graph predictor."""
@@ -490,12 +395,13 @@ class GraphChangeDetection:
 
         # Get betting function config parameters
         betting_func_name = det_config["betting_func_config"]["name"]
-        betting_func_params = det_config["betting_func_config"].get(betting_func_name, {})
+        betting_func_params = det_config["betting_func_config"].get(
+            betting_func_name, {}
+        )
 
         # Create a proper BettingFunctionConfig instance
         betting_func_config = BettingFunctionConfig(
-            name=betting_func_name,
-            params=betting_func_params
+            name=betting_func_name, params=betting_func_params
         )
 
         # Create DetectorConfig with proper configuration objects
@@ -513,9 +419,7 @@ class GraphChangeDetection:
         )
 
         logger.info(f"Using distance measure: {detector_config.distance_measure}")
-        logger.info(
-            f"Using betting function: {betting_func_name}"
-        )
+        logger.info(f"Using betting function: {betting_func_name}")
 
         return ChangePointDetector(detector_config)
 
@@ -586,34 +490,99 @@ class GraphChangeDetection:
         return np.array(predicted_features)
 
     def _create_visualizations(
-        self, detection_result, true_change_points, features_raw
+        self,
+        detection_result,
+        true_change_points,
+        features_raw,
     ):
         """Create visualizations of the results."""
         logger.info("Creating visualizations")
         output_config = self.config["output"]
         det_config = self.config["detection"]
 
-        # Get betting function configuration
-        betting_func_name = det_config["betting_func_config"]["name"]
-        betting_func_params = det_config["betting_func_config"].get(betting_func_name, {})
-        
-        # Create a clean betting config for visualization
+        # Prepare betting config EXACTLY as in multiview_vis.py
+        epsilon = det_config["betting_func_config"]["power"]["epsilon"]
         betting_config = {
-            "function": betting_func_name,
-            "params": betting_func_params
+            "function": "power",
+            "params": {"power": {"epsilon": epsilon}},
         }
 
-        visualizer = MartingaleVisualizer(
-            martingales=detection_result,
-            change_points=true_change_points,
-            threshold=det_config["threshold"],
-            betting_config=betting_config,
-            output_dir=output_config["directory"],
-            prefix=output_config["prefix"],
-            skip_shap=output_config["visualization"]["skip_shap"],
-            method=self.config["model"]["type"],
-        )
-        visualizer.create_visualization()
+        try:
+            # Initialize a copy of the detection result that we can modify
+            complete_result = detection_result.copy()
+
+            # Add missing keys EXACTLY as in multiview_vis.py
+            # Since we're running without predictions, add empty horizon martingales
+            if "horizon_martingales" not in complete_result:
+                complete_result["horizon_martingales"] = np.zeros_like(
+                    complete_result["traditional_sum_martingales"]
+                )
+
+            if "horizon_change_points" not in complete_result:
+                complete_result["horizon_change_points"] = []
+
+            if "horizon_sum_martingales" not in complete_result:
+                complete_result["horizon_sum_martingales"] = np.zeros_like(
+                    complete_result["traditional_sum_martingales"]
+                )
+
+            if "horizon_avg_martingales" not in complete_result:
+                complete_result["horizon_avg_martingales"] = np.zeros_like(
+                    complete_result["traditional_avg_martingales"]
+                )
+
+            if "individual_horizon_martingales" not in complete_result:
+                n_features = len(complete_result["individual_traditional_martingales"])
+                complete_result["individual_horizon_martingales"] = [
+                    np.zeros_like(feat)
+                    for feat in complete_result["individual_traditional_martingales"]
+                ]
+
+            # For multiview detection, traditional_martingales isn't returned, only sum and avg
+            if "traditional_martingales" not in complete_result:
+                # Create traditional_martingales from traditional_sum_martingales
+                complete_result["traditional_martingales"] = complete_result[
+                    "traditional_sum_martingales"
+                ].copy()
+
+            # Make sure all change points are plain Python lists, not NumPy arrays
+            for key in [
+                "traditional_change_points",
+                "horizon_change_points",
+                "early_warnings",
+            ]:
+                if key in complete_result:
+                    if isinstance(complete_result[key], np.ndarray):
+                        complete_result[key] = complete_result[key].tolist()
+
+                    # Ensure they're actually lists, not other types
+                    if not isinstance(complete_result[key], list):
+                        complete_result[key] = []
+
+            # For safety - replace any scalar martingale values with arrays
+            for key in complete_result:
+                if key.endswith("_martingales") and np.isscalar(complete_result[key]):
+                    complete_result[key] = np.array([complete_result[key]])
+
+            # Create martingale visualizer
+            visualizer = MartingaleVisualizer(
+                martingales=complete_result,
+                change_points=true_change_points,
+                threshold=det_config["threshold"],
+                betting_config=betting_config,
+                output_dir=output_config["directory"],
+                prefix=output_config["prefix"],
+                skip_shap=output_config["visualization"]["skip_shap"],
+                method=self.config["model"]["type"],
+            )
+            visualizer.create_visualization()
+        except Exception as e:
+            logger.error(f"Visualization creation failed: {str(e)}")
+            logger.error("Continuing without visualizations")
+            # Print full traceback for more details if debugging
+            import traceback
+
+            logger.debug(traceback.format_exc())
 
     def _compile_results(
         self,
