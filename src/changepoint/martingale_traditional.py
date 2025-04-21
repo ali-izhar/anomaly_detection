@@ -135,6 +135,7 @@ def multiview_traditional_martingale(
     config: Optional[MartingaleConfig] = None,
     state: Optional[MultiviewMartingaleState] = None,
     batch_size: int = 1000,
+    silent: bool = False,
 ) -> Dict[str, Any]:
     """Compute a multivariate (multiview) traditional martingale test by aggregating evidence across features.
 
@@ -149,6 +150,7 @@ def multiview_traditional_martingale(
         config: Configuration for martingale computation.
         state: Optional state for continuing computation from a previous run.
         batch_size: Size of batches for processing.
+        silent: Whether to suppress logging of detection events.
 
     Returns:
         Dictionary containing change points and martingale values.
@@ -235,9 +237,10 @@ def multiview_traditional_martingale(
                 # Check if traditional martingale crosses threshold
                 if total_traditional > config.threshold:
                     # Traditional martingale detection
-                    logger.info(
-                        f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
-                    )
+                    if not silent:
+                        logger.info(
+                            f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
+                        )
                     state.traditional_change_points.append(i)
 
                     # Record detection values and reset

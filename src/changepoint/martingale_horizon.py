@@ -374,7 +374,7 @@ def multiview_horizon_martingale(
         if traditional_result is None:
             # Compute traditional martingale
             trad_result = multiview_traditional_martingale(
-                data, config, None, batch_size
+                data, config, None, batch_size, silent=True
             )
         else:
             trad_result = traditional_result
