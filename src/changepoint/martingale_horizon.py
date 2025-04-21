@@ -109,6 +109,13 @@ def compute_horizon_martingale(
         horizon_martingales = []
         horizon_change_points = []
 
+        # Initialize momentum tracking
+        if not hasattr(state, "previous_horizon_val"):
+            state.previous_horizon_val = 1.0
+
+        # Define threshold-approach ratio (used for momentum-based dampening)
+        threshold_approach_ratio = 0.9  # When martingale is above 90% of threshold
+
         # Initialize horizon-specific martingales
         if not hasattr(state, "horizon_martingales_h"):
             num_horizons = (
@@ -169,6 +176,47 @@ def compute_horizon_martingale(
             # Check predictions at multiple horizons
             horizon_martingales_at_t = []
 
+            # Calculate momentum factor based on recent growth
+            momentum_factor = 1.0
+            current_momentum = 1.0
+            if (
+                i > 0
+                and len(horizon_martingales) > 0
+                and state.previous_horizon_val > 0
+            ):
+                # Get previous martingale value
+                prev_val = state.previous_horizon_val
+
+                # For the first calculation, we don't have a previous value yet
+                if (
+                    i > config.history_size
+                    and isinstance(prev_val, (int, float))
+                    and prev_val > 0
+                ):
+                    # Calculate momentum (rate of increase)
+                    if prev_val > 0.01:  # Avoid division by very small numbers
+                        current_momentum = max(
+                            1.0, min(5.0, horizon_martingales[-1] / prev_val)
+                        )
+
+                    # Only apply increased dampening when:
+                    # 1. There's momentum (value is increasing)
+                    # 2. The value is approaching the threshold
+                    if (
+                        current_momentum > 1.2
+                        and horizon_martingales[-1]
+                        > threshold_approach_ratio * config.threshold
+                        and horizon_martingales[-1] < config.threshold
+                    ):
+                        # Stronger dampening when value is close to threshold but not crossing it
+                        momentum_factor = (
+                            0.5 / current_momentum
+                        )  # Smaller values = stronger dampening
+                        logger.debug(
+                            f"Applying momentum-based dampening at t={i}: momentum={current_momentum:.2f}, "
+                            f"factor={momentum_factor:.2f}, current_val={horizon_martingales[-1]:.2f}"
+                        )
+
             # For each horizon h, check if there's evidence of a change in the next h steps
             for h in range(num_horizons):
                 # We need predictions made at (i-h) for current time i
@@ -215,8 +263,13 @@ def compute_horizon_martingale(
 
                     # Adjust p-value based on prediction error (lower p-value = more surprised) only if enabled
                     if config.enable_pvalue_dampening:
-                        # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                        # Apply standard dampening
                         scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
+
+                        # Apply additional momentum-based dampening when approaching threshold
+                        if momentum_factor < 1.0:
+                            scale_factor = max(0.005, scale_factor * momentum_factor)
+
                         adjusted_pv = pred_pv * scale_factor
                     else:
                         # Use the raw p-value without dampening
@@ -243,6 +296,11 @@ def compute_horizon_martingale(
                 )
             else:
                 horizon_val = trad_base
+
+            # Store the previous horizon value for momentum calculation
+            state.previous_horizon_val = (
+                horizon_val if isinstance(horizon_val, (int, float)) else 1.0
+            )
 
             # Update state for horizon-specific martingales (for tracking)
             state.horizon_martingales_h = horizon_martingales_at_t
@@ -394,6 +452,9 @@ def multiview_horizon_martingale(
         individual_horizon_martingales = [[] for _ in range(num_features)]
         horizon_change_points = []
 
+        # Define threshold-approach ratio (used for momentum-based dampening)
+        threshold_approach_ratio = 0.9  # When martingale is above 90% of threshold
+
         # Initialize martingale state for each feature-horizon combination
         # Ensure we always have proper initialization of feature_horizon_martingales
         if (
@@ -445,6 +506,50 @@ def multiview_horizon_martingale(
 
                 # Initialize feature-level martingales
                 feature_martingales = []
+
+                # Calculate momentum factor based on recent growth
+                momentum_factor = 1.0
+                current_momentum = 1.0
+
+                # Check if we have previous values to calculate momentum
+                if i > 0 and len(horizon_sum_martingales) > 0:
+                    # Use the previous sum value
+                    prev_val = (
+                        state.previous_horizon_sum
+                        if hasattr(state, "previous_horizon_sum")
+                        else 1.0
+                    )
+
+                    # For the first calculation, we don't have a previous value yet
+                    if (
+                        i > config.history_size
+                        and isinstance(prev_val, (int, float))
+                        and prev_val > 0
+                    ):
+                        current_val = horizon_sum_martingales[-1]
+                        if not np.isnan(current_val) and current_val > 0.01:
+                            # Calculate momentum (rate of increase)
+                            current_momentum = max(
+                                1.0, min(5.0, current_val / prev_val)
+                            )
+
+                            # Only apply increased dampening when:
+                            # 1. There's significant momentum (value is increasing rapidly)
+                            # 2. The value is approaching the threshold but not crossing it
+                            if (
+                                current_momentum > 1.2
+                                and current_val
+                                > threshold_approach_ratio * config.threshold
+                                and current_val < config.threshold
+                            ):
+                                # Stronger dampening when value is close to threshold
+                                momentum_factor = (
+                                    0.5 / current_momentum
+                                )  # Smaller values = stronger dampening
+                                logger.debug(
+                                    f"Applying momentum-based dampening at t={i}: momentum={current_momentum:.2f}, "
+                                    f"factor={momentum_factor:.2f}, current_val={current_val:.2f}"
+                                )
 
                 # For each feature, compute horizon martingales
                 for j in range(num_features):
@@ -528,8 +633,15 @@ def multiview_horizon_martingale(
 
                             # Adjust p-value based on prediction error only if dampening is enabled
                             if config.enable_pvalue_dampening:
-                                # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                                # Apply standard dampening
                                 scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
+
+                                # Apply additional momentum-based dampening when approaching threshold
+                                if momentum_factor < 1.0:
+                                    scale_factor = max(
+                                        0.005, scale_factor * momentum_factor
+                                    )
+
                                 adjusted_pv = pred_pv * scale_factor
                             else:
                                 # Use the raw p-value without dampening
@@ -582,6 +694,9 @@ def multiview_horizon_martingale(
                     total_horizon = sum(feature_martingales)
                     # Calculate average separately - exactly matching traditional implementation
                     avg_horizon = total_horizon / num_features
+
+                # Store current sum for next iteration's momentum calculation
+                state.previous_horizon_sum = total_horizon
 
                 # Record results directly without using record_values which requires traditional values
                 horizon_sum_martingales.append(total_horizon)
