@@ -101,7 +101,7 @@ def compute_traditional_martingale(
             # Check if the updated traditional martingale exceeds the threshold.
             detected_trad = False
             if config.reset and new_trad > config.threshold:
-                logger.info(
+                logger.debug(
                     f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {config.threshold}"
                 )
                 detected_trad = True
