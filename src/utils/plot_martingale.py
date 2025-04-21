@@ -2,12 +2,13 @@
 
 """Visualizer for changepoint analysis results with research-quality plot generation."""
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import MaxNLocator
 
 from .plotting_config import (
     FIGURE_DIMENSIONS as FD,
@@ -21,123 +22,212 @@ from .plotting_config import (
     get_grayscale_style,
 )
 
-# Constants for MartingaleVisualizer
-MARTINGALE_CONSTANTS = {
-    # Detection result keys
-    "KEYS": {
-        "TRADITIONAL_SUM_MARTINGALES": "traditional_sum_martingales",
-        "TRADITIONAL_AVG_MARTINGALES": "traditional_avg_martingales",
-        "TRADITIONAL_MARTINGALES": "traditional_martingales",
-        "HORIZON_SUM_MARTINGALES": "horizon_sum_martingales",
-        "HORIZON_AVG_MARTINGALES": "horizon_avg_martingales",
-        "HORIZON_MARTINGALES": "horizon_martingales",
-        "INDIVIDUAL_TRADITIONAL_MARTINGALES": "individual_traditional_martingales",
-        "INDIVIDUAL_HORIZON_MARTINGALES": "individual_horizon_martingales",
-        "TRADITIONAL_CHANGE_POINTS": "traditional_change_points",
-        "HORIZON_CHANGE_POINTS": "horizon_change_points",
-    },
-    # Betting function keys
-    "BETTING": {
-        "FUNCTION": "function",
-        "PARAMS": "params",
-        "PARAM_STR": "param_str",
-        "FUNCTIONS": {
-            "POWER": "power",
-            "EXPONENTIAL": "exponential",
-            "MIXTURE": "mixture",
-            "BETA": "beta",
-            "KERNEL": "kernel",
-            "CONSTANT": "constant",
-        },
-        "FUNCTION_PARAMS": {
-            "POWER": {
-                "EPSILON": "epsilon",
-                "DEFAULT_EPSILON": 0.7,
-            },
-            "EXPONENTIAL": {
-                "LAMBDA": "lambda",
-                "DEFAULT_LAMBDA": 1.0,
-            },
-            "MIXTURE": {
-                "EPSILONS": "epsilons",
-                "DEFAULT_EPSILONS": [0.5, 0.6, 0.7, 0.8, 0.9],
-            },
-            "BETA": {
-                "ALPHA": "alpha",
-                "BETA": "beta",
-                "DEFAULT_ALPHA": 0.5,
-                "DEFAULT_BETA": 1.5,
-            },
-            "KERNEL": {
-                "BANDWIDTH": "bandwidth",
-                "DEFAULT_BANDWIDTH": 0.1,
-            },
-        },
-    },
-    # Method types
-    "METHODS": {
-        "MULTIVIEW": "multiview",
-        "SINGLE_VIEW": "single_view",
-    },
-    # Feature names
-    "FEATURES": [
-        "mean_degree",
-        "density",
-        "mean_clustering",
-        "mean_betweenness",
-        "mean_eigenvector",
-        "mean_closeness",
-        "max_singular_value",
-        "min_nonzero_laplacian",
-    ],
-    # Martingale types
-    "MARTINGALE_TYPES": {
-        "TRADITIONAL": "traditional",
-        "HORIZON": "horizon",
-    },
-    # Plot titles and labels
-    "PLOT_TEXT": {
-        "TRADITIONAL": "Traditional",
-        "HORIZON": "Horizon",
-        "TIME": "Time",
-        "VALUE": "Value",
-        "MARTINGALE_VALUE": "Martingale Value",
-        "SHAP_VALUE": "SHAP Value",
-        "TRADITIONAL_SHAP": "Traditional SHAP Values",
-        "PREDICTION_SHAP": "Prediction SHAP Values",
-        "NO_PREDICTION_SHAP": "No prediction SHAP values available",
-        "TRADITIONAL_MARTINGALES": "Traditional Martingales",
-        "PREDICTION_MARTINGALES": "Prediction Martingales",
-        "COMBINED_SUM": "Combined (Sum)",
-        "MARTINGALE": "Martingale",
-        "THRESHOLD": "Threshold",
-        "DETECTION": "Detection",
-        "FEATURE_MARTINGALES": "Feature Martingales",
-        "NETWORK_VIEW": "Network View",
-    },
-    # Result keys for the processed data
-    "RESULT_KEYS": {
-        "COMBINED": "combined",
-        "MARTINGALES": "martingales",
-        "MARTINGALES_SUM": "martingales_sum",
-        "MARTINGALES_AVG": "martingales_avg",
-        "PREDICTION_MARTINGALE_SUM": "prediction_martingale_sum",
-        "PREDICTION_MARTINGALE_AVG": "prediction_martingale_avg",
-        "PREDICTION_MARTINGALES": "prediction_martingales",
-    },
-    # Default values
-    "DEFAULTS": {
-        "SEQUENCE_LENGTH": 200,
-        "TICK_INTERVAL": 50,
-        "FIGURE_SIZE": (12, 8),
-        "SUBFIGURE_HEIGHT": 5,
-        "MARKER_SIZE": 10,
-        "ANNOTATION_OFFSET": (10, 10),
-        "Y_MARGIN_FACTOR": 0.1,
-        "MIN_Y_MARGIN": 0.1,
-        "Y_TICKS_COUNT": 4,
-    },
-}
+
+def generate_martingale_plots(
+    output_dir: str,
+    detection_results: Dict[str, Any],
+    change_points: Optional[List[int]] = None,
+    plot_suffix: str = "",
+    max_points: int = 300,
+    threshold: float = 20.0,
+    window_size: int = None,
+) -> None:
+    """Generate plots for both traditional and horizon martingales.
+
+    Args:
+        output_dir: Directory to save plots
+        detection_results: Dictionary of detection results
+        change_points: List of actual change points to mark on plots (if available)
+        plot_suffix: Optional suffix to append to filenames
+        max_points: Maximum number of points to plot
+        threshold: Detection threshold to show as horizontal line
+        window_size: Window size for moving average (if None, no smoothing)
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Default plot suffix if empty
+    suffix = f"_{plot_suffix}" if plot_suffix else ""
+
+    # Plot traditional martingales if they exist
+    if "traditional_martingales" in detection_results:
+        martingale_values = detection_results["traditional_martingales"]
+        if len(martingale_values) > 0:
+            _create_martingale_plot(
+                martingale_values=martingale_values[:max_points],
+                detection_points=detection_results.get("traditional_change_points", []),
+                output_path=os.path.join(
+                    output_dir, f"traditional_martingale{suffix}.png"
+                ),
+                plot_title="Traditional Martingale Sequence",
+                change_points=change_points,
+                threshold=threshold,
+                window_size=window_size,
+            )
+
+    # Plot traditional sum martingales if they exist
+    if "traditional_sum_martingales" in detection_results:
+        sum_martingale_values = detection_results["traditional_sum_martingales"]
+        if len(sum_martingale_values) > 0:
+            _create_martingale_plot(
+                martingale_values=sum_martingale_values[:max_points],
+                detection_points=detection_results.get("traditional_change_points", []),
+                output_path=os.path.join(
+                    output_dir, f"traditional_sum_martingale{suffix}.png"
+                ),
+                plot_title="Traditional Sum Martingale Sequence",
+                change_points=change_points,
+                threshold=threshold,
+                window_size=window_size,
+            )
+
+    # Plot horizon martingales if they exist
+    if "horizon_martingales" in detection_results:
+        horizon_martingale_values = detection_results["horizon_martingales"]
+        if len(horizon_martingale_values) > 0:
+            _create_martingale_plot(
+                martingale_values=horizon_martingale_values[:max_points],
+                detection_points=detection_results.get("horizon_change_points", []),
+                output_path=os.path.join(output_dir, f"horizon_martingale{suffix}.png"),
+                plot_title="Horizon Martingale Sequence",
+                change_points=change_points,
+                threshold=threshold,
+                window_size=window_size,
+            )
+
+    # Plot horizon sum martingales if they exist
+    if "horizon_sum_martingales" in detection_results:
+        horizon_sum_martingale_values = detection_results["horizon_sum_martingales"]
+        if len(horizon_sum_martingale_values) > 0:
+            _create_martingale_plot(
+                martingale_values=horizon_sum_martingale_values[:max_points],
+                detection_points=detection_results.get("horizon_change_points", []),
+                output_path=os.path.join(
+                    output_dir, f"horizon_sum_martingale{suffix}.png"
+                ),
+                plot_title="Horizon Sum Martingale Sequence",
+                change_points=change_points,
+                threshold=threshold,
+                window_size=window_size,
+            )
+
+
+def _create_martingale_plot(
+    martingale_values: List[float],
+    detection_points: List[int],
+    output_path: str,
+    plot_title: str,
+    change_points: Optional[List[int]] = None,
+    threshold: float = 20.0,
+    window_size: Optional[int] = None,
+    figsize: Tuple[int, int] = (12, 6),
+) -> None:
+    """Create martingale sequence plot.
+
+    Args:
+        martingale_values: Array of martingale values
+        detection_points: List of detection indices
+        output_path: Path to save the plot
+        plot_title: Title for the plot
+        change_points: List of actual change points to mark on plots (if available)
+        threshold: Detection threshold to show as horizontal line
+        window_size: Window size for moving average (if None, no smoothing)
+        figsize: Figure size as (width, height)
+    """
+    # Adjust the detection points
+    # There's a known 1-index offset in the martingale detection framework
+    adjusted_detection_points = [max(0, point - 1) for point in detection_points]
+
+    # Create figure and axis objects
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create x-axis indices
+    x_indices = np.arange(len(martingale_values))
+
+    # If window size is provided, apply moving average smoothing
+    if window_size and window_size > 1:
+        smoothed_values = _compute_moving_average(
+            np.array(martingale_values), window_size
+        )
+        ax.plot(
+            x_indices, smoothed_values, "b-", linewidth=1.5, label="Smoothed Sequence"
+        )
+        # Plot original values with less emphasis
+        ax.plot(
+            x_indices,
+            martingale_values,
+            "b-",
+            alpha=0.3,
+            linewidth=0.8,
+            label="Original Sequence",
+        )
+    else:
+        # Plot the martingale values
+        ax.plot(x_indices, martingale_values, "b-", linewidth=1.2)
+
+    # Plot the threshold line
+    ax.axhline(y=threshold, color="r", linestyle="--", label=f"Threshold ({threshold})")
+
+    # Mark true change points
+    if change_points and len(change_points) > 0:
+        valid_change_points = [
+            cp for cp in change_points if cp < len(martingale_values)
+        ]
+        if valid_change_points:
+            ax.vlines(
+                x=valid_change_points,
+                ymin=0,
+                ymax=ax.get_ylim()[1],
+                colors="g",
+                linestyles="dotted",
+                label="True Change Points",
+            )
+
+    # Mark detection points
+    if adjusted_detection_points and len(adjusted_detection_points) > 0:
+        valid_detection_points = [
+            dp for dp in adjusted_detection_points if dp < len(martingale_values)
+        ]
+        if valid_detection_points:
+            ax.vlines(
+                x=valid_detection_points,
+                ymin=0,
+                ymax=ax.get_ylim()[1],
+                colors="m",
+                linestyles="-.",
+                label="Detections",
+            )
+
+    # Customize the plot
+    ax.set_title(plot_title)
+    ax.set_xlabel("Time Step")
+    ax.set_ylabel("Martingale Value")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper left")
+
+    # Use integer ticks for x-axis
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    # Tight layout
+    fig.tight_layout()
+
+    # Save the plot
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _compute_moving_average(data: np.ndarray, window_size: int) -> np.ndarray:
+    """Compute moving average of data.
+
+    Args:
+        data: 1D array of values
+        window_size: Size of moving average window
+
+    Returns:
+        Smoothed data array
+    """
+    weights = np.ones(window_size) / window_size
+    return np.convolve(data, weights, mode="same")
 
 
 class MartingaleVisualizer:
@@ -152,7 +242,7 @@ class MartingaleVisualizer:
         output_dir: str = "results",
         prefix: str = "",
         skip_shap: bool = False,
-        method: str = MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"],
+        method: str = "multiview",
     ):
         """Initialize the visualizer with research-quality plot settings."""
         self.change_points = change_points
@@ -175,17 +265,22 @@ class MartingaleVisualizer:
         self.prediction_shap_values = None
 
         # Compute SHAP values if needed
-        if not skip_shap and method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]:
+        if not skip_shap and method == "multiview":
             try:
                 # Get sequence length from combined martingales
-                sequence_length = len(
-                    self.martingales[MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]][
-                        MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES_SUM"]
-                    ]
-                )
+                sequence_length = len(self.martingales["combined"]["martingales_sum"])
 
                 # Get feature names
-                self.feature_names = MARTINGALE_CONSTANTS["FEATURES"]
+                self.feature_names = [
+                    "mean_degree",
+                    "density",
+                    "mean_clustering",
+                    "mean_betweenness",
+                    "mean_eigenvector",
+                    "mean_closeness",
+                    "max_singular_value",
+                    "min_nonzero_laplacian",
+                ]
 
                 # Prepare data for SHAP computation
                 traditional_data = []
@@ -193,13 +288,9 @@ class MartingaleVisualizer:
 
                 for feature in self.feature_names:
                     if feature in self.martingales:
-                        trad_vals = self.martingales[feature][
-                            MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"]
-                        ]
+                        trad_vals = self.martingales[feature]["martingales"]
                         pred_vals = self.martingales[feature].get(
-                            MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                                "PREDICTION_MARTINGALES"
-                            ],
+                            "prediction_martingales",
                             [],
                         )
 
@@ -237,161 +328,104 @@ class MartingaleVisualizer:
 
     def _get_betting_params(self) -> Dict[str, Any]:
         """Extract relevant betting parameters for visualization."""
-        function = self.betting_config[MARTINGALE_CONSTANTS["BETTING"]["FUNCTION"]]
-        params = self.betting_config[MARTINGALE_CONSTANTS["BETTING"]["PARAMS"]].get(
-            function, {}
-        )
+        function = self.betting_config["function"]
+        params = self.betting_config["params"].get(function, {})
 
         # Create a formatted string of parameters for visualization
         param_str = ""
-        if function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["POWER"]:
-            epsilon = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["POWER"]["EPSILON"],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["POWER"][
-                    "DEFAULT_EPSILON"
-                ],
-            )
+        if function == "power":
+            epsilon = params.get("epsilon", 0.7)
             param_str = f"ε={epsilon}"
-        elif function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["EXPONENTIAL"]:
-            lambd = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["EXPONENTIAL"][
-                    "LAMBDA"
-                ],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["EXPONENTIAL"][
-                    "DEFAULT_LAMBDA"
-                ],
-            )
+        elif function == "exponential":
+            lambd = params.get("lambda", 1.0)
             param_str = f"λ={lambd}"
-        elif function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["MIXTURE"]:
-            epsilons = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["MIXTURE"][
-                    "EPSILONS"
-                ],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["MIXTURE"][
-                    "DEFAULT_EPSILONS"
-                ],
-            )
+        elif function == "mixture":
+            epsilons = params.get("epsilons", [0.5, 0.6, 0.7, 0.8, 0.9])
             param_str = f"ε={min(epsilons)}-{max(epsilons)}"
-        elif function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["BETA"]:
-            alpha = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["BETA"]["ALPHA"],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["BETA"][
-                    "DEFAULT_ALPHA"
-                ],
-            )
-            beta = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["BETA"]["BETA"],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["BETA"][
-                    "DEFAULT_BETA"
-                ],
-            )
+        elif function == "beta":
+            alpha = params.get("alpha", 0.5)
+            beta = params.get("beta", 1.5)
             param_str = f"α={alpha}, β={beta}"
-        elif function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["KERNEL"]:
-            bandwidth = params.get(
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["KERNEL"][
-                    "BANDWIDTH"
-                ],
-                MARTINGALE_CONSTANTS["BETTING"]["FUNCTION_PARAMS"]["KERNEL"][
-                    "DEFAULT_BANDWIDTH"
-                ],
-            )
+        elif function == "kernel":
+            bandwidth = params.get("bandwidth", 0.1)
             param_str = f"bw={bandwidth}"
-        elif function == MARTINGALE_CONSTANTS["BETTING"]["FUNCTIONS"]["CONSTANT"]:
+        elif function == "constant":
             param_str = "fixed"
 
         return {
-            MARTINGALE_CONSTANTS["BETTING"]["FUNCTION"]: function,
-            MARTINGALE_CONSTANTS["BETTING"]["PARAMS"]: params,
-            MARTINGALE_CONSTANTS["BETTING"]["PARAM_STR"]: param_str,
+            "function": function,
+            "params": params,
+            "param_str": param_str,
         }
 
     def _process_martingales(self, detection_results: Dict[str, Any]) -> Dict[str, Any]:
         """Process detector results into a format suitable for plotting."""
-        processed = {MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]: {}}
+        processed = {"combined": {}}
 
         # Get the sequence length from the combined martingales
-        if self.method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]:
-            seq_len = len(
-                detection_results.get(
-                    MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_SUM_MARTINGALES"], []
-                )
-            )
+        if self.method == "multiview":
+            seq_len = len(detection_results.get("traditional_sum_martingales", []))
         else:
-            seq_len = len(
-                detection_results.get(
-                    MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_MARTINGALES"], []
-                )
-            )
+            seq_len = len(detection_results.get("traditional_martingales", []))
 
-        if self.method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]:
+        if self.method == "multiview":
             # Process multiview results
-            processed[MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]].update(
+            processed["combined"].update(
                 {
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "MARTINGALES_SUM"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_SUM_MARTINGALES"], []
-                    )[
-                        :seq_len
-                    ],
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "MARTINGALES_AVG"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_AVG_MARTINGALES"], []
-                    )[
-                        :seq_len
-                    ],
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "PREDICTION_MARTINGALE_SUM"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["HORIZON_SUM_MARTINGALES"], []
+                    "martingales_sum": detection_results.get(
+                        "traditional_sum_martingales", []
+                    )[:seq_len],
+                    "martingales_avg": detection_results.get(
+                        "traditional_avg_martingales", []
+                    )[:seq_len],
+                    "prediction_martingale_sum": detection_results.get(
+                        "horizon_sum_martingales", []
                     ),
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "PREDICTION_MARTINGALE_AVG"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["HORIZON_AVG_MARTINGALES"], []
+                    "prediction_martingale_avg": detection_results.get(
+                        "horizon_avg_martingales", []
                     ),
                 }
             )
 
             # Process individual feature martingales
             individual_traditional = detection_results.get(
-                MARTINGALE_CONSTANTS["KEYS"]["INDIVIDUAL_TRADITIONAL_MARTINGALES"], []
+                "individual_traditional_martingales", []
             )
             individual_horizon = detection_results.get(
-                MARTINGALE_CONSTANTS["KEYS"]["INDIVIDUAL_HORIZON_MARTINGALES"], []
+                "individual_horizon_martingales", []
             )
 
-            features = MARTINGALE_CONSTANTS["FEATURES"]
+            features = [
+                "mean_degree",
+                "density",
+                "mean_clustering",
+                "mean_betweenness",
+                "mean_eigenvector",
+                "mean_closeness",
+                "max_singular_value",
+                "min_nonzero_laplacian",
+            ]
 
             for i, feature in enumerate(features):
                 if i < len(individual_traditional):
                     # Use actual sequence length
                     traditional_values = individual_traditional[i][:seq_len]
                     processed[feature] = {
-                        MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                            "MARTINGALES"
-                        ]: traditional_values,
-                        MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"]: (
+                        "martingales": traditional_values,
+                        "prediction_martingales": (
                             individual_horizon[i] if individual_horizon else None
                         ),
                     }
 
         else:  # single_view
             # Process single-view results
-            processed[MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]].update(
+            processed["combined"].update(
                 {
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "MARTINGALES"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_MARTINGALES"], []
-                    )[
+                    "martingales": detection_results.get("traditional_martingales", [])[
                         :seq_len
                     ],
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"][
-                        "PREDICTION_MARTINGALES"
-                    ]: detection_results.get(
-                        MARTINGALE_CONSTANTS["KEYS"]["HORIZON_MARTINGALES"], []
+                    "prediction_martingales": detection_results.get(
+                        "horizon_martingales", []
                     ),
                 }
             )
@@ -404,10 +438,7 @@ class MartingaleVisualizer:
         self._plot_detection_analysis()
 
         # Only create feature plots for multiview results with individual martingales
-        if (
-            self.method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]
-            and len(self.martingales) > 1
-        ):
+        if self.method == "multiview" and len(self.martingales) > 1:
             self._plot_feature_martingales()
             self._plot_overlaid_martingales()
 
@@ -440,13 +471,13 @@ class MartingaleVisualizer:
 
         self._plot_detection_subplot(
             ax1,
-            MARTINGALE_CONSTANTS["MARTINGALE_TYPES"]["TRADITIONAL"],
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["TRADITIONAL"],
+            "traditional",
+            "Traditional",
         )
         self._plot_detection_subplot(
             ax2,
-            MARTINGALE_CONSTANTS["MARTINGALE_TYPES"]["HORIZON"],
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["HORIZON"],
+            "horizon",
+            "Horizon",
         )
 
         # Ensure consistent y-axis limits across subplots
@@ -497,12 +528,12 @@ class MartingaleVisualizer:
     def _optimize_axis_settings(self, ax: plt.Axes) -> None:
         """Apply publication-quality axis settings."""
         # Set proper axis limits
-        ax.set_xlim(0, MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"])
+        ax.set_xlim(0, FD["SEQUENCE_LENGTH"])
         ax.set_xticks(
             np.arange(
                 0,
-                MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"] + 1,
-                MARTINGALE_CONSTANTS["DEFAULTS"]["TICK_INTERVAL"],
+                FD["SEQUENCE_LENGTH"] + 1,
+                FD["TICK_INTERVAL"],
             )
         )
 
@@ -511,9 +542,7 @@ class MartingaleVisualizer:
         if y_data:
             y_data = np.concatenate(y_data)
             y_min, y_max = np.nanmin(y_data), np.nanmax(y_data)
-            margin = (y_max - y_min) * MARTINGALE_CONSTANTS["DEFAULTS"][
-                "Y_MARGIN_FACTOR"
-            ]
+            margin = (y_max - y_min) * FD["Y_MARGIN_FACTOR"]
             ax.set_ylim(max(0, y_min - margin), y_max + margin)
 
         # Enhanced grid
@@ -527,7 +556,7 @@ class MartingaleVisualizer:
 
         # Only set y-axis label, x-axis label is handled separately
         ax.set_ylabel(
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["VALUE"],
+            "Value",
             fontsize=TYPO["LABEL_SIZE"],
             labelpad=TYPO["LABEL_PAD"],
         )
@@ -557,39 +586,27 @@ class MartingaleVisualizer:
 
     def _plot_detection_subplot(self, ax, mart_type: str, title: str) -> None:
         """Helper method to plot detection analysis for a specific martingale type."""
-        if mart_type == MARTINGALE_CONSTANTS["MARTINGALE_TYPES"]["TRADITIONAL"]:
-            changes = self.martingales[
-                MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-            ].get(MARTINGALE_CONSTANTS["KEYS"]["TRADITIONAL_CHANGE_POINTS"], [])
-            if self.method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]:
-                values = self.martingales[
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-                ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES_SUM"], [])
+        if mart_type == "traditional":
+            changes = self.martingales["combined"].get("traditional_change_points", [])
+            if self.method == "multiview":
+                values = self.martingales["combined"].get("martingales_sum", [])
             else:
-                values = self.martingales[
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-                ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"], [])
+                values = self.martingales["combined"].get("martingales", [])
         else:  # horizon
-            changes = self.martingales[
-                MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-            ].get(MARTINGALE_CONSTANTS["KEYS"]["HORIZON_CHANGE_POINTS"], [])
-            if self.method == MARTINGALE_CONSTANTS["METHODS"]["MULTIVIEW"]:
-                values = self.martingales[
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-                ].get(
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALE_SUM"], []
+            changes = self.martingales["combined"].get("horizon_change_points", [])
+            if self.method == "multiview":
+                values = self.martingales["combined"].get(
+                    "prediction_martingale_sum", []
                 )
             else:
-                values = self.martingales[
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-                ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"], [])
+                values = self.martingales["combined"].get("prediction_martingales", [])
 
         # Plot martingale values
         if values is not None and len(values) > 0:
             ax.plot(
                 values,
                 color=self.colors["actual"],
-                label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["MARTINGALE"],
+                label="Martingale",
             )
 
             # Mark detection points
@@ -609,17 +626,13 @@ class MartingaleVisualizer:
                         cp,
                         value_at_cp,
                         "ro",
-                        markersize=MARTINGALE_CONSTANTS["DEFAULTS"]["MARKER_SIZE"],
-                        label=(
-                            MARTINGALE_CONSTANTS["PLOT_TEXT"]["DETECTION"]
-                            if is_first
-                            else ""
-                        ),
+                        markersize=FD["MARKER_SIZE"],
+                        label=("Detection" if is_first else ""),
                     )
                     ax.annotate(
                         f"t={cp}",
                         (cp, value_at_cp),
-                        xytext=MARTINGALE_CONSTANTS["DEFAULTS"]["ANNOTATION_OFFSET"],
+                        xytext=FD["ANNOTATION_OFFSET"],
                         textcoords="offset points",
                     )
 
@@ -628,12 +641,12 @@ class MartingaleVisualizer:
             y=self.threshold,
             color=self.colors["threshold"],
             linestyle="--",
-            label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["THRESHOLD"],
+            label="Threshold",
         )
 
         ax.set_title(title)
-        ax.set_xlabel(MARTINGALE_CONSTANTS["PLOT_TEXT"]["TIME"])
-        ax.set_ylabel(MARTINGALE_CONSTANTS["PLOT_TEXT"]["VALUE"])
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Value")
         ax.legend()
         ax.grid(True)
 
@@ -642,7 +655,16 @@ class MartingaleVisualizer:
         fig = plt.figure(figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2))
         gs = GridSpec(2, 1, figure=fig, hspace=0.3)
 
-        features = MARTINGALE_CONSTANTS["FEATURES"]
+        features = [
+            "mean_degree",
+            "density",
+            "mean_clustering",
+            "mean_betweenness",
+            "mean_eigenvector",
+            "mean_closeness",
+            "max_singular_value",
+            "min_nonzero_laplacian",
+        ]
 
         # Use a different color for each feature
         colors = plt.cm.tab10(np.linspace(0, 1, len(features)))
@@ -653,9 +675,7 @@ class MartingaleVisualizer:
         # Plot individual feature martingales
         for i, feature in enumerate(features):
             if feature in self.martingales:
-                martingales = self.martingales[feature].get(
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"], []
-                )
+                martingales = self.martingales[feature].get("martingales", [])
                 if isinstance(martingales, (list, np.ndarray)) and len(martingales) > 0:
                     ax1.plot(
                         martingales,
@@ -666,15 +686,13 @@ class MartingaleVisualizer:
                     )
 
         # Plot the combined sum martingale
-        combined_sum = self.martingales[
-            MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-        ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES_SUM"], [])
+        combined_sum = self.martingales["combined"].get("martingales_sum", [])
         if isinstance(combined_sum, (list, np.ndarray)) and len(combined_sum) > 0:
             ax1.plot(
                 combined_sum,
                 color="blue",
                 linestyle="--",
-                label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["COMBINED_SUM"],
+                label="Combined (Sum)",
                 linewidth=1.5,
                 alpha=0.8,
                 zorder=10,
@@ -683,7 +701,7 @@ class MartingaleVisualizer:
         # Add threshold and change points to top subplot
         self._add_threshold_and_changes(ax1)
         ax1.set_title(
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["TRADITIONAL_MARTINGALES"],
+            "Traditional Martingales",
             fontsize=TYPO["TITLE_SIZE"],
         )
 
@@ -694,16 +712,14 @@ class MartingaleVisualizer:
         for i, feature in enumerate(features):
             if feature in self.martingales:
                 pred_martingales = self.martingales[feature].get(
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"], []
+                    "prediction_martingales", []
                 )
                 if (
                     isinstance(pred_martingales, (list, np.ndarray))
                     and len(pred_martingales) > 0
                 ):
                     # Get traditional martingales to calculate history size
-                    martingales = self.martingales[feature].get(
-                        MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"], []
-                    )
+                    martingales = self.martingales[feature].get("martingales", [])
                     history_size = len(martingales) - len(pred_martingales)
                     time_points = np.arange(
                         history_size, history_size + len(pred_martingales)
@@ -718,17 +734,15 @@ class MartingaleVisualizer:
                     )
 
         # Plot the combined prediction sum martingale
-        combined_pred_sum = self.martingales[
-            MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-        ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALE_SUM"], [])
+        combined_pred_sum = self.martingales["combined"].get(
+            "prediction_martingale_sum", []
+        )
         if (
             isinstance(combined_pred_sum, (list, np.ndarray))
             and len(combined_pred_sum) > 0
         ):
             # Get traditional sum martingale to calculate history size
-            combined_sum = self.martingales[
-                MARTINGALE_CONSTANTS["RESULT_KEYS"]["COMBINED"]
-            ].get(MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES_SUM"], [])
+            combined_sum = self.martingales["combined"].get("martingales_sum", [])
             history_size = len(combined_sum) - len(combined_pred_sum)
             time_points = np.arange(history_size, history_size + len(combined_pred_sum))
             ax2.plot(
@@ -736,7 +750,7 @@ class MartingaleVisualizer:
                 combined_pred_sum,
                 color="orange",
                 linestyle="--",
-                label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["COMBINED_SUM"],
+                label="Combined (Sum)",
                 linewidth=1.5,
                 alpha=0.8,
                 zorder=10,
@@ -745,7 +759,7 @@ class MartingaleVisualizer:
         # Add threshold and change points to bottom subplot
         self._add_threshold_and_changes(ax2)
         ax2.set_title(
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["PREDICTION_MARTINGALES"],
+            "Prediction Martingales",
             fontsize=TYPO["TITLE_SIZE"],
         )
 
@@ -756,11 +770,11 @@ class MartingaleVisualizer:
             ax.set_xticks(
                 np.arange(
                     0,
-                    MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"] + 1,
-                    MARTINGALE_CONSTANTS["DEFAULTS"]["TICK_INTERVAL"],
+                    FD["SEQUENCE_LENGTH"] + 1,
+                    FD["TICK_INTERVAL"],
                 )
             )
-            ax.set_xlim(0, MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"])
+            ax.set_xlim(0, FD["SEQUENCE_LENGTH"])
 
             # Create consistent legend positioning for both subplots
             ax.legend(
@@ -778,13 +792,13 @@ class MartingaleVisualizer:
 
         # Set labels only for bottom subplot
         ax2.set_xlabel(
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["TIME"],
+            "Time",
             fontsize=TYPO["LABEL_SIZE"],
             labelpad=4,
         )
         for ax in [ax1, ax2]:
             ax.set_ylabel(
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["MARTINGALE_VALUE"],
+                "Martingale Value",
                 fontsize=TYPO["LABEL_SIZE"],
                 labelpad=4,
             )
@@ -827,9 +841,7 @@ class MartingaleVisualizer:
                 y_data = y_data[~np.isnan(y_data)]  # Remove NaN values
                 if len(y_data) > 0:
                     y_min, y_max = np.min(y_data), np.max(y_data)
-                    margin = (y_max - y_min) * MARTINGALE_CONSTANTS["DEFAULTS"][
-                        "Y_MARGIN_FACTOR"
-                    ]
+                    margin = (y_max - y_min) * FD["Y_MARGIN_FACTOR"]
                     ax.set_ylim(y_min - margin, y_max + margin)
 
     def _plot_shap_subplot(
@@ -842,11 +854,9 @@ class MartingaleVisualizer:
             # Calculate history size from martingales
             feature = feature_names[0]  # Use first feature to get history size
             if feature in self.martingales:
-                martingales = self.martingales[feature].get(
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"], []
-                )
+                martingales = self.martingales[feature].get("martingales", [])
                 pred_martingales = self.martingales[feature].get(
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"], []
+                    "prediction_martingales", []
                 )
                 if len(martingales) > 0 and len(pred_martingales) > 0:
                     history_size = len(martingales) - len(pred_martingales)
@@ -883,9 +893,8 @@ class MartingaleVisualizer:
             y_min, y_max = np.nanmin(shap_values), np.nanmax(shap_values)
             if not (np.isnan(y_min) or np.isnan(y_max)):
                 y_margin = max(
-                    (y_max - y_min)
-                    * MARTINGALE_CONSTANTS["DEFAULTS"]["Y_MARGIN_FACTOR"],
-                    MARTINGALE_CONSTANTS["DEFAULTS"]["MIN_Y_MARGIN"],
+                    (y_max - y_min) * FD["Y_MARGIN_FACTOR"],
+                    FD["MIN_Y_MARGIN"],
                 )  # At least 0.1 margin
                 ax.set_ylim(y_min - y_margin, y_max + y_margin)
 
@@ -923,7 +932,7 @@ class MartingaleVisualizer:
             self.shap_values,
             self.feature_names,
             colors,
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["TRADITIONAL_SHAP"],
+            "Traditional SHAP Values",
             is_prediction=False,
         )
 
@@ -938,21 +947,21 @@ class MartingaleVisualizer:
                 self.prediction_shap_values,
                 self.feature_names,
                 colors,
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["PREDICTION_SHAP"],
+                "Prediction SHAP Values",
                 is_prediction=True,
             )
         else:
             ax2.text(
                 0.5,
                 0.5,
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["NO_PREDICTION_SHAP"],
+                "No prediction SHAP values available",
                 horizontalalignment="center",
                 verticalalignment="center",
                 transform=ax2.transAxes,
                 fontsize=TYPO["LABEL_SIZE"],
             )
             ax2.set_title(
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["PREDICTION_SHAP"],
+                "Prediction SHAP Values",
                 fontsize=TYPO["TITLE_SIZE"],
             )
 
@@ -961,11 +970,11 @@ class MartingaleVisualizer:
             ax.set_xticks(
                 np.arange(
                     0,
-                    MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"] + 1,
-                    MARTINGALE_CONSTANTS["DEFAULTS"]["TICK_INTERVAL"],
+                    FD["SEQUENCE_LENGTH"] + 1,
+                    FD["TICK_INTERVAL"],
                 )
             )
-            ax.set_xlim(0, MARTINGALE_CONSTANTS["DEFAULTS"]["SEQUENCE_LENGTH"])
+            ax.set_xlim(0, FD["SEQUENCE_LENGTH"])
             ax.tick_params(axis="both", which="major", labelsize=TYPO["TICK_SIZE"])
             ax.grid(True, linestyle=":", alpha=GRID["MAJOR_ALPHA"] * 0.7)
 
@@ -974,13 +983,13 @@ class MartingaleVisualizer:
 
         # Set labels
         ax2.set_xlabel(
-            MARTINGALE_CONSTANTS["PLOT_TEXT"]["TIME"],
+            "Time",
             fontsize=TYPO["LABEL_SIZE"],
             labelpad=1,
         )
         for ax in [ax1, ax2]:
             ax.set_ylabel(
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["SHAP_VALUE"],
+                "SHAP Value",
                 fontsize=TYPO["LABEL_SIZE"],
                 labelpad=1,
             )
@@ -990,8 +999,6 @@ class MartingaleVisualizer:
 
     def _save_figure(self, filename: str) -> None:
         """Save figure with publication-quality settings."""
-        import os
-
         os.makedirs(self.output_dir, exist_ok=True)
         final_filename = f"{self.prefix}{filename}" if self.prefix else filename
         plt.savefig(
@@ -1005,15 +1012,11 @@ class MartingaleVisualizer:
 
     def _get_enhanced_title(self) -> str:
         """Generate publication-quality title with mathematical notation."""
-        function_name = self.betting_config[
-            MARTINGALE_CONSTANTS["BETTING"]["FUNCTION"]
-        ].title()
-        title = f"{MARTINGALE_CONSTANTS['PLOT_TEXT']['FEATURE_MARTINGALES']} ({function_name}"
-        if self.betting_params[MARTINGALE_CONSTANTS["BETTING"]["PARAM_STR"]]:
+        function_name = self.betting_config["function"].title()
+        title = f"Feature Martingales ({function_name}"
+        if self.betting_params["param_str"]:
             # Convert to proper mathematical notation
-            param_str = self.betting_params[
-                MARTINGALE_CONSTANTS["BETTING"]["PARAM_STR"]
-            ].replace("ε", "$\\varepsilon$")
+            param_str = self.betting_params["param_str"].replace("ε", "$\\varepsilon$")
             param_str = param_str.replace("λ", "$\\lambda$")
             param_str = param_str.replace("α", "$\\alpha$")
             param_str = param_str.replace("β", "$\\beta$")
@@ -1029,7 +1032,7 @@ class MartingaleVisualizer:
             linestyle=LS["THRESHOLD_LINE_STYLE"],
             alpha=0.5,
             linewidth=LS["LINE_WIDTH"],
-            label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["THRESHOLD"],
+            label="Threshold",
             zorder=5,
         )
 
@@ -1052,8 +1055,8 @@ class MartingaleVisualizer:
             if feature in self.martingales:
                 results = self.martingales[feature]
                 for key in [
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"],
-                    MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"],
+                    "martingales",
+                    "prediction_martingales",
                 ]:
                     values = results.get(key, [])
                     if isinstance(values, (list, np.ndarray)) and len(values) > 0:
@@ -1085,7 +1088,16 @@ class MartingaleVisualizer:
 
     def _plot_feature_grid(self, fig: plt.Figure, gs: GridSpec) -> None:
         """Plot feature martingales in a grid layout."""
-        features = MARTINGALE_CONSTANTS["FEATURES"]
+        features = [
+            "mean_degree",
+            "density",
+            "mean_clustering",
+            "mean_betweenness",
+            "mean_eigenvector",
+            "mean_closeness",
+            "max_singular_value",
+            "min_nonzero_laplacian",
+        ]
 
         # Find global maximum for consistent y-axis
         max_mart_global = self._find_global_maximum(features)
@@ -1118,23 +1130,19 @@ class MartingaleVisualizer:
         results = self.martingales[feature]
 
         # Plot traditional martingale
-        martingales = results.get(
-            MARTINGALE_CONSTANTS["RESULT_KEYS"]["MARTINGALES"], []
-        )
+        martingales = results.get("martingales", [])
         if isinstance(martingales, (list, np.ndarray)) and len(martingales) > 0:
             ax.plot(
                 martingales,
                 color=self.colors["actual"],
-                label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["TRADITIONAL"],
+                label="Traditional",
                 linewidth=LS["LINE_WIDTH"],
                 alpha=LS["LINE_ALPHA"],
                 zorder=10,
             )
 
         # Plot prediction martingale
-        pred_martingales = results.get(
-            MARTINGALE_CONSTANTS["RESULT_KEYS"]["PREDICTION_MARTINGALES"], []
-        )
+        pred_martingales = results.get("prediction_martingales", [])
         if (
             isinstance(pred_martingales, (list, np.ndarray))
             and len(pred_martingales) > 0
@@ -1145,7 +1153,7 @@ class MartingaleVisualizer:
                 time_points,
                 pred_martingales,
                 color=self.colors["predicted"],
-                label=MARTINGALE_CONSTANTS["PLOT_TEXT"]["HORIZON"],  # Updated label
+                label="Horizon",  # Updated label
                 linewidth=LS["LINE_WIDTH"],
                 linestyle=LS["PREDICTION_LINE_STYLE"],
                 alpha=LS["LINE_ALPHA"],
@@ -1159,9 +1167,7 @@ class MartingaleVisualizer:
         # Set consistent y-axis limits
         y_max = max_mart_global * 1.05
         ax.set_ylim(0, y_max)
-        ax.set_yticks(
-            np.linspace(0, y_max, MARTINGALE_CONSTANTS["DEFAULTS"]["Y_TICKS_COUNT"])
-        )
+        ax.set_yticks(np.linspace(0, y_max, FD["Y_TICKS_COUNT"]))
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"{x:.1f}"))
 
         # Enhanced title and labels
@@ -1174,7 +1180,7 @@ class MartingaleVisualizer:
         # Show x-label only on bottom row
         if show_xlabel:
             ax.set_xlabel(
-                MARTINGALE_CONSTANTS["PLOT_TEXT"]["TIME"],
+                "Time",
                 fontsize=TYPO["LABEL_SIZE"],
                 labelpad=TYPO["LABEL_PAD"],
             )

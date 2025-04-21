@@ -8,34 +8,7 @@ from typing import List, Optional, Tuple, Dict, Any, Union
 
 logger = logging.getLogger(__name__)
 
-# Common keys used in the detection results
-# These keys are used by multiple functions and extracted here for easier maintenance
-RESULT_KEYS = {
-    # Keys for traditional martingales
-    "TRADITIONAL_MARTINGALES": "traditional_martingales",
-    "TRADITIONAL_SUM_MARTINGALES": "traditional_sum_martingales",
-    "TRADITIONAL_AVG_MARTINGALES": "traditional_avg_martingales",
-    "TRADITIONAL_CHANGE_POINTS": "traditional_change_points",
-    "INDIVIDUAL_TRADITIONAL_MARTINGALES": "individual_traditional_martingales",
-    # Keys for horizon martingales
-    "HORIZON_MARTINGALES": "horizon_martingales",
-    "HORIZON_SUM_MARTINGALES": "horizon_sum_martingales",
-    "HORIZON_AVG_MARTINGALES": "horizon_avg_martingales",
-    "HORIZON_CHANGE_POINTS": "horizon_change_points",
-    "INDIVIDUAL_HORIZON_MARTINGALES": "individual_horizon_martingales",
-    "EARLY_WARNINGS": "early_warnings",
-    # Keys for sequence results
-    "CHANGE_POINTS": "change_points",
-    "MODEL_NAME": "model_name",
-    # Keys for output configuration
-    "OUTPUT": "output",
-    "SAVE_FEATURES": "save_features",
-    "SAVE_PREDICTIONS": "save_predictions",
-    "SAVE_MARTINGALES": "save_martingales",
-}
 
-
-# Utility functions for data normalization
 def normalize_features(
     features_numeric: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -123,14 +96,14 @@ def prepare_result_data(
 
     # Start with basic information
     results = {
-        "true_change_points": sequence_result.get(RESULT_KEYS["CHANGE_POINTS"], []),
-        "model_name": sequence_result.get(RESULT_KEYS["MODEL_NAME"], ""),
+        "true_change_points": sequence_result.get("change_points", []),
+        "model_name": sequence_result.get("model_name", ""),
         "params": config,
     }
 
     # Add data if configured to save
-    output_config = config.get(RESULT_KEYS["OUTPUT"], {})
-    if output_config.get(RESULT_KEYS["SAVE_FEATURES"], False):
+    output_config = config.get("output", {})
+    if output_config.get("save_features", False):
         results.update(
             {
                 "features_raw": features_raw,
@@ -138,9 +111,7 @@ def prepare_result_data(
             }
         )
 
-    if predicted_graphs is not None and output_config.get(
-        RESULT_KEYS["SAVE_PREDICTIONS"], False
-    ):
+    if predicted_graphs is not None and output_config.get("save_predictions", False):
         results.update(
             {
                 "predicted_graphs": predicted_graphs,
@@ -154,7 +125,7 @@ def prepare_result_data(
             )
 
     # Add detection results if available
-    if trial_results and output_config.get(RESULT_KEYS["SAVE_MARTINGALES"], False):
+    if trial_results and output_config.get("save_martingales", False):
         if "aggregated" in trial_results:
             results.update(trial_results["aggregated"])
 
@@ -176,22 +147,21 @@ def prepare_martingale_visualization_data(
     complete_result = detection_result.copy()
 
     # Ensure basic martingale data exists
-    trad_mart = RESULT_KEYS["TRADITIONAL_MARTINGALES"]
-    trad_sum_mart = RESULT_KEYS["TRADITIONAL_SUM_MARTINGALES"]
-
-    if trad_mart not in complete_result and trad_sum_mart in complete_result:
-        complete_result[trad_mart] = complete_result[trad_sum_mart].copy()
+    if (
+        "traditional_martingales" not in complete_result
+        and "traditional_sum_martingales" in complete_result
+    ):
+        complete_result["traditional_martingales"] = complete_result[
+            "traditional_sum_martingales"
+        ].copy()
 
     # Add missing horizon martingale fields if needed
-    if trad_sum_mart in complete_result:
+    if "traditional_sum_martingales" in complete_result:
         # Initialize standard horizon fields if missing
         horizon_pairs = [
-            (RESULT_KEYS["HORIZON_MARTINGALES"], trad_sum_mart),
-            (RESULT_KEYS["HORIZON_SUM_MARTINGALES"], trad_sum_mart),
-            (
-                RESULT_KEYS["HORIZON_AVG_MARTINGALES"],
-                RESULT_KEYS["TRADITIONAL_AVG_MARTINGALES"],
-            ),
+            ("horizon_martingales", "traditional_sum_martingales"),
+            ("horizon_sum_martingales", "traditional_sum_martingales"),
+            ("horizon_avg_martingales", "traditional_avg_martingales"),
         ]
 
         for key, base_key in horizon_pairs:
@@ -199,28 +169,30 @@ def prepare_martingale_visualization_data(
                 complete_result[key] = np.zeros_like(complete_result[base_key])
 
         # Add empty change points if missing
-        if RESULT_KEYS["HORIZON_CHANGE_POINTS"] not in complete_result:
-            complete_result[RESULT_KEYS["HORIZON_CHANGE_POINTS"]] = []
+        if "horizon_change_points" not in complete_result:
+            complete_result["horizon_change_points"] = []
 
-        if RESULT_KEYS["EARLY_WARNINGS"] not in complete_result:
-            complete_result[RESULT_KEYS["EARLY_WARNINGS"]] = []
+        if "early_warnings" not in complete_result:
+            complete_result["early_warnings"] = []
 
         # Initialize individual horizon martingales if needed
-        indiv_horizon = RESULT_KEYS["INDIVIDUAL_HORIZON_MARTINGALES"]
-        indiv_trad = RESULT_KEYS["INDIVIDUAL_TRADITIONAL_MARTINGALES"]
-
-        if indiv_horizon not in complete_result and indiv_trad in complete_result:
-            n_features = len(complete_result[indiv_trad])
-            complete_result[indiv_horizon] = [
+        if (
+            "individual_horizon_martingales" not in complete_result
+            and "individual_traditional_martingales" in complete_result
+        ):
+            n_features = len(complete_result["individual_traditional_martingales"])
+            complete_result["individual_horizon_martingales"] = [
                 np.zeros_like(feat_martingale)
-                for feat_martingale in complete_result[indiv_trad]
+                for feat_martingale in complete_result[
+                    "individual_traditional_martingales"
+                ]
             ]
 
     # Ensure all change points are lists (not NumPy arrays)
     change_point_keys = [
-        RESULT_KEYS["TRADITIONAL_CHANGE_POINTS"],
-        RESULT_KEYS["HORIZON_CHANGE_POINTS"],
-        RESULT_KEYS["EARLY_WARNINGS"],
+        "traditional_change_points",
+        "horizon_change_points",
+        "early_warnings",
     ]
 
     for key in change_point_keys:

@@ -24,78 +24,17 @@ from ..graph.utils import graph_to_adjacency, adjacency_to_graph
 
 logger = logging.getLogger(__name__)
 
-# Constants for NetworkVisualizer
-GRAPH_CONSTANTS = {
-    # Layout types
-    "LAYOUTS": {
-        "SPRING": "spring",
-        "CIRCULAR": "circular",
-        "RANDOM": "random",
-        "SHELL": "shell",
-        "SPECTRAL": "spectral",
-        "KAMADA_KAWAI": "kamada_kawai",
-    },
-    # Plot types
-    "PLOT_TYPES": {
-        "NETWORK": "network",
-        "ADJACENCY": "adjacency",
-    },
-    # Default style values
-    "DEFAULT_STYLES": {
-        "NODE_COLOR": "lightblue",
-        "EDGE_COLOR": "gray",
-        "NODE_SIZE": 300,
-        "EDGE_WIDTH": 1,
-        "ALPHA": 0.7,
-        "FONT_SIZE": 8,
-    },
-    # Text constants
-    "TEXT": {
-        "EMPTY_GRAPH": "Empty Graph",
-        "GRAPH_PREFIX": "Graph ",
-    },
-    # Default titles
-    "TITLES": {
-        "ADJACENCY": "Adjacency Matrix",
-        "NETWORK": "Network Graph",
-        "FEATURE_EVOLUTION": "Feature Evolution",
-    },
-    # Plot labels
-    "LABELS": {
-        "NODE": "Node",
-        "TIME": "Time",
-        "VALUE": "Value",
-        "METRIC_VALUE": "Metric Value",
-        "GRAPH_DENSITY": "Graph Density",
-        "DENSITY": "Density",
-    },
-    # Style keys
-    "STYLE_KEYS": {
-        "CMAP": "cmap",
-        "NODE_COLOR": "node_color",
-        "EDGE_COLOR": "edge_color",
-        "NODE_SIZE": "node_size",
-        "WIDTH": "width",
-        "ALPHA": "alpha",
-        "FONT_SIZE": "font_size",
-    },
-    # Layout parameter keys
-    "LAYOUT_PARAMS": {
-        "POS": "pos",
-    },
-}
-
 
 class NetworkVisualizer:
     """Visualizer for network graphs, adjacency matrices, and features."""
 
     LAYOUTS = {
-        GRAPH_CONSTANTS["LAYOUTS"]["SPRING"]: nx.spring_layout,
-        GRAPH_CONSTANTS["LAYOUTS"]["CIRCULAR"]: nx.circular_layout,
-        GRAPH_CONSTANTS["LAYOUTS"]["RANDOM"]: nx.random_layout,
-        GRAPH_CONSTANTS["LAYOUTS"]["SHELL"]: nx.shell_layout,
-        GRAPH_CONSTANTS["LAYOUTS"]["SPECTRAL"]: nx.spectral_layout,
-        GRAPH_CONSTANTS["LAYOUTS"]["KAMADA_KAWAI"]: nx.kamada_kawai_layout,
+        "spring": nx.spring_layout,
+        "circular": nx.circular_layout,
+        "random": nx.random_layout,
+        "shell": nx.shell_layout,
+        "spectral": nx.spectral_layout,
+        "kamada_kawai": nx.kamada_kawai_layout,
     }
 
     def __init__(self, style: Dict = None):
@@ -107,7 +46,7 @@ class NetworkVisualizer:
         self,
         adj_matrix: np.ndarray,
         ax: Optional[Axes] = None,
-        title: str = GRAPH_CONSTANTS["TITLES"]["ADJACENCY"],
+        title: str = "Adjacency Matrix",
         show_values: bool = False,
     ) -> Tuple[Figure, Axes]:
         """Plot adjacency matrix as heatmap."""
@@ -123,7 +62,7 @@ class NetworkVisualizer:
             ax.text(
                 0.5,
                 0.5,
-                GRAPH_CONSTANTS["TEXT"]["EMPTY_GRAPH"],
+                "Empty Graph",
                 ha="center",
                 va="center",
                 fontsize=TYPO["TICK_SIZE"],
@@ -137,7 +76,7 @@ class NetworkVisualizer:
         sns.heatmap(
             adj_matrix,
             ax=ax,
-            cmap=self.style[GRAPH_CONSTANTS["STYLE_KEYS"]["CMAP"]],
+            cmap=self.style.get("cmap"),
             square=True,
             annot=show_values,
             fmt=".0f" if show_values else "",
@@ -146,12 +85,8 @@ class NetworkVisualizer:
         )
 
         ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
-        ax.set_xlabel(
-            GRAPH_CONSTANTS["LABELS"]["NODE"], fontsize=TYPO["LABEL_SIZE"], labelpad=2
-        )
-        ax.set_ylabel(
-            GRAPH_CONSTANTS["LABELS"]["NODE"], fontsize=TYPO["LABEL_SIZE"], labelpad=2
-        )
+        ax.set_xlabel("Node", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.set_ylabel("Node", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
         ax.tick_params(labelsize=TYPO["TICK_SIZE"], pad=1)
 
         return fig, ax
@@ -160,8 +95,8 @@ class NetworkVisualizer:
         self,
         graph: Union[nx.Graph, np.ndarray],
         ax: Optional[Axes] = None,
-        title: str = GRAPH_CONSTANTS["TITLES"]["NETWORK"],
-        layout: str = GRAPH_CONSTANTS["LAYOUTS"]["SPRING"],
+        title: str = "Network Graph",
+        layout: str = "spring",
         layout_params: Optional[Dict] = None,
         node_color: Optional[List] = None,
         edge_color: Optional[List] = None,
@@ -201,7 +136,7 @@ class NetworkVisualizer:
             ax.text(
                 0.5,
                 0.5,
-                GRAPH_CONSTANTS["TEXT"]["EMPTY_GRAPH"],
+                "Empty Graph",
                 ha="center",
                 va="center",
                 fontsize=TYPO["TICK_SIZE"],
@@ -213,16 +148,16 @@ class NetworkVisualizer:
 
         # Get layout with appropriate parameters
         layout_params = layout_params or {}
-        if GRAPH_CONSTANTS["LAYOUT_PARAMS"]["POS"] in layout_params:
+        if "pos" in layout_params:
             # Use pre-computed positions
-            pos = layout_params[GRAPH_CONSTANTS["LAYOUT_PARAMS"]["POS"]]
+            pos = layout_params["pos"]
         else:
             # Compute new layout
             if layout not in self.LAYOUTS:
                 logger.warning(
-                    f"Unknown layout: {layout}, falling back to {GRAPH_CONSTANTS['LAYOUTS']['SPRING']} layout"
+                    f"Unknown layout: {layout}, falling back to spring layout"
                 )
-                layout = GRAPH_CONSTANTS["LAYOUTS"]["SPRING"]
+                layout = "spring"
             pos = self.LAYOUTS[layout](graph, **layout_params)
 
         # Draw the network
@@ -230,35 +165,13 @@ class NetworkVisualizer:
             graph,
             pos=pos,
             ax=ax,
-            node_color=node_color
-            or self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["NODE_COLOR"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["NODE_COLOR"],
-            ),
-            edge_color=edge_color
-            or self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["EDGE_COLOR"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["EDGE_COLOR"],
-            ),
-            node_size=node_size
-            or self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["NODE_SIZE"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["NODE_SIZE"],
-            ),
-            width=edge_width
-            or self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["WIDTH"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["EDGE_WIDTH"],
-            ),
-            alpha=self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["ALPHA"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["ALPHA"],
-            ),
+            node_color=node_color or self.style.get("node_color", "lightblue"),
+            edge_color=edge_color or self.style.get("edge_color", "gray"),
+            node_size=node_size or self.style.get("node_size", 300),
+            width=edge_width or self.style.get("width", 1),
+            alpha=self.style.get("alpha", 0.7),
             with_labels=True,
-            font_size=self.style.get(
-                GRAPH_CONSTANTS["STYLE_KEYS"]["FONT_SIZE"],
-                GRAPH_CONSTANTS["DEFAULT_STYLES"]["FONT_SIZE"],
-            ),
+            font_size=self.style.get("font_size", 8),
         )
 
         ax.set_title(title, fontsize=TYPO["TITLE_SIZE"], pad=4)
@@ -270,8 +183,8 @@ class NetworkVisualizer:
         self,
         graphs: List[Union[nx.Graph, np.ndarray]],
         n_cols: int = 4,
-        plot_type: str = GRAPH_CONSTANTS["PLOT_TYPES"]["NETWORK"],
-        layout: str = GRAPH_CONSTANTS["LAYOUTS"]["SPRING"],
+        plot_type: str = "network",
+        layout: str = "spring",
         titles: Optional[List[str]] = None,
     ) -> Tuple[Figure, List[Axes]]:
         """Plot sequence of graphs in a grid."""
@@ -287,13 +200,9 @@ class NetworkVisualizer:
         axes = axes.flatten()
 
         for i, graph in enumerate(graphs):
-            title = (
-                titles[i]
-                if titles and i < len(titles)
-                else f"{GRAPH_CONSTANTS['TEXT']['GRAPH_PREFIX']}{i+1}"
-            )
+            title = titles[i] if titles and i < len(titles) else f"Graph {i+1}"
 
-            if plot_type == GRAPH_CONSTANTS["PLOT_TYPES"]["NETWORK"]:
+            if plot_type == "network":
                 self.plot_network(graph, ax=axes[i], title=title, layout=layout)
             else:
                 if isinstance(graph, nx.Graph):
@@ -341,8 +250,8 @@ class NetworkVisualizer:
                 for cp in change_points:
                     ax.axvline(cp, color="r", linestyle="--", alpha=0.5)
 
-            ax.set_xlabel(GRAPH_CONSTANTS["LABELS"]["TIME"])
-            ax.set_ylabel(GRAPH_CONSTANTS["LABELS"]["METRIC_VALUE"])
+            ax.set_xlabel("Time")
+            ax.set_ylabel("Metric Value")
             ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
             ax.grid(True, alpha=0.3)
             axes.append(ax)
@@ -355,7 +264,7 @@ class NetworkVisualizer:
         ]
         ax.plot(
             densities,
-            label=GRAPH_CONSTANTS["LABELS"]["DENSITY"],
+            label="Density",
             color="blue",
             alpha=0.7,
         )
@@ -364,8 +273,8 @@ class NetworkVisualizer:
             for cp in change_points:
                 ax.axvline(cp, color="r", linestyle="--", alpha=0.5)
 
-        ax.set_xlabel(GRAPH_CONSTANTS["LABELS"]["TIME"])
-        ax.set_ylabel(GRAPH_CONSTANTS["LABELS"]["GRAPH_DENSITY"])
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Graph Density")
         ax.grid(True, alpha=0.3)
         axes.append(ax)
 
@@ -392,13 +301,13 @@ class NetworkVisualizer:
             ax.text(
                 0.5,
                 0.5,
-                GRAPH_CONSTANTS["TEXT"]["EMPTY_GRAPH"],
+                "Empty Graph",
                 ha="center",
                 va="center",
                 fontsize=TYPO["TICK_SIZE"],
             )
             ax.set_title(
-                title or GRAPH_CONSTANTS["TITLES"]["FEATURE_EVOLUTION"],
+                title or "Feature Evolution",
                 fontsize=TYPO["TITLE_SIZE"],
                 pad=4,
             )
@@ -462,12 +371,8 @@ class NetworkVisualizer:
             fontsize=TYPO["TITLE_SIZE"],
             pad=4,
         )
-        ax.set_xlabel(
-            GRAPH_CONSTANTS["LABELS"]["TIME"], fontsize=TYPO["LABEL_SIZE"], labelpad=2
-        )
-        ax.set_ylabel(
-            GRAPH_CONSTANTS["LABELS"]["VALUE"], fontsize=TYPO["LABEL_SIZE"], labelpad=2
-        )
+        ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
+        ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"], labelpad=2)
         ax.tick_params(labelsize=TYPO["TICK_SIZE"], pad=1)
         ax.grid(True, alpha=LS["GRID_ALPHA"], linewidth=LS["GRID_WIDTH"])
 
@@ -498,7 +403,7 @@ class NetworkVisualizer:
             ax.text(
                 0.5,
                 0.5,
-                GRAPH_CONSTANTS["TEXT"]["EMPTY_GRAPH"],
+                "Empty Graph",
                 ha="center",
                 va="center",
                 fontsize=TYPO["TICK_SIZE"],
@@ -546,7 +451,7 @@ class NetworkVisualizer:
         self,
         adj_matrix: np.ndarray,
         title: str = None,
-        layout: str = GRAPH_CONSTANTS["LAYOUTS"]["SPRING"],
+        layout: str = "spring",
         node_color: Union[str, List[str]] = None,
         fig: plt.Figure = None,
     ) -> None:

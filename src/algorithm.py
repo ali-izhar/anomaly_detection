@@ -60,8 +60,6 @@ class GraphChangeDetection:
         else:
             raise ValueError("Either config_path or config_dict must be provided")
 
-        self._setup_logging()
-
     def _load_config(self, config_path):
         """Load configuration from YAML file.
 
@@ -73,13 +71,6 @@ class GraphChangeDetection:
         """
         with open(config_path, "r") as f:
             return yaml.safe_load(f)
-
-    def _setup_logging(self):
-        """Configure logging."""
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
 
     def _setup_output_directory(self):
         """Create timestamped output directory with descriptive name."""
