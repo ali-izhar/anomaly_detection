@@ -121,23 +121,8 @@ def run_detection(
         detector = GraphChangeDetection(config_dict=config)
         results = detector.run()
 
-        if results:
-            # Print true change points if available
-            if "true_change_points" in results:
-                logger.info(f"True change points: {results['true_change_points']}")
-
-            # Print detected change points if available
-            if "traditional_change_points" in results:
-                logger.info(
-                    f"Traditional change points detected: {results['traditional_change_points']}"
-                )
-            if "horizon_change_points" in results:
-                logger.info(
-                    f"Horizon change points detected: {results['horizon_change_points']}"
-                )
-
-            # Generate and print the detection analysis report
-            print_analysis_report(results)
+        # Generate and print the detection analysis report
+        print_analysis_report(results)
 
         return results
 

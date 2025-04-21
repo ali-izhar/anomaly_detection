@@ -299,6 +299,7 @@ class GraphChangeDetection:
         # Run individual trials
         individual_results = []
         for trial_idx, seed in enumerate(random_seeds):
+            logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
 
             int_seed = int(seed) if seed is not None else None
 
@@ -318,11 +319,15 @@ class GraphChangeDetection:
 
                 individual_results.append(detection_result)
             except Exception as e:
-                logger.error(f"Trial {trial_idx + 1} failed: {str(e)}")
+                logger.error(f"Trial {trial_idx + 1}/{n_trials} failed: {str(e)}")
                 continue
 
         if not individual_results:
             raise RuntimeError("All detection trials failed")
+
+        logger.info(
+            f"Completed {len(individual_results)}/{n_trials} trials successfully"
+        )
 
         # Use the first trial's results for visualization
         aggregated_results = individual_results[0].copy()

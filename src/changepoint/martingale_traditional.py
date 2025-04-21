@@ -100,25 +100,27 @@ def compute_traditional_martingale(
             prev_trad = state.traditional_martingale
             new_trad = betting_function(prev_trad, pvalue)
 
+            # Store the updated martingale value before checking for change detection
+            state.saved_traditional.append(new_trad)
+            state.traditional_martingale = new_trad
+
             # Check if the updated traditional martingale exceeds the threshold.
             detected_trad = False
             if config.reset and new_trad > config.threshold:
                 if not printing_from_horizon:
                     logger.info(
-                        f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {config.threshold}"
+                        f"Traditional martingale detected change at t={i - 1}: {new_trad:.4f} > {config.threshold}"
                     )
                 detected_trad = True
-                state.traditional_change_points.append(i)
+                state.traditional_change_points.append(i - 1)
 
-            # Reset state if a change is detected; otherwise, update state.
+            # Update window or reset state if a change is detected.
             if detected_trad:
                 state.reset()
-                state.saved_traditional.append(1.0)
-                continue
+                # We already saved the martingale value that crossed the threshold,
+                # so the reset happens after recording the detection
             else:
                 state.window.append(point)
-                state.traditional_martingale = new_trad
-                state.saved_traditional.append(new_trad)
 
         # Return the computed martingale histories and detected change points.
         return {
@@ -237,25 +239,27 @@ def multiview_traditional_martingale(
                 # Aggregate traditional martingale values across all features
                 total_traditional = sum(new_traditional)
 
+                # Record values first, so detection is stored at the correct timestep
+                state.record_traditional_values(i, new_traditional, False)
+
                 # Check if traditional martingale crosses threshold
                 if total_traditional > config.threshold:
-                    # Traditional martingale detection at t-1 because we're using t-1 values to update t
+                    # Traditional martingale detection
                     if not printing_from_horizon:
                         logger.info(
                             f"Traditional martingale detected change at t={i - 1}: Sum={total_traditional:.4f} > {config.threshold}"
                         )
-                    state.traditional_change_points.append(i)
+                    state.traditional_change_points.append(i - 1)
 
-                    # Record detection values and reset
-                    state.record_traditional_values(i, new_traditional, True)
+                    # Update the is_detection flag for this timestep
+                    state.has_detection = True
+
+                    # Reset state after detection
                     state.reset(num_features)
                 else:
-                    # No detection - update windows and record values
+                    # No detection - update windows
                     for j in range(num_features):
                         state.windows[j].append(data[j][i])
-
-                    # Record current values in history
-                    state.record_traditional_values(i, new_traditional, False)
 
             idx = batch_end
 

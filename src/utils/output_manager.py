@@ -365,19 +365,6 @@ class OutputManager:
                         None
                     ] * (n_timesteps - max_idx)
 
-                    # Immediately after adding a martingale column, add its detection column if it's a sum martingale
-                    if martingale_key == "traditional_sum_martingales":
-                        # Initialize all detection flags to 0
-                        df_data["traditional_detected"] = [0] * n_timesteps
-
-                        # Set flag to 1 at indices where martingale exceeds threshold
-                        for i in range(max_idx):
-                            if (
-                                df_data[martingale_key][i] is not None
-                                and df_data[martingale_key][i] > threshold
-                            ):
-                                df_data["traditional_detected"][i] = 1
-
         # Add horizon martingale values
         for martingale_key in horizon_martingale_keys:
             if martingale_key in detection_results:
@@ -388,27 +375,26 @@ class OutputManager:
                         None
                     ] * (n_timesteps - max_idx)
 
-                    # Add detection column for horizon sum martingales
-                    if martingale_key == "horizon_sum_martingales":
-                        # Initialize all detection flags to 0
-                        df_data["horizon_detected"] = [0] * n_timesteps
-
-                        # Set flag to 1 at indices where martingale exceeds threshold
-                        for i in range(max_idx):
-                            if (
-                                df_data[martingale_key][i] is not None
-                                and df_data[martingale_key][i] > threshold
-                            ):
-                                df_data["horizon_detected"][i] = 1
-
-        # Store actual detection points for internal reference
+        # Add traditional detection column using the actual recorded detection points
+        df_data["traditional_detected"] = [0] * n_timesteps
         if "traditional_change_points" in detection_results:
+            # Set flag to 1 at the exact indices where detection occurred
+            for idx in detection_results["traditional_change_points"]:
+                if 0 <= idx < n_timesteps:
+                    df_data["traditional_detected"][idx] = 1
+            # Store actual detection points for internal reference
             self._traditional_detection_points = detection_results[
                 "traditional_change_points"
             ]
 
-        # Store horizon detection points for internal reference
+        # Add horizon detection column using the actual recorded detection points
+        df_data["horizon_detected"] = [0] * n_timesteps
         if "horizon_change_points" in detection_results:
+            # Set flag to 1 at the exact indices where detection occurred
+            for idx in detection_results["horizon_change_points"]:
+                if 0 <= idx < n_timesteps:
+                    df_data["horizon_detected"][idx] = 1
+            # Store horizon detection points for internal reference
             self._horizon_detection_points = detection_results["horizon_change_points"]
 
         # Create the dataframe with a specific column order
