@@ -1,5 +1,6 @@
 # src/changepoint/__init__.py
 
-from .detector import ChangePointDetector
+from .betting import BettingFunctionConfig
+from .detector import ChangePointDetector, DetectorConfig
 
-__all__ = ["ChangePointDetector"]
+__all__ = ["BettingFunctionConfig", "ChangePointDetector", "DetectorConfig"]

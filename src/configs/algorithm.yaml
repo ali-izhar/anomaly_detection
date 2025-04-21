@@ -93,7 +93,7 @@ features:
 
 # Output configuration
 output:
-  directory: "src/results"  # Output directory for results
+  directory: "results"  # Output directory for results
   prefix: ""  # Prefix for output files
   save_predictions: true  # Save predicted graphs
   save_features: true  # Save extracted features

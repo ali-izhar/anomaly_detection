@@ -2,18 +2,17 @@
 
 """Entry point for running the graph change point detection pipeline."""
 
-import sys
 import argparse
 import logging
+import sys
+
 from pathlib import Path
 
-# Add project root to path if needed
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.algorithm import GraphChangeDetection
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,8 @@ def main(
     visualize=None,
     save_csv=None,
 ):
-    """Run the detection pipeline with the given configuration.
+    """
+    Run the detection pipeline with the given configuration.
 
     Args:
         config_path: Path to YAML configuration file
@@ -39,7 +39,6 @@ def main(
         Dictionary containing all results
     """
     try:
-        # Initialize the pipeline
         pipeline = GraphChangeDetection(config_path)
 
         # Ensure martingale data is saved for analysis
@@ -47,7 +46,6 @@ def main(
             pipeline.config["output"] = {}
         pipeline.config["output"]["save_martingales"] = True
 
-        # Run the pipeline with specified options
         logger.info("Starting pipeline execution")
         if prediction is not None:
             logger.info(f"Prediction override: {prediction}")

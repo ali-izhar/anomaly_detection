@@ -8,22 +8,19 @@ import numpy as np
 import time
 import os
 
-from src.changepoint.detector import DetectorConfig, ChangePointDetector
-from src.changepoint.betting import BettingFunctionConfig
+from src.changepoint import BettingFunctionConfig, ChangePointDetector, DetectorConfig
 from src.configs import get_config, get_full_model_name
-from src.graph.generator import GraphGenerator
-from src.graph.features import NetworkFeatureExtractor
+from src.graph import GraphGenerator, NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
-from src.plot.plot_martingale import MartingaleVisualizer
-from src.plot.visualization_utils import prepare_martingale_visualization_data
 from src.predictor import PredictorFactory
 from src.utils import (
-    OutputManager,
+    MartingaleVisualizer,
     normalize_features,
     normalize_predictions,
+    OutputManager,
+    prepare_martingale_visualization_data,
     prepare_result_data,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +94,10 @@ class GraphChangeDetection:
             f"{network_type}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}",
         )
 
-        os.makedirs(self.config["output"]["directory"], exist_ok=True)
-        logger.info(f"Output directory: {self.config['output']['directory']}")
+        os.makedirs(
+            self.config["output"]["directory"],
+            exist_ok=True,
+        )
 
     def _init_generator(self):
         """Initialize the graph sequence generator.
@@ -107,7 +106,7 @@ class GraphChangeDetection:
             GraphGenerator instance
         """
         network_type = self.config["model"]["network"]
-        logger.info(f"Initializing {network_type} graph generator")
+
         return GraphGenerator(network_type)
 
     def _init_predictor(self):
@@ -117,9 +116,10 @@ class GraphChangeDetection:
             Predictor instance from PredictorFactory
         """
         predictor_config = self.config["model"]["predictor"]
-        logger.info(f"Initializing {predictor_config['type']} predictor")
+
         return PredictorFactory.create(
-            predictor_config["type"], predictor_config["config"]
+            predictor_config["type"],
+            predictor_config["config"],
         )
 
     def _init_detector(self, random_state=None):
@@ -132,7 +132,6 @@ class GraphChangeDetection:
             ChangePointDetector instance
         """
         det_config = self.config["detection"]
-        logger.info(f"Initializing detector with {self.config['model']['type']} method")
 
         # Ensure random_state is compatible type
         if random_state is not None:
@@ -164,9 +163,6 @@ class GraphChangeDetection:
             random_state=random_state,
         )
 
-        logger.info(f"Using distance measure: {detector_config.distance_measure}")
-        logger.info(f"Using betting function: {betting_func_name}")
-
         return ChangePointDetector(detector_config)
 
     def _generate_sequence(self, generator):
@@ -179,7 +175,6 @@ class GraphChangeDetection:
             Dict containing generated graphs and true change points
         """
         model_name = get_full_model_name(self.config["model"]["network"])
-        logger.info(f"Generating {model_name} graph sequence")
 
         # Get model-specific configuration
         model_config = get_config(model_name)
@@ -194,7 +189,7 @@ class GraphChangeDetection:
         Returns:
             Tuple containing (numeric_features, raw_features)
         """
-        logger.info("Extracting graph features")
+
         feature_extractor = NetworkFeatureExtractor()
         features_raw = []
         features_numeric = []
@@ -209,9 +204,6 @@ class GraphChangeDetection:
             )
 
         features_array = np.array(features_numeric)
-        logger.info(
-            f"Dimension of actual data: {features_array.shape} (timesteps × features)"
-        )
         return features_array, features_raw
 
     def _generate_predictions(self, graphs, predictor):
@@ -224,19 +216,12 @@ class GraphChangeDetection:
         Returns:
             List of predicted future adjacency matrices
         """
-        logger.info("Generating graph predictions")
+
         predicted_graphs = []
         horizon = self.config["detection"]["prediction_horizon"]
         history_size = (
             self.config["model"]["predictor"]["config"]["n_history"]
             or predictor.history_size
-        )
-
-        logger.info(
-            f"Predictions will be available after timestep {history_size-1} (need {history_size} history points)"
-        )
-        logger.info(
-            f"For each available timestep, {horizon} predictions will be generated"
         )
 
         for t in range(len(graphs)):
@@ -246,10 +231,7 @@ class GraphChangeDetection:
             if t >= history_size:
                 predictions = predictor.predict(history, horizon=horizon)
                 predicted_graphs.append(predictions)
-                if t == history_size:
-                    logger.info(f"First predictions available at timestep {t}")
 
-        logger.info(f"Generated predictions for {len(predicted_graphs)} timesteps")
         return predicted_graphs
 
     def _process_predictions(self, predicted_graphs):
@@ -261,7 +243,7 @@ class GraphChangeDetection:
         Returns:
             numpy array of predicted features
         """
-        logger.info("Processing predictions into feature space")
+
         feature_extractor = NetworkFeatureExtractor()
         predicted_features = []
 
@@ -277,12 +259,6 @@ class GraphChangeDetection:
             predicted_features.append(timestep_features)
 
         predicted_array = np.array(predicted_features)
-        if predicted_array.size > 0:
-            logger.info(
-                f"Dimension of predictions: {predicted_array.shape} (timesteps × horizon × features)"
-            )
-        else:
-            logger.info("No predictions were generated")
         return predicted_array
 
     def _run_detection_trials(
@@ -305,8 +281,6 @@ class GraphChangeDetection:
         n_trials = trials_config["n_trials"]
         base_seed = trials_config["random_seeds"]
 
-        logger.info(f"Running {n_trials} detection trials...")
-
         # Handle random seeds
         if base_seed is None:
             # Generate completely random seeds
@@ -319,13 +293,10 @@ class GraphChangeDetection:
             # Use provided list of seeds
             random_seeds = np.array(base_seed)
 
-        logger.info(f"Using seeds: {random_seeds.tolist()}")
-
         # Normalize features using the utility function
         features_normalized, feature_means, feature_stds = normalize_features(
             features_numeric
         )
-        logger.info(f"Normalized feature data shape: {features_normalized.shape}")
 
         # Normalize predicted features if available
         predicted_normalized = None
@@ -337,35 +308,11 @@ class GraphChangeDetection:
         # Run individual trials
         individual_results = []
         for trial_idx, seed in enumerate(random_seeds):
-            logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
+
             int_seed = int(seed) if seed is not None else None
 
-            # Create detector configuration
-            detector_config = DetectorConfig(
-                method=self.config["model"]["type"],
-                threshold=self.config["detection"]["threshold"],
-                history_size=self.config["model"]["predictor"]["config"]["n_history"],
-                batch_size=self.config["detection"]["batch_size"],
-                reset=self.config["detection"]["reset"],
-                reset_on_traditional=False,
-                max_window=self.config["detection"]["max_window"],
-                betting_func_config=self.config["detection"]["betting_func_config"],
-                distance_measure=self.config["detection"]["distance"]["measure"],
-                distance_p=self.config["detection"]["distance"]["p"],
-                random_state=int_seed,
-            )
-
-            # Initialize detector
-            detector = ChangePointDetector(detector_config)
-
-            # Log detector settings
-            logger.info(f"Using threshold: {detector_config.threshold:.2f}")
-            logger.info(
-                f"Using betting function: {detector_config.betting_func_config['name']}"
-            )
-            logger.info(f"Using distance measure: {detector_config.distance_measure}")
-            logger.info(f"Using random seed: {int_seed}")
-
+            # Initialize detector with this trial's seed
+            detector = self._init_detector(random_state=int_seed)
             try:
                 # Run detection
                 detection_result = detector.run(
@@ -377,20 +324,6 @@ class GraphChangeDetection:
                 if detection_result is None:
                     logger.warning(f"Detection returned None for trial {trial_idx + 1}")
                     continue
-
-                # Log detection results
-                if "traditional_change_points" in detection_result:
-                    cp = detection_result["traditional_change_points"]
-                    logger.info(
-                        f"Traditional change points detected: {len(cp)} at {cp}"
-                    )
-
-                if "horizon_change_points" in detection_result:
-                    cp = detection_result["horizon_change_points"]
-                    if cp:
-                        logger.info(
-                            f"Horizon change points detected: {len(cp)} at {cp}"
-                        )
 
                 individual_results.append(detection_result)
             except Exception as e:
@@ -420,7 +353,7 @@ class GraphChangeDetection:
             true_change_points: List of ground truth change points
             features_raw: Raw feature data
         """
-        logger.info("Creating visualizations")
+
         output_config = self.config["output"]
         det_config = self.config["detection"]
 
@@ -440,7 +373,10 @@ class GraphChangeDetection:
                     ]
                 }
 
-            betting_config = {"function": betting_func_name, "params": betting_params}
+            betting_config = {
+                "function": betting_func_name,
+                "params": betting_params,
+            }
 
             # Create visualization
             visualizer = MartingaleVisualizer(
@@ -477,7 +413,7 @@ class GraphChangeDetection:
                 true_change_points,
                 individual_trials=trial_results["individual_trials"],
             )
-            logger.info(f"Results exported to CSV in {csv_output_dir}")
+
         except Exception as e:
             logger.error(f"Failed to export results to CSV: {str(e)}")
 
@@ -515,10 +451,6 @@ class GraphChangeDetection:
             else self.config["execution"].get("save_csv", True)
         )
 
-        logger.debug(
-            f"Running with prediction={enable_prediction}, visualize={enable_visualization}, save_csv={enable_csv_export}"
-        )
-
         try:
             # Create output directory with descriptive name
             self._setup_output_directory()
@@ -530,7 +462,6 @@ class GraphChangeDetection:
             true_change_points = sequence_result["change_points"]
 
             features_numeric, features_raw = self._extract_features(graphs)
-            logger.info(f"Extracted features shape: {features_numeric.shape}")
 
             # Prediction is optional
             predictor = None
@@ -541,7 +472,6 @@ class GraphChangeDetection:
                 predictor = self._init_predictor()
                 predicted_graphs = self._generate_predictions(graphs, predictor)
                 predicted_features = self._process_predictions(predicted_graphs)
-                logger.info(f"Generated predictions shape: {predicted_features.shape}")
 
             # Run detection trials
             trial_results = self._run_detection_trials(
@@ -555,7 +485,9 @@ class GraphChangeDetection:
                 and trial_results["aggregated"]
             ):
                 self._create_visualizations(
-                    trial_results["aggregated"], true_change_points, features_raw
+                    trial_results["aggregated"],
+                    true_change_points,
+                    features_raw,
                 )
 
             # Optional CSV export
@@ -573,7 +505,6 @@ class GraphChangeDetection:
                 self.config,
             )
 
-            logger.info("Successfully completed pipeline")
             return results
 
         except Exception as e:

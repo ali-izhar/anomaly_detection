@@ -1,11 +1,41 @@
 # src/utils/data_utils.py
 
-"""Utilities for data processing and transformation."""
+"""Utilities for data processing, transformation, and visualization preparation."""
 
 import numpy as np
+import logging
 from typing import List, Optional, Tuple, Dict, Any, Union
 
+logger = logging.getLogger(__name__)
 
+# Common keys used in the detection results
+# These keys are used by multiple functions and extracted here for easier maintenance
+RESULT_KEYS = {
+    # Keys for traditional martingales
+    "TRADITIONAL_MARTINGALES": "traditional_martingales",
+    "TRADITIONAL_SUM_MARTINGALES": "traditional_sum_martingales",
+    "TRADITIONAL_AVG_MARTINGALES": "traditional_avg_martingales",
+    "TRADITIONAL_CHANGE_POINTS": "traditional_change_points",
+    "INDIVIDUAL_TRADITIONAL_MARTINGALES": "individual_traditional_martingales",
+    # Keys for horizon martingales
+    "HORIZON_MARTINGALES": "horizon_martingales",
+    "HORIZON_SUM_MARTINGALES": "horizon_sum_martingales",
+    "HORIZON_AVG_MARTINGALES": "horizon_avg_martingales",
+    "HORIZON_CHANGE_POINTS": "horizon_change_points",
+    "INDIVIDUAL_HORIZON_MARTINGALES": "individual_horizon_martingales",
+    "EARLY_WARNINGS": "early_warnings",
+    # Keys for sequence results
+    "CHANGE_POINTS": "change_points",
+    "MODEL_NAME": "model_name",
+    # Keys for output configuration
+    "OUTPUT": "output",
+    "SAVE_FEATURES": "save_features",
+    "SAVE_PREDICTIONS": "save_predictions",
+    "SAVE_MARTINGALES": "save_martingales",
+}
+
+
+# Utility functions for data normalization
 def normalize_features(
     features_numeric: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -93,13 +123,14 @@ def prepare_result_data(
 
     # Start with basic information
     results = {
-        "true_change_points": sequence_result.get("change_points", []),
-        "model_name": sequence_result.get("model_name", ""),
+        "true_change_points": sequence_result.get(RESULT_KEYS["CHANGE_POINTS"], []),
+        "model_name": sequence_result.get(RESULT_KEYS["MODEL_NAME"], ""),
         "params": config,
     }
 
     # Add data if configured to save
-    if config.get("output", {}).get("save_features", False):
+    output_config = config.get(RESULT_KEYS["OUTPUT"], {})
+    if output_config.get(RESULT_KEYS["SAVE_FEATURES"], False):
         results.update(
             {
                 "features_raw": features_raw,
@@ -107,8 +138,8 @@ def prepare_result_data(
             }
         )
 
-    if predicted_graphs is not None and config.get("output", {}).get(
-        "save_predictions", False
+    if predicted_graphs is not None and output_config.get(
+        RESULT_KEYS["SAVE_PREDICTIONS"], False
     ):
         results.update(
             {
@@ -123,8 +154,85 @@ def prepare_result_data(
             )
 
     # Add detection results if available
-    if trial_results and config.get("output", {}).get("save_martingales", False):
+    if trial_results and output_config.get(RESULT_KEYS["SAVE_MARTINGALES"], False):
         if "aggregated" in trial_results:
             results.update(trial_results["aggregated"])
 
     return results
+
+
+def prepare_martingale_visualization_data(
+    detection_result: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Prepare detection results for visualization by ensuring all required fields exist.
+
+    Args:
+        detection_result: Dictionary containing detection results
+
+    Returns:
+        Dictionary with all necessary fields for visualization
+    """
+    # Initialize a copy of the detection result that we can modify
+    complete_result = detection_result.copy()
+
+    # Ensure basic martingale data exists
+    trad_mart = RESULT_KEYS["TRADITIONAL_MARTINGALES"]
+    trad_sum_mart = RESULT_KEYS["TRADITIONAL_SUM_MARTINGALES"]
+
+    if trad_mart not in complete_result and trad_sum_mart in complete_result:
+        complete_result[trad_mart] = complete_result[trad_sum_mart].copy()
+
+    # Add missing horizon martingale fields if needed
+    if trad_sum_mart in complete_result:
+        # Initialize standard horizon fields if missing
+        horizon_pairs = [
+            (RESULT_KEYS["HORIZON_MARTINGALES"], trad_sum_mart),
+            (RESULT_KEYS["HORIZON_SUM_MARTINGALES"], trad_sum_mart),
+            (
+                RESULT_KEYS["HORIZON_AVG_MARTINGALES"],
+                RESULT_KEYS["TRADITIONAL_AVG_MARTINGALES"],
+            ),
+        ]
+
+        for key, base_key in horizon_pairs:
+            if key not in complete_result and base_key in complete_result:
+                complete_result[key] = np.zeros_like(complete_result[base_key])
+
+        # Add empty change points if missing
+        if RESULT_KEYS["HORIZON_CHANGE_POINTS"] not in complete_result:
+            complete_result[RESULT_KEYS["HORIZON_CHANGE_POINTS"]] = []
+
+        if RESULT_KEYS["EARLY_WARNINGS"] not in complete_result:
+            complete_result[RESULT_KEYS["EARLY_WARNINGS"]] = []
+
+        # Initialize individual horizon martingales if needed
+        indiv_horizon = RESULT_KEYS["INDIVIDUAL_HORIZON_MARTINGALES"]
+        indiv_trad = RESULT_KEYS["INDIVIDUAL_TRADITIONAL_MARTINGALES"]
+
+        if indiv_horizon not in complete_result and indiv_trad in complete_result:
+            n_features = len(complete_result[indiv_trad])
+            complete_result[indiv_horizon] = [
+                np.zeros_like(feat_martingale)
+                for feat_martingale in complete_result[indiv_trad]
+            ]
+
+    # Ensure all change points are lists (not NumPy arrays)
+    change_point_keys = [
+        RESULT_KEYS["TRADITIONAL_CHANGE_POINTS"],
+        RESULT_KEYS["HORIZON_CHANGE_POINTS"],
+        RESULT_KEYS["EARLY_WARNINGS"],
+    ]
+
+    for key in change_point_keys:
+        if key in complete_result:
+            if isinstance(complete_result[key], np.ndarray):
+                complete_result[key] = complete_result[key].tolist()
+            if not isinstance(complete_result[key], list):
+                complete_result[key] = []
+
+    # Replace any scalar martingale values with arrays
+    for key in complete_result:
+        if key.endswith("_martingales") and np.isscalar(complete_result[key]):
+            complete_result[key] = np.array([complete_result[key]])
+
+    return complete_result
