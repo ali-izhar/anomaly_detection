@@ -128,6 +128,9 @@ def prepare_result_data(
     if trial_results and output_config.get("save_martingales", False):
         if "aggregated" in trial_results:
             results.update(trial_results["aggregated"])
+        # Add the individual trials data
+        if "individual_trials" in trial_results:
+            results["individual_trials"] = trial_results["individual_trials"]
 
     return results
 

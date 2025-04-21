@@ -94,18 +94,18 @@ def analyze_detection_results(
     summary_data = [
         [
             "Detection Rate",
-            f"{detection_rate_trad:.1%}",
-            f"{detection_rate_horizon:.1%}",
+            f"{detection_rate_trad:.2%}",
+            f"{detection_rate_horizon:.2%}",
         ],
         [
             "Average Delay",
-            f"{avg_trad_delay:.1f}" if avg_trad_delay is not None else "N/A",
-            f"{avg_horizon_delay:.1f}" if avg_horizon_delay is not None else "N/A",
+            f"{avg_trad_delay:.2f}" if avg_trad_delay is not None else "N/A",
+            f"{avg_horizon_delay:.2f}" if avg_horizon_delay is not None else "N/A",
         ],
         [
             "Avg Delay Reduction",
             "",
-            f"{avg_reduction:.1%}" if avg_reduction is not None else "N/A",
+            f"{avg_reduction:.2%}" if avg_reduction is not None else "N/A",
         ],
     ]
 
@@ -150,131 +150,166 @@ def analyze_multiple_trials(
 
     num_trials = len(individual_trials)
 
-    # Collect all detection points across trials
-    all_traditional_points = []
-    all_horizon_points = []
-
-    for trial in individual_trials:
-        all_traditional_points.extend(trial.get("traditional_change_points", []))
-        all_horizon_points.extend(trial.get("horizon_change_points", []))
-
-    # Compute consensus detection points (points detected in multiple trials)
-    consensus_traditional = compute_consensus_points(
-        all_traditional_points, threshold=0.3, tolerance=3
-    )
-    consensus_horizon = compute_consensus_points(
-        all_horizon_points, threshold=0.3, tolerance=3
-    )
+    # Log the received data for debugging
+    logger.debug(f"Analyzing multiple trials data with {num_trials} trials")
+    logger.debug(f"True change points: {true_change_points}")
 
     # Track per-trial detection statistics
     trial_statistics = []
+    all_trad_detections = []
+    all_horizon_detections = []
+    all_trad_delays = []
+    all_horizon_delays = []
+
+    # For collecting data per trial and change point
+    trial_data = []
+
     for trial_idx, trial in enumerate(individual_trials):
         trad_points = trial.get("traditional_change_points", [])
         horizon_points = trial.get("horizon_change_points", [])
 
-        # Calculate detection metrics for this trial
-        trad_rate = compute_detection_rate(true_change_points, trad_points)
-        horizon_rate = compute_detection_rate(true_change_points, horizon_points)
-        trad_delay = compute_average_delay(true_change_points, trad_points)
-        horizon_delay = compute_average_delay(true_change_points, horizon_points)
+        logger.debug(
+            f"Trial {trial_idx+1}: Traditional points: {trad_points}, Horizon points: {horizon_points}"
+        )
+
+        # For each change point, find the corresponding detection
+        cp_trad_delays = []
+        cp_horizon_delays = []
+        cp_trad_detections = []
+        cp_horizon_detections = []
+
+        for cp in true_change_points:
+            trad_delay, trad_detection = find_detection_delay(cp, trad_points)
+            horizon_delay, horizon_detection = find_detection_delay(cp, horizon_points)
+
+            # Store delays and detections for this trial
+            if trad_detection is not None:
+                cp_trad_delays.append(trad_delay)
+                cp_trad_detections.append(trad_detection)
+                all_trad_detections.append(trad_detection)
+                all_trad_delays.append(trad_delay)
+
+            if horizon_detection is not None:
+                cp_horizon_delays.append(horizon_delay)
+                cp_horizon_detections.append(horizon_detection)
+                all_horizon_detections.append(horizon_detection)
+                all_horizon_delays.append(horizon_delay)
+
+            # Add row for this CP and trial
+            trial_data.append(
+                [
+                    f"Trial {trial_idx+1}",
+                    cp,
+                    trad_detection if trad_detection is not None else "Not detected",
+                    trad_delay if trad_delay is not None else "-",
+                    (
+                        horizon_detection
+                        if horizon_detection is not None
+                        else "Not detected"
+                    ),
+                    horizon_delay if horizon_delay is not None else "-",
+                    compute_delay_reduction(trad_delay, horizon_delay),
+                ]
+            )
+
+        # Calculate trial-level statistics
+        avg_trad_delay_trial = np.mean(cp_trad_delays) if cp_trad_delays else None
+        avg_horizon_delay_trial = (
+            np.mean(cp_horizon_delays) if cp_horizon_delays else None
+        )
+        trad_rate = (
+            len(cp_trad_detections) / len(true_change_points)
+            if true_change_points
+            else 0.0
+        )
+        horizon_rate = (
+            len(cp_horizon_detections) / len(true_change_points)
+            if true_change_points
+            else 0.0
+        )
 
         trial_statistics.append(
             {
                 "trial": trial_idx + 1,
                 "trad_rate": trad_rate,
                 "horizon_rate": horizon_rate,
-                "trad_delay": trad_delay,
-                "horizon_delay": horizon_delay,
-                "trad_points": trad_points,
-                "horizon_points": horizon_points,
+                "trad_delay": avg_trad_delay_trial,
+                "horizon_delay": avg_horizon_delay_trial,
             }
         )
 
-    # Calculate detection metrics for each true change point using consensus detections
-    analysis_data = []
-    for idx, cp in enumerate(true_change_points):
-        # Find the closest traditional detection after the change point
-        trad_delay, trad_detection = find_detection_delay(cp, consensus_traditional)
+    # Calculate global average detection times and delays
+    avg_trad_detection = np.mean(all_trad_detections) if all_trad_detections else None
+    avg_horizon_detection = (
+        np.mean(all_horizon_detections) if all_horizon_detections else None
+    )
+    avg_trad_delay = np.mean(all_trad_delays) if all_trad_delays else None
+    avg_horizon_delay = np.mean(all_horizon_delays) if all_horizon_delays else None
 
-        # Find the closest horizon detection after the change point
-        horizon_delay, horizon_detection = find_detection_delay(cp, consensus_horizon)
+    # Log calculated values for debugging
+    logger.debug(f"All traditional detections: {all_trad_detections}")
+    logger.debug(f"All horizon detections: {all_horizon_detections}")
+    logger.debug(f"Average traditional detection: {avg_trad_detection}")
+    logger.debug(f"Average horizon detection: {avg_horizon_detection}")
+    logger.debug(f"Average traditional delay: {avg_trad_delay}")
+    logger.debug(f"Average horizon delay: {avg_horizon_delay}")
 
-        # Calculate the delay reduction from using horizon detection
-        delay_reduction = compute_delay_reduction(trad_delay, horizon_delay)
-
-        # Count how many trials detected this change point
-        trad_detection_count = sum(
-            1
-            for stat in trial_statistics
-            if any(abs(tp - cp) <= 5 for tp in stat["trad_points"])
-        )
-        horizon_detection_count = sum(
-            1
-            for stat in trial_statistics
-            if any(abs(hp - cp) <= 5 for hp in stat["horizon_points"])
-        )
-
-        analysis_data.append(
-            [
-                cp,
-                f"{trad_detection if trad_detection is not None else 'Not detected'} ({trad_detection_count}/{num_trials})",
-                trad_delay if trad_delay is not None else "-",
-                f"{horizon_detection if horizon_detection is not None else 'Not detected'} ({horizon_detection_count}/{num_trials})",
-                horizon_delay if horizon_delay is not None else "-",
-                delay_reduction,
-            ]
-        )
-
-    # Generate overall summary statistics based on all trials
+    # Calculate overall detection rates
     avg_trad_detection_rate = np.mean([stat["trad_rate"] for stat in trial_statistics])
     avg_horizon_detection_rate = np.mean(
         [stat["horizon_rate"] for stat in trial_statistics]
     )
 
-    # Average delays (only include trials with actual detections)
-    valid_trad_delays = [
-        stat["trad_delay"]
-        for stat in trial_statistics
-        if stat["trad_delay"] is not None
-    ]
-    valid_horizon_delays = [
-        stat["horizon_delay"]
-        for stat in trial_statistics
-        if stat["horizon_delay"] is not None
-    ]
-
-    avg_trad_delay = np.mean(valid_trad_delays) if valid_trad_delays else None
-    avg_horizon_delay = np.mean(valid_horizon_delays) if valid_horizon_delays else None
+    # Calculate delay reduction
     avg_reduction = compute_average_reduction(avg_trad_delay, avg_horizon_delay)
 
-    # Create the detection details table
+    # Create comprehensive summary table with all trials and aggregate data
     headers = [
+        "Trial",
         "True CP",
-        "Traditional Detection (trials)",
+        "Traditional Detection",
         "Delay (steps)",
-        "Horizon Detection (trials)",
+        "Horizon Detection",
         "Delay (steps)",
         "Delay Reduction",
     ]
 
-    table = tabulate(analysis_data, headers=headers, tablefmt=report_format)
+    # Add aggregate row
+    trial_data.append(
+        [
+            "Aggregate",
+            "/".join(str(cp) for cp in true_change_points),
+            f"{avg_trad_detection:.2f}" if avg_trad_detection is not None else "N/A",
+            f"{avg_trad_delay:.2f}" if avg_trad_delay is not None else "N/A",
+            (
+                f"{avg_horizon_detection:.2f}"
+                if avg_horizon_detection is not None
+                else "N/A"
+            ),
+            f"{avg_horizon_delay:.2f}" if avg_horizon_delay is not None else "N/A",
+            f"{avg_reduction:.2%}" if avg_reduction is not None else "N/A",
+        ]
+    )
 
-    # Create summary table
+    # Create the table
+    table = tabulate(trial_data, headers=headers, tablefmt=report_format)
+
+    # Generate summary statistics table
     summary_data = [
         [
             "Detection Rate",
-            f"{avg_trad_detection_rate:.1%}",
-            f"{avg_horizon_detection_rate:.1%}",
+            f"{avg_trad_detection_rate:.2%}",
+            f"{avg_horizon_detection_rate:.2%}",
         ],
         [
             "Average Delay",
-            f"{avg_trad_delay:.1f}" if avg_trad_delay is not None else "N/A",
-            f"{avg_horizon_delay:.1f}" if avg_horizon_delay is not None else "N/A",
+            f"{avg_trad_delay:.2f}" if avg_trad_delay is not None else "N/A",
+            f"{avg_horizon_delay:.2f}" if avg_horizon_delay is not None else "N/A",
         ],
         [
             "Avg Delay Reduction",
             "",
-            f"{avg_reduction:.1%}" if avg_reduction is not None else "N/A",
+            f"{avg_reduction:.2%}" if avg_reduction is not None else "N/A",
         ],
     ]
 
@@ -284,43 +319,14 @@ def analyze_multiple_trials(
         tablefmt=report_format,
     )
 
-    # Create per-trial table for detailed comparison
-    trial_data = []
-    for stat in trial_statistics:
-        trial_data.append(
-            [
-                stat["trial"],
-                f"{stat['trad_rate']:.1%}",
-                f"{stat['horizon_rate']:.1%}",
-                (
-                    f"{stat['trad_delay']:.1f}"
-                    if stat["trad_delay"] is not None
-                    else "N/A"
-                ),
-                (
-                    f"{stat['horizon_delay']:.1f}"
-                    if stat["horizon_delay"] is not None
-                    else "N/A"
-                ),
-            ]
-        )
-
-    trial_table = tabulate(
-        trial_data,
-        headers=["Trial", "Trad. Rate", "Horiz. Rate", "Trad. Delay", "Horiz. Delay"],
-        tablefmt=report_format,
-    )
-
-    # Combine tables with headers
+    # Create the report with the new table layout
     report = (
         f"Change Point Detection Analysis ({num_trials} Trials)\n"
         "==============================\n\n"
-        "Consensus Detection Details:\n"
+        "Detection Details (All Trials + Aggregate):\n"
         f"{table}\n\n"
-        "Summary Statistics (Avg. across trials):\n"
-        f"{summary_table}\n\n"
-        "Per-Trial Statistics:\n"
-        f"{trial_table}\n"
+        "Summary Statistics:\n"
+        f"{summary_table}\n"
     )
 
     return report
@@ -391,15 +397,23 @@ def find_detection_delay(
     if not detections:
         return None, None
 
-    # Find detections that occur after the change point and within max_delay
-    valid_detections = [
-        d for d in detections if d >= change_point and d - change_point <= max_delay
-    ]
+    # Find detections that occur at or after the change point and within max_delay
+    # For detections at the change point itself or 1 step before,
+    # still count them but with a delay of 0
+    valid_detections = []
+    for d in detections:
+        # Detection happens before or at the change point
+        if d <= change_point and change_point - d <= 1:
+            valid_detections.append(d)
+        # Detection happens after the change point but within max_delay
+        elif d > change_point and d - change_point <= max_delay:
+            valid_detections.append(d)
 
     if valid_detections:
         # Find the earliest detection
         earliest = min(valid_detections)
-        delay = earliest - change_point
+        # Calculate delay (ensure it's not negative)
+        delay = max(0, earliest - change_point)
         return delay, earliest
 
     return None, None
@@ -429,11 +443,11 @@ def compute_delay_reduction(
     reduction = (traditional_delay - horizon_delay) / traditional_delay
 
     if reduction > 0:
-        return f"{reduction:.1%}"
+        return f"{reduction:.2%}"
     elif reduction == 0:
         return "0%"
     else:
-        return f"{reduction:.1%} (increased)"
+        return f"{reduction:.2%} (increased)"
 
 
 def compute_average_delay(
