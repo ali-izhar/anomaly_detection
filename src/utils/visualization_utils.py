@@ -75,21 +75,3 @@ def prepare_martingale_visualization_data(
             complete_result[key] = np.array([complete_result[key]])
 
     return complete_result
-
-
-def create_betting_config_for_visualization(
-    betting_function_name: str, epsilon: float = 0.7
-) -> Dict[str, Any]:
-    """Create a betting function configuration suitable for visualization.
-
-    Args:
-        betting_function_name: Name of the betting function (e.g., 'power')
-        epsilon: Epsilon parameter for power betting function
-
-    Returns:
-        Dictionary containing betting configuration
-    """
-    return {
-        "function": betting_function_name,
-        "params": {betting_function_name: {"epsilon": epsilon}},
-    }

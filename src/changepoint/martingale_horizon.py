@@ -82,9 +82,6 @@ def compute_horizon_martingale(
         traditional_martingale_values = trad_result.get(
             "traditional_martingales", np.ones(len(data))
         ).tolist()
-        logger.info(
-            f"Computed traditional martingale values, length: {len(traditional_martingale_values)}"
-        )
 
     # Ensure traditional_martingale_values has the right length
     if len(traditional_martingale_values) < len(data):
@@ -95,15 +92,15 @@ def compute_horizon_martingale(
     betting_function = get_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
-    logger.info("Horizon Martingale Input Dimensions:")
-    logger.info(f"  Sequence length: {len(data)}")
-    logger.info(f"  Number of predictions: {len(predicted_data)}")
-    logger.info(f"  Predictions per timestep: {len(predicted_data[0])}")
-    logger.info(f"  History size: {config.history_size}")
-    logger.info(
+    logger.debug("Horizon Martingale Input Dimensions:")
+    logger.debug(f"  Sequence length: {len(data)}")
+    logger.debug(f"  Number of predictions: {len(predicted_data)}")
+    logger.debug(f"  Predictions per timestep: {len(predicted_data[0])}")
+    logger.debug(f"  History size: {config.history_size}")
+    logger.debug(
         f"  Window size: {config.window_size if config.window_size else 'None'}"
     )
-    logger.info("-" * 50)
+    logger.debug("-" * 50)
 
     try:
         # Initialize horizon martingale values
@@ -134,7 +131,6 @@ def compute_horizon_martingale(
             horizon_weights = [
                 w / sum(unnormalized_weights) for w in unnormalized_weights
             ]
-            logger.info(f"Horizon weights: {horizon_weights}")
         else:
             horizon_weights = []
 
@@ -166,13 +162,8 @@ def compute_horizon_martingale(
             # Use 1.0 for the first timestep
             trad_base = traditional_martingale_values[i - 1] if i > 0 else 1.0
 
-            # Log the traditional martingale base we're using
-            logger.info(f"Time {i}, Using traditional martingale base: {trad_base:.4f}")
-
             # Check predictions at multiple horizons
             horizon_martingales_at_t = []
-
-            logger.info(f"Time {i}, Processing horizon martingale")
 
             # For each horizon h, check if there's evidence of a change in the next h steps
             for h in range(num_horizons):
@@ -223,10 +214,6 @@ def compute_horizon_martingale(
                     scale_factor = max(0.1, min(1.0, 1.0 - diff / 3.0))
                     adjusted_pv = pred_pv * scale_factor
 
-                    logger.info(
-                        f"Time {i}, Horizon {h}, p-value: {pred_pv:.6f}, adj: {adjusted_pv:.6f}, diff: {diff:.4f}"
-                    )
-
                     # Update martingale for this horizon using traditional as base
                     m_h = trad_base * betting_function(1.0, adjusted_pv)
                 except Exception as e:
@@ -241,11 +228,6 @@ def compute_horizon_martingale(
                 for h in range(len(horizon_martingales_at_t), num_horizons):
                     horizon_martingales_at_t.append(trad_base)
 
-            # Log horizon martingales
-            logger.info(
-                f"Time {i}, Horizon martingales: {[round(m, 4) for m in horizon_martingales_at_t]}"
-            )
-
             # Combine horizons using weighted sum
             if horizon_weights and horizon_martingales_at_t:
                 horizon_val = sum(
@@ -253,8 +235,6 @@ def compute_horizon_martingale(
                 )
             else:
                 horizon_val = trad_base
-
-            logger.info(f"Time {i}, Combined horizon martingale: {horizon_val:.4f}")
 
             # Update state for horizon-specific martingales (for tracking)
             state.horizon_martingales_h = horizon_martingales_at_t
@@ -266,14 +246,14 @@ def compute_horizon_martingale(
 
             # Check for horizon-based change detection
             if horizon_val > config.threshold:
-                logger.info(
+                logger.debug(
                     f"Horizon martingale detected change at t={i}: {horizon_val:.4f} > {config.threshold}"
                 )
                 horizon_change_points.append(i)
 
                 # Reset martingale state after detection
                 if config.reset:
-                    logger.info(
+                    logger.debug(
                         f"Resetting horizon martingale state after detection at t={i}"
                     )
                     state.horizon_martingales_h = [1.0] * num_horizons
@@ -349,17 +329,17 @@ def multiview_horizon_martingale(
     betting_function = get_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
-    logger.info("Multiview Horizon Martingale Input Dimensions:")
-    logger.info(f"  Number of features: {len(data)}")
-    logger.info(f"  Sequence length per feature: {len(data[0])}")
-    logger.info(f"  Number of prediction timesteps: {len(predicted_data[0])}")
-    logger.info(f"  Predictions per timestep: {len(predicted_data[0][0])}")
-    logger.info(f"  History size: {config.history_size}")
-    logger.info(
+    logger.debug("Multiview Horizon Martingale Input Dimensions:")
+    logger.debug(f"  Number of features: {len(data)}")
+    logger.debug(f"  Sequence length per feature: {len(data[0])}")
+    logger.debug(f"  Number of prediction timesteps: {len(predicted_data[0])}")
+    logger.debug(f"  Predictions per timestep: {len(predicted_data[0][0])}")
+    logger.debug(f"  History size: {config.history_size}")
+    logger.debug(
         f"  Window size: {config.window_size if config.window_size else 'None'}"
     )
-    logger.info(f"  Batch size: {batch_size}")
-    logger.info("-" * 50)
+    logger.debug(f"  Batch size: {batch_size}")
+    logger.debug("-" * 50)
 
     try:
         # Get traditional martingale results
@@ -373,10 +353,6 @@ def multiview_horizon_martingale(
 
         trad_change_points = trad_result["traditional_change_points"]
         trad_individual_martingales = trad_result["individual_traditional_martingales"]
-
-        logger.info(
-            f"Using traditional martingale values as base. Features: {len(trad_individual_martingales)}"
-        )
 
         num_features = len(data)
         num_samples = len(data[0])
@@ -415,7 +391,6 @@ def multiview_horizon_martingale(
             horizon_weights = [
                 w / sum(unnormalized_weights) for w in unnormalized_weights
             ]
-            logger.info(f"Horizon weights: {horizon_weights}")
         else:
             horizon_weights = []
 
@@ -427,9 +402,6 @@ def multiview_horizon_martingale(
         idx = 0
         while idx < num_samples:
             batch_end = min(idx + batch_size, num_samples)
-            logger.info(
-                f"Processing batch [{idx}:{batch_end}]: Batch size = {batch_end - idx}"
-            )
 
             # Process each sample in the current batch.
             for i in range(idx, batch_end):
@@ -529,12 +501,6 @@ def multiview_horizon_martingale(
                             scale_factor = max(0.1, min(1.0, 1.0 - diff / 3.0))
                             adjusted_pv = pred_pv * scale_factor
 
-                            # Only log first feature to avoid too many logs
-                            if j == 0 and i % 10 == 0:
-                                logger.info(
-                                    f"Feature {j}, Time {i}, Horizon {h}, p-value: {pred_pv:.6f}, adj: {adjusted_pv:.6f}, diff: {diff:.4f}"
-                                )
-
                             # Update martingale for this horizon using the traditional martingale as base
                             m_jh = trad_base * betting_function(1.0, adjusted_pv)
                         except Exception as e:
@@ -583,12 +549,6 @@ def multiview_horizon_martingale(
                     # Calculate average separately - exactly matching traditional implementation
                     avg_horizon = total_horizon / num_features
 
-                # Log combined martingale occasionally
-                if i % 10 == 0:
-                    logger.info(
-                        f"Time {i}, Combined horizon martingale: {total_horizon:.4f}"
-                    )
-
                 # Record results directly without using record_values which requires traditional values
                 horizon_sum_martingales.append(total_horizon)
                 horizon_avg_martingales.append(avg_horizon)
@@ -604,7 +564,7 @@ def multiview_horizon_martingale(
 
                     # Reset martingale state
                     if config.reset:
-                        logger.info(
+                        logger.debug(
                             f"Resetting horizon martingale state after detection at t={i}"
                         )
                         state.reset(num_features)
@@ -614,7 +574,7 @@ def multiview_horizon_martingale(
 
                 # Also reset if traditional martingale detected a change and reset_on_traditional is enabled
                 if i in trad_change_points and config.reset_on_traditional:
-                    logger.info(
+                    logger.debug(
                         f"Resetting horizon martingale due to traditional detection at t={i}"
                     )
                     state.reset(num_features)

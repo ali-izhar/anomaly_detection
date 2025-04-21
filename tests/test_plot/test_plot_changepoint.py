@@ -19,7 +19,7 @@ project_root = str(Path(__file__).parent.parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.plot.plot_changepoint import MartingaleVisualizer
+from src.plot.plot_martingale import MartingaleVisualizer
 
 
 # Test data fixtures

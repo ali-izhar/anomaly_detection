@@ -142,7 +142,6 @@ class ChangePointDetector(Generic[ScalarType]):
         """
         # Use provided configuration or fall back to the default settings.
         self.config = config or DetectorConfig()
-        print("self.config", self.config)
 
         # If no betting function config is provided, set a default configuration.
         if self.config.betting_func_config is None:

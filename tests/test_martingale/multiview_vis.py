@@ -23,7 +23,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.changepoint.detector import ChangePointDetector, DetectorConfig
-from src.plot.plot_changepoint import MartingaleVisualizer
+from src.plot.plot_martingale import MartingaleVisualizer
 from src.configs.loader import get_config
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator

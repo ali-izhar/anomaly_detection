@@ -1,4 +1,4 @@
-# src/output_manager.py
+# src/utils/output_manager.py
 
 """Output manager for exporting change detection results to CSV."""
 

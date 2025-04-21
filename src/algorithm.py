@@ -2,7 +2,6 @@
 
 """Core pipeline for forecast-based graph structural change detection."""
 
-from pathlib import Path
 import logging
 import yaml
 import numpy as np
@@ -15,14 +14,11 @@ from src.configs import get_config, get_full_model_name
 from src.graph.generator import GraphGenerator
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
-from src.plot.plot_changepoint import MartingaleVisualizer
-from src.plot.visualization_utils import (
-    prepare_martingale_visualization_data,
-    create_betting_config_for_visualization,
-)
+from src.plot.plot_martingale import MartingaleVisualizer
+from src.plot.visualization_utils import prepare_martingale_visualization_data
 from src.predictor import PredictorFactory
-from src.utils.output_manager import OutputManager
-from src.utils.data_utils import (
+from src.utils import (
+    OutputManager,
     normalize_features,
     normalize_predictions,
     prepare_result_data,
@@ -87,105 +83,6 @@ class GraphChangeDetection:
             level=logging.INFO,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
-
-    def run(self, prediction=None, visualize=None, save_csv=None):
-        """Run the complete detection pipeline.
-
-        Args:
-            prediction: Whether to generate and use predictions for detection.
-                       If None, uses config value.
-            visualize: Whether to create visualizations of the results.
-                       If None, uses config value.
-            save_csv: Whether to save results to CSV files.
-                      If None, uses config value.
-
-        Returns:
-            Dictionary containing all results
-
-        Raises:
-            RuntimeError: If the pipeline execution fails
-        """
-        # Use provided parameters or fall back to config values
-        enable_prediction = (
-            prediction
-            if prediction is not None
-            else self.config["execution"].get("enable_prediction", True)
-        )
-        enable_visualization = (
-            visualize
-            if visualize is not None
-            else self.config["execution"].get("enable_visualization", True)
-        )
-        enable_csv_export = (
-            save_csv
-            if save_csv is not None
-            else self.config["execution"].get("save_csv", True)
-        )
-
-        logger.debug(
-            f"Running with prediction={enable_prediction}, visualize={enable_visualization}, save_csv={enable_csv_export}"
-        )
-
-        try:
-            # Create output directory with descriptive name
-            self._setup_output_directory()
-
-            # Run each pipeline stage
-            generator = self._init_generator()
-            sequence_result = self._generate_sequence(generator)
-            graphs = sequence_result["graphs"]
-            true_change_points = sequence_result["change_points"]
-
-            features_numeric, features_raw = self._extract_features(graphs)
-            logger.info(f"Extracted features shape: {features_numeric.shape}")
-
-            # Prediction is optional
-            predictor = None
-            predicted_graphs = None
-            predicted_features = None
-
-            if enable_prediction:
-                predictor = self._init_predictor()
-                predicted_graphs = self._generate_predictions(graphs, predictor)
-                predicted_features = self._process_predictions(predicted_graphs)
-                logger.info(f"Generated predictions shape: {predicted_features.shape}")
-
-            # Run detection trials
-            trial_results = self._run_detection_trials(
-                features_numeric, predicted_features, true_change_points
-            )
-
-            # Optional visualization
-            if (
-                enable_visualization
-                and self.config["output"]["visualization"]["enabled"]
-                and trial_results["aggregated"]
-            ):
-                self._create_visualizations(
-                    trial_results["aggregated"], true_change_points, features_raw
-                )
-
-            # Optional CSV export
-            if enable_csv_export and trial_results["aggregated"]:
-                self._export_results_to_csv(trial_results, true_change_points)
-
-            # Compile final results
-            results = prepare_result_data(
-                sequence_result,
-                features_numeric,
-                features_raw,
-                predicted_graphs,
-                trial_results,
-                predictor,
-                self.config,
-            )
-
-            logger.info("Successfully completed pipeline")
-            return results
-
-        except Exception as e:
-            logger.error(f"Pipeline execution failed: {str(e)}")
-            raise
 
     def _setup_output_directory(self):
         """Create timestamped output directory with descriptive name."""
@@ -531,12 +428,19 @@ class GraphChangeDetection:
             # Prepare the data for visualization using the utility function
             complete_result = prepare_martingale_visualization_data(detection_result)
 
-            # Create betting config using the utility function
+            # Use the actual betting configuration from initialization
             betting_func_name = det_config["betting_func_config"]["name"]
-            epsilon = det_config["betting_func_config"]["power"]["epsilon"]
-            betting_config = create_betting_config_for_visualization(
-                betting_func_name, epsilon
-            )
+            betting_params = {}
+
+            # Only include params specific to the selected betting function
+            if betting_func_name in det_config["betting_func_config"]:
+                betting_params = {
+                    betting_func_name: det_config["betting_func_config"][
+                        betting_func_name
+                    ]
+                }
+
+            betting_config = {"function": betting_func_name, "params": betting_params}
 
             # Create visualization
             visualizer = MartingaleVisualizer(
@@ -576,3 +480,102 @@ class GraphChangeDetection:
             logger.info(f"Results exported to CSV in {csv_output_dir}")
         except Exception as e:
             logger.error(f"Failed to export results to CSV: {str(e)}")
+
+    def run(self, prediction=None, visualize=None, save_csv=None):
+        """Run the complete detection pipeline.
+
+        Args:
+            prediction: Whether to generate and use predictions for detection.
+                       If None, uses config value.
+            visualize: Whether to create visualizations of the results.
+                       If None, uses config value.
+            save_csv: Whether to save results to CSV files.
+                      If None, uses config value.
+
+        Returns:
+            Dictionary containing all results
+
+        Raises:
+            RuntimeError: If the pipeline execution fails
+        """
+        # Use provided parameters or fall back to config values
+        enable_prediction = (
+            prediction
+            if prediction is not None
+            else self.config["execution"].get("enable_prediction", True)
+        )
+        enable_visualization = (
+            visualize
+            if visualize is not None
+            else self.config["execution"].get("enable_visualization", True)
+        )
+        enable_csv_export = (
+            save_csv
+            if save_csv is not None
+            else self.config["execution"].get("save_csv", True)
+        )
+
+        logger.debug(
+            f"Running with prediction={enable_prediction}, visualize={enable_visualization}, save_csv={enable_csv_export}"
+        )
+
+        try:
+            # Create output directory with descriptive name
+            self._setup_output_directory()
+
+            # Run each pipeline stage
+            generator = self._init_generator()
+            sequence_result = self._generate_sequence(generator)
+            graphs = sequence_result["graphs"]
+            true_change_points = sequence_result["change_points"]
+
+            features_numeric, features_raw = self._extract_features(graphs)
+            logger.info(f"Extracted features shape: {features_numeric.shape}")
+
+            # Prediction is optional
+            predictor = None
+            predicted_graphs = None
+            predicted_features = None
+
+            if enable_prediction:
+                predictor = self._init_predictor()
+                predicted_graphs = self._generate_predictions(graphs, predictor)
+                predicted_features = self._process_predictions(predicted_graphs)
+                logger.info(f"Generated predictions shape: {predicted_features.shape}")
+
+            # Run detection trials
+            trial_results = self._run_detection_trials(
+                features_numeric, predicted_features, true_change_points
+            )
+
+            # Optional visualization
+            if (
+                enable_visualization
+                and self.config["output"]["visualization"]["enabled"]
+                and trial_results["aggregated"]
+            ):
+                self._create_visualizations(
+                    trial_results["aggregated"], true_change_points, features_raw
+                )
+
+            # Optional CSV export
+            if enable_csv_export and trial_results["aggregated"]:
+                self._export_results_to_csv(trial_results, true_change_points)
+
+            # Compile final results
+            results = prepare_result_data(
+                sequence_result,
+                features_numeric,
+                features_raw,
+                predicted_graphs,
+                trial_results,
+                predictor,
+                self.config,
+            )
+
+            logger.info("Successfully completed pipeline")
+            return results
+
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {str(e)}")
+            raise

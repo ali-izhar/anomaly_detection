@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 
-"""Entry point for running the graph change point detection pipeline.
-
-This script handles command-line arguments and runs the detection pipeline.
-"""
+"""Entry point for running the graph change point detection pipeline."""
 
 import sys
 import argparse

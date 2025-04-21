@@ -25,7 +25,7 @@ from src.graph.metrics import (
     FeatureMetrics,
     DistributionMetrics,
 )
-from src.plot.plotting import (
+from src.plot.plot_config import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
     LINE_STYLE as LS,

@@ -117,17 +117,6 @@ def compute_traditional_martingale(
                 state.traditional_martingale = new_trad
                 state.saved_traditional.append(new_trad)
 
-            # Periodically log the current state.
-            if i > 0 and i % 10 == 0:
-                logger.debug(
-                    f"t={i}: window size={len(state.window)}, traditional M={state.traditional_martingale:.4f}"
-                )
-                logger.debug("-" * 30)
-
-        logger.debug(
-            f"Traditional martingale computation complete. Change points: {len(state.traditional_change_points)}."
-        )
-
         # Return the computed martingale histories and detected change points.
         return {
             "traditional_change_points": state.traditional_change_points,
@@ -262,17 +251,6 @@ def multiview_traditional_martingale(
                     # Record current values in history
                     state.record_traditional_values(i, new_traditional, False)
 
-                # Log periodically
-                if i > 0 and i % 10 == 0:
-                    logger.debug(
-                        f"t={i}: Avg window size={np.mean([len(w) for w in state.windows]):.1f}, "
-                        f"Traditional Sum={state.traditional_sum[-1]:.4f}"
-                    )
-
-            logger.debug(
-                f"Completed batch: Traditional Sum={state.traditional_sum[-1]:.4f}, "
-                f"Change points={len(state.traditional_change_points)}"
-            )
             idx = batch_end
 
         # Return the aggregated results as numpy arrays.
