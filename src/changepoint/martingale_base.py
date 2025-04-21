@@ -42,6 +42,8 @@ class MartingaleConfig:
         distance_measure: Distance metric for strangeness computation.
         distance_p: Order parameter for Minkowski distance.
         strangeness_config: Configuration for strangeness computation.
+        enable_pvalue_dampening: Whether to dampen p-values based on prediction error.
+        cooldown_period: Minimum number of timesteps between consecutive change point detections.
     """
 
     threshold: float
@@ -54,6 +56,8 @@ class MartingaleConfig:
     distance_measure: str = "euclidean"
     distance_p: float = 2.0
     strangeness_config: Optional[StrangenessConfig] = None
+    enable_pvalue_dampening: bool = True
+    cooldown_period: int = 30
 
     def __post_init__(self):
         """Validate configuration parameters."""

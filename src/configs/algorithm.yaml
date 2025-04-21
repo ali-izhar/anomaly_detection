@@ -7,7 +7,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 # Algorithm execution mode
 execution:
   enable_prediction: true  # Whether to use prediction for enhanced detection
-  enable_visualization: true  # Whether to create visualizations
+  enable_visualization: false  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
 # Trial configuration
@@ -58,6 +58,8 @@ detection:
   reset_on_traditional: false  # Whether to reset horizon martingales when traditional martingale detects a change
   max_window: null  # Maximum window size (null for adaptive)
   prediction_horizon: 5  # Number of steps to predict ahead
+  enable_pvalue_dampening: true  # Whether to dampen p-values based on prediction error
+  cooldown_period: 15  # Minimum timesteps between consecutive detections
   
   # Betting function configuration
   betting_func_config:

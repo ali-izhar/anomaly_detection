@@ -211,10 +211,14 @@ def compute_horizon_martingale(
                     )
                     pred_pv = get_pvalue(pred_s_val, random_state=config.random_state)
 
-                    # Adjust p-value based on prediction error (lower p-value = more surprised)
-                    # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
-                    scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
-                    adjusted_pv = pred_pv * scale_factor
+                    # Adjust p-value based on prediction error (lower p-value = more surprised) only if enabled
+                    if config.enable_pvalue_dampening:
+                        # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                        scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
+                        adjusted_pv = pred_pv * scale_factor
+                    else:
+                        # Use the raw p-value without dampening
+                        adjusted_pv = pred_pv
 
                     # Update martingale for this horizon using traditional as base
                     m_h = trad_base * betting_function(1.0, adjusted_pv)
@@ -248,18 +252,40 @@ def compute_horizon_martingale(
 
             # Check for horizon-based change detection
             if horizon_val > config.threshold:
-                logger.debug(
-                    f"Horizon martingale detected change at t={i}: {horizon_val:.4f} > {config.threshold}"
-                )
-                horizon_change_points.append(i)
+                # Only detect if we're not in a cooldown period from a previous detection
+                # For basic horizon martingale, we track this in the state
+                detect_change = True
 
-                # Reset martingale state after detection
-                if config.reset:
+                # Check if we have a last_detection_time attribute, if not add it
+                if not hasattr(state, "last_detection_time"):
+                    state.last_detection_time = (
+                        -40
+                    )  # Initialize to effectively no previous detection
+
+                # Use cooldown period from config
+                cooldown = config.cooldown_period
+
+                # Skip detection if we're still in cooldown period
+                if i - state.last_detection_time < cooldown:
+                    detect_change = False
                     logger.debug(
-                        f"Resetting horizon martingale state after detection at t={i}"
+                        f"Suppressing horizon detection at t={i} due to cooldown period ({i - state.last_detection_time} < {cooldown})"
                     )
-                    state.horizon_martingales_h = [1.0] * num_horizons
-                    state.window = []
+
+                if detect_change:
+                    logger.debug(
+                        f"Horizon martingale detected change at t={i}: {horizon_val:.4f} > {config.threshold}"
+                    )
+                    horizon_change_points.append(i)
+                    state.last_detection_time = i  # Record the detection time
+
+                    # Reset martingale state after detection
+                    if config.reset:
+                        logger.debug(
+                            f"Resetting horizon martingale state after detection at t={i}"
+                        )
+                        state.horizon_martingales_h = [1.0] * num_horizons
+                        state.window = []
 
         # Create masked array where initial NaN values (before predictions) are removed for display/calculations
         masked_martingales = np.array(horizon_martingales, dtype=float)
@@ -498,9 +524,14 @@ def multiview_horizon_martingale(
                                 pred_s_val, random_state=config.random_state
                             )
 
-                            # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
-                            scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
-                            adjusted_pv = pred_pv * scale_factor
+                            # Adjust p-value based on prediction error only if dampening is enabled
+                            if config.enable_pvalue_dampening:
+                                # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                                scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
+                                adjusted_pv = pred_pv * scale_factor
+                            else:
+                                # Use the raw p-value without dampening
+                                adjusted_pv = pred_pv
 
                             # Update martingale for this horizon using the traditional martingale as base
                             m_jh = trad_base * betting_function(1.0, adjusted_pv)
@@ -556,22 +587,36 @@ def multiview_horizon_martingale(
 
                 # Check for horizon-based detection
                 if total_horizon > config.threshold:
-                    logger.info(
-                        f"Horizon martingale detected change at t={i}: "
-                        f"Sum={total_horizon:.4f} > {config.threshold}"
-                    )
-                    horizon_change_points.append(i)
-                    state.last_detection_time = i
+                    # Check if we're still in cooldown period
+                    detect_change = True
 
-                    # Reset martingale state
-                    if config.reset:
+                    # Use cooldown period from config
+                    cooldown = config.cooldown_period
+
+                    # Skip detection if we're still in cooldown period
+                    if i - state.last_detection_time < cooldown:
+                        detect_change = False
                         logger.debug(
-                            f"Resetting horizon martingale state after detection at t={i}"
+                            f"Suppressing horizon detection at t={i} due to cooldown period ({i - state.last_detection_time} < {cooldown})"
                         )
-                        state.reset(num_features)
-                        state.feature_horizon_martingales = [
-                            [1.0] * num_horizons for _ in range(num_features)
-                        ]
+
+                    if detect_change:
+                        logger.info(
+                            f"Horizon martingale detected change at t={i}: "
+                            f"Sum={total_horizon:.4f} > {config.threshold}"
+                        )
+                        horizon_change_points.append(i)
+                        state.last_detection_time = i
+
+                        # Reset martingale state
+                        if config.reset:
+                            logger.debug(
+                                f"Resetting horizon martingale state after detection at t={i}"
+                            )
+                            state.reset(num_features)
+                            state.feature_horizon_martingales = [
+                                [1.0] * num_horizons for _ in range(num_features)
+                            ]
 
                 # Also reset if traditional martingale detected a change and reset_on_traditional is enabled
                 if i in trad_change_points and config.reset_on_traditional:
