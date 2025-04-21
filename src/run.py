@@ -85,6 +85,11 @@ def apply_cli_overrides(
         updated_config["detection"]["distance"]["measure"] = args.distance
         logger.info(f"Overriding distance measure: {args.distance}")
 
+    # Override reset_on_traditional
+    if args.reset_on_traditional is not None:
+        updated_config["detection"]["reset_on_traditional"] = args.reset_on_traditional
+        logger.info(f"Overriding reset_on_traditional: {args.reset_on_traditional}")
+
     return updated_config
 
 
@@ -203,6 +208,13 @@ def main() -> None:
         type=str,
         choices=["euclidean", "mahalanobis", "manhattan", "minkowski", "cosine"],
         help="Distance measure for detection",
+    )
+    parser.add_argument(
+        "--reset-on-traditional",
+        "-r",
+        type=lambda x: x.lower() == "true",
+        choices=[True, False],
+        help="Reset on traditional change detection",
     )
 
     args = parser.parse_args()

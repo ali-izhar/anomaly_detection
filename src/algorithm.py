@@ -146,7 +146,7 @@ class GraphChangeDetection:
             history_size=self.config["model"]["predictor"]["config"]["n_history"],
             batch_size=det_config["batch_size"],
             reset=det_config["reset"],
-            reset_on_traditional=False,
+            reset_on_traditional=det_config.get("reset_on_traditional", False),
             max_window=det_config["max_window"],
             betting_func_config=betting_func_config,
             distance_measure=det_config["distance"]["measure"],

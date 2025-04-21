@@ -12,6 +12,13 @@ FIGURE_DIMENSIONS = {
     "GRID_HEIGHT": 4.0,  # Reduced for grid layouts
     "GRID_SPACING": 0.2,  # Tighter spacing between subplots
     "MARGIN_PAD": 0.01,  # Minimal padding
+    "SEQUENCE_LENGTH": 200,  # Default sequence length for x-axis
+    "TICK_INTERVAL": 50,  # Interval between tick marks
+    "Y_MARGIN_FACTOR": 0.1,  # Margin factor for y-axis
+    "MIN_Y_MARGIN": 0.1,  # Minimum margin for y-axis
+    "Y_TICKS_COUNT": 5,  # Number of ticks on y-axis
+    "ANNOTATION_OFFSET": (5, 5),  # Offset for text annotations
+    "MARKER_SIZE": 5,  # Size of markers on plots
 }
 
 # Typography settings

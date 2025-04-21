@@ -10,8 +10,6 @@ Key features:
 - Multiple graph models (SBM, Barabási-Albert, Watts-Strogatz, Erdős-Rényi)
 - Advanced martingale-based detection with various betting functions
 - Prediction-enhanced detection for earlier change point identification
-- Detailed analysis and visualization of detection results
-- Configurable via YAML and a flexible command-line interface
 
 ## Installation
 
@@ -38,9 +36,7 @@ pip install -r requirements.txt
 python src/run.py -c src/configs/algorithm.yaml
 ```
 
-### Command-line Interface
-
-The framework provides an extensive CLI for overriding configuration parameters:
+CLI for overriding configuration parameters:
 
 ```bash
 python src/run.py -c src/configs/algorithm.yaml [OPTIONS]
@@ -56,10 +52,9 @@ python src/run.py -c src/configs/algorithm.yaml [OPTIONS]
 | `-p, --prediction` | Enable (true) or disable (false) prediction |
 | `-l, --threshold` | Detection threshold value |
 | `-d, --distance` | Distance measure (euclidean/mahalanobis/manhattan/minkowski/cosine) |
+| `-r, --reset-on-traditional` | Reset horizon martingales when traditional detection occurs (true/false) |
 | `-net, --network` | Network type (sbm/ba/ws/er) |
 | `-bf, --betting-func` | Betting function (power/exponential/mixture/constant/beta/kernel) |
-
-#### Examples
 
 Run with 5 trials on a Barabási-Albert network:
 ```bash
@@ -74,6 +69,52 @@ python src/run.py -c src/configs/algorithm.yaml -p false -bf power
 Lower detection threshold and use Euclidean distance:
 ```bash
 python src/run.py -c src/configs/algorithm.yaml -l 40 -d euclidean
+```
+
+Enable resetting horizon martingales on traditional detections:
+```bash
+python src/run.py -c src/configs/algorithm.yaml -r true
+```
+
+### Example 
+```python
+python src/run.py -c src/configs/algorithm.yaml -net ba -l 70 -bf power -d mahalanobis -r true
+2025-04-20 21:53:26 - __main__ - INFO - Using configuration file: src/configs/algorithm.yaml
+2025-04-20 21:53:26 - __main__ - INFO - Overriding network type: ba
+2025-04-20 21:53:26 - __main__ - INFO - Overriding threshold: 70.0
+2025-04-20 21:53:26 - __main__ - INFO - Overriding betting function: power
+2025-04-20 21:53:26 - __main__ - INFO - Overriding distance measure: mahalanobis
+2025-04-20 21:53:26 - __main__ - INFO - Overriding reset_on_traditional: True
+2025-04-20 21:53:26 - src.graph.generator - INFO - Initialized generator for ba model
+2025-04-20 21:53:26 - src.graph.generator - INFO - Generated 1 change points at: [40]
+2025-04-20 21:53:44 - src.changepoint.martingale_traditional - INFO - Traditional martingale detected change at t=47: Sum=94.8952 > 70.0
+2025-04-20 21:54:02 - src.changepoint.martingale_horizon - INFO - Horizon martingale detected change at t=43: Sum=72.5817 > 70.0
+2025-04-20 21:54:02 - src.changepoint.martingale_horizon - INFO - Horizon martingale detected change at t=45: Sum=135.6778 > 70.0
+2025-04-20 21:54:02 - src.changepoint.martingale_horizon - INFO - Horizon martingale detected change at t=47: Sum=186.9903 > 70.0
+2025-04-20 21:54:31 - src.utils.output_manager - INFO - Results saved to results\ba_graph_mahalanobis_power_20250420_215326\detection_results.xlsx
+2025-04-20 21:54:31 - __main__ - INFO - True change points: [40]
+2025-04-20 21:54:31 - __main__ - INFO - Traditional change points detected: [47]
+2025-04-20 21:54:31 - __main__ - INFO - Horizon change points detected: [43, 45, 47]
+Change Point Detection Analysis
+==============================
+
+Detection Details:
+╭───────────┬─────────────────────────┬─────────────────┬─────────────────────┬─────────────────┬───────────────────╮
+│   True CP │   Traditional Detection │   Delay (steps) │   Horizon Detection │   Delay (steps) │ Delay Reduction   │
+├───────────┼─────────────────────────┼─────────────────┼─────────────────────┼─────────────────┼───────────────────┤
+│        40 │                      47 │               7 │                  43 │               3 │ 57.1%             │
+╰───────────┴─────────────────────────┴─────────────────┴─────────────────────┴─────────────────┴───────────────────╯
+
+Summary Statistics:
+╭─────────────────────┬───────────────┬───────────╮
+│ Metric              │ Traditional   │ Horizon   │
+├─────────────────────┼───────────────┼───────────┤
+│ Detection Rate      │ 100.0%        │ 100.0%    │
+├─────────────────────┼───────────────┼───────────┤
+│ Average Delay       │ 7.0           │ 3.0       │
+├─────────────────────┼───────────────┼───────────┤
+│ Avg Delay Reduction │               │ 57.1%     │
+╰─────────────────────┴───────────────┴───────────╯
 ```
 
 ## Algorithm Overview

@@ -25,31 +25,26 @@ def analyze_detection_results(
     # Extract change points
     true_change_points = results.get("true_change_points", [])
 
-    # Note: There's a 1-index offset in the martingale detection framework
-    # where detections are logged at index t when the martingale value actually
-    # exceeds the threshold at index t-1.
+    # Get detection points - removed the 1-index offset adjustment
     traditional_detected = results.get("traditional_change_points", [])
-    traditional_adjusted = [max(0, point - 1) for point in traditional_detected]
-
     horizon_detected = results.get("horizon_change_points", [])
-    horizon_adjusted = [max(0, point - 1) for point in horizon_detected]
 
     # If any of the arrays are numpy arrays, convert to list
     if isinstance(true_change_points, np.ndarray):
         true_change_points = true_change_points.tolist()
-    if isinstance(traditional_adjusted, np.ndarray):
-        traditional_adjusted = traditional_adjusted.tolist()
-    if isinstance(horizon_adjusted, np.ndarray):
-        horizon_adjusted = horizon_adjusted.tolist()
+    if isinstance(traditional_detected, np.ndarray):
+        traditional_detected = traditional_detected.tolist()
+    if isinstance(horizon_detected, np.ndarray):
+        horizon_detected = horizon_detected.tolist()
 
     # Calculate detection metrics for each true change point
     analysis_data = []
     for idx, cp in enumerate(true_change_points):
         # Find the closest traditional detection after the change point
-        trad_delay, trad_detection = find_detection_delay(cp, traditional_adjusted)
+        trad_delay, trad_detection = find_detection_delay(cp, traditional_detected)
 
         # Find the closest horizon detection after the change point
-        horizon_delay, horizon_detection = find_detection_delay(cp, horizon_adjusted)
+        horizon_delay, horizon_detection = find_detection_delay(cp, horizon_detected)
 
         # Calculate the delay reduction from using horizon detection
         delay_reduction = compute_delay_reduction(trad_delay, horizon_delay)
@@ -66,14 +61,14 @@ def analyze_detection_results(
         )
 
     # Generate summary statistics
-    avg_trad_delay = compute_average_delay(true_change_points, traditional_adjusted)
-    avg_horizon_delay = compute_average_delay(true_change_points, horizon_adjusted)
+    avg_trad_delay = compute_average_delay(true_change_points, traditional_detected)
+    avg_horizon_delay = compute_average_delay(true_change_points, horizon_detected)
     avg_reduction = compute_average_reduction(avg_trad_delay, avg_horizon_delay)
     detection_rate_trad = compute_detection_rate(
-        true_change_points, traditional_adjusted
+        true_change_points, traditional_detected
     )
     detection_rate_horizon = compute_detection_rate(
-        true_change_points, horizon_adjusted
+        true_change_points, horizon_detected
     )
 
     # Create the table

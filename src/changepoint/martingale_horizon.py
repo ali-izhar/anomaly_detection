@@ -122,8 +122,10 @@ def compute_horizon_martingale(
         )
 
         if num_horizons > 0:
-            # Use exponential decay to weight horizons
-            decay_rate = 0.5  # Controls how quickly weights decay with horizon
+            # Use exponential decay to weight horizons - INCREASED DECAY RATE for faster response
+            decay_rate = (
+                0.8  # Increased from 0.5 to 0.8 to emphasize near-term predictions
+            )
             unnormalized_weights = [
                 np.exp(-decay_rate * h) for h in range(num_horizons)
             ]
@@ -210,8 +212,8 @@ def compute_horizon_martingale(
                     pred_pv = get_pvalue(pred_s_val, random_state=config.random_state)
 
                     # Adjust p-value based on prediction error (lower p-value = more surprised)
-                    # Scale factor based on empirical difference
-                    scale_factor = max(0.1, min(1.0, 1.0 - diff / 3.0))
+                    # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                    scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
                     adjusted_pv = pred_pv * scale_factor
 
                     # Update martingale for this horizon using traditional as base
@@ -382,8 +384,8 @@ def multiview_horizon_martingale(
 
         # Compute horizon weights with exponential decay (closer horizons get higher weights)
         if num_horizons > 0:
-            # Use exponential decay to weight horizons
-            decay_rate = 0.5  # Controls how quickly weights decay with horizon
+            # MODIFIED: Increased decay rate to emphasize near-term predictions
+            decay_rate = 0.8  # Increased from 0.5 to 0.8
             unnormalized_weights = [
                 np.exp(-decay_rate * h) for h in range(num_horizons)
             ]
@@ -496,9 +498,8 @@ def multiview_horizon_martingale(
                                 pred_s_val, random_state=config.random_state
                             )
 
-                            # Adjust p-value based on prediction error (lower p-value = more surprised)
-                            # Scale factor based on empirical difference
-                            scale_factor = max(0.1, min(1.0, 1.0 - diff / 3.0))
+                            # MODIFIED: Reduced divisor and minimum scale factor for faster evidence accumulation
+                            scale_factor = max(0.01, min(1.0, 1.0 - diff / 1.0))
                             adjusted_pv = pred_pv * scale_factor
 
                             # Update martingale for this horizon using the traditional martingale as base

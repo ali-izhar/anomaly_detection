@@ -100,35 +100,31 @@ class OutputManager:
         for i, trial in enumerate(individual_trials):
             # Traditional martingale detections
             if "traditional_change_points" in trial:
-                # Adjust detection points
-                adjusted_detections = [
-                    max(0, point - 1) for point in trial["traditional_change_points"]
-                ]
+                # Use detections directly without adjusting points
+                detections = trial["traditional_change_points"]
                 summary_data[f"Trial {i+1} Traditional Detection Count"] = [
-                    self._count_detections_near_cp(adjusted_detections, cp)
+                    self._count_detections_near_cp(detections, cp)
                     for cp in true_change_points
                 ]
 
                 # Record detection latency (distance from true CP to first detection)
                 summary_data[f"Trial {i+1} Traditional Latency"] = [
-                    self._calc_detection_latency(adjusted_detections, cp)
+                    self._calc_detection_latency(detections, cp)
                     for cp in true_change_points
                 ]
 
             # Horizon martingale detections
             if "horizon_change_points" in trial:
-                # Adjust detection points
-                adjusted_horizon_detections = [
-                    max(0, point - 1) for point in trial["horizon_change_points"]
-                ]
+                # Use detections directly without adjusting points
+                horizon_detections = trial["horizon_change_points"]
                 summary_data[f"Trial {i+1} Horizon Detection Count"] = [
-                    self._count_detections_near_cp(adjusted_horizon_detections, cp)
+                    self._count_detections_near_cp(horizon_detections, cp)
                     for cp in true_change_points
                 ]
 
                 # Record detection latency for horizon detections
                 summary_data[f"Trial {i+1} Horizon Latency"] = [
-                    self._calc_detection_latency(adjusted_horizon_detections, cp)
+                    self._calc_detection_latency(horizon_detections, cp)
                     for cp in true_change_points
                 ]
 
@@ -170,16 +166,13 @@ class OutputManager:
 
             # Process traditional martingale detections
             if "traditional_change_points" in trial:
-                raw_detections = trial["traditional_change_points"]
-                adjusted_detections = [max(0, point - 1) for point in raw_detections]
+                detections = trial["traditional_change_points"]
 
                 # Process each detection point
-                for j, (raw_point, adj_point) in enumerate(
-                    zip(raw_detections, adjusted_detections)
-                ):
+                for j, detection_point in enumerate(detections):
                     # Find the nearest true change point
                     nearest_cp, distance = self._find_nearest_cp(
-                        adj_point, true_change_points
+                        detection_point, true_change_points
                     )
 
                     details_rows.append(
@@ -187,8 +180,7 @@ class OutputManager:
                             "Trial": trial_num,
                             "Type": "Traditional",
                             "Detection #": j + 1,
-                            "Raw Detection Index": raw_point,
-                            "Adjusted Detection Index": adj_point,
+                            "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
                             "Is Within 10 Steps": abs(distance) <= 10,
@@ -197,18 +189,13 @@ class OutputManager:
 
             # Process horizon martingale detections
             if "horizon_change_points" in trial:
-                raw_horizon_detections = trial["horizon_change_points"]
-                adjusted_horizon_detections = [
-                    max(0, point - 1) for point in raw_horizon_detections
-                ]
+                horizon_detections = trial["horizon_change_points"]
 
                 # Process each detection point
-                for j, (raw_point, adj_point) in enumerate(
-                    zip(raw_horizon_detections, adjusted_horizon_detections)
-                ):
+                for j, detection_point in enumerate(horizon_detections):
                     # Find the nearest true change point
                     nearest_cp, distance = self._find_nearest_cp(
-                        adj_point, true_change_points
+                        detection_point, true_change_points
                     )
 
                     details_rows.append(
@@ -216,8 +203,7 @@ class OutputManager:
                             "Trial": trial_num,
                             "Type": "Horizon",
                             "Detection #": j + 1,
-                            "Raw Detection Index": raw_point,
-                            "Adjusted Detection Index": adj_point,
+                            "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
                             "Is Within 10 Steps": abs(distance) <= 10,
@@ -235,8 +221,7 @@ class OutputManager:
                     "Trial",
                     "Type",
                     "Detection #",
-                    "Raw Detection Index",
-                    "Adjusted Detection Index",
+                    "Detection Index",
                     "Nearest True CP",
                     "Distance to CP",
                     "Is Within 10 Steps",
@@ -311,11 +296,6 @@ class OutputManager:
         n_timesteps: int,
     ) -> pd.DataFrame:
         """Create a dataframe with detection results.
-
-        Note: There is a known 1-index offset in the martingale detection framework where
-        detections are logged at index t when the martingale value actually exceeds
-        the threshold at index t-1. The 'traditional_detected' column accurately shows
-        where threshold exceedance occurs, while internal detection tracking is offset by 1.
 
         Args:
             detection_results: Detection results to include in the dataframe
@@ -421,23 +401,15 @@ class OutputManager:
                             ):
                                 df_data["horizon_detected"][i] = 1
 
-        # Calculate traditional detection values for internal analysis
+        # Store actual detection points for internal reference
         if "traditional_change_points" in detection_results:
-            detected_points = detection_results["traditional_change_points"]
-            # Store for internal analysis
-            self._raw_detection_points = detected_points
-            self._adjusted_detection_points = [
-                max(0, point - 1) for point in detected_points
+            self._traditional_detection_points = detection_results[
+                "traditional_change_points"
             ]
 
-        # Calculate horizon detection values for internal analysis
+        # Store horizon detection points for internal reference
         if "horizon_change_points" in detection_results:
-            horizon_detected_points = detection_results["horizon_change_points"]
-            # Store for internal analysis
-            self._raw_horizon_detection_points = horizon_detected_points
-            self._adjusted_horizon_detection_points = [
-                max(0, point - 1) for point in horizon_detected_points
-            ]
+            self._horizon_detection_points = detection_results["horizon_change_points"]
 
         # Create the dataframe with a specific column order
         columns = ["timestep", "true_change_point"]
