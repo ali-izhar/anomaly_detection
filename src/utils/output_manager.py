@@ -490,29 +490,24 @@ class OutputManager:
         if not trial_dfs:
             return
 
-        # Get common martingale columns to aggregate
+        # Add more detailed logging to help diagnose issues
+        logger.info(f"Creating aggregate statistics from {len(trial_dfs)} trials")
+
+        # Get common columns from all dataframes
         all_cols = set()
         for df in trial_dfs:
             all_cols.update(df.columns)
 
-        # Identify martingale columns (exclude flags, metadata, etc.)
-        martingale_cols = [
-            col
-            for col in all_cols
-            if any(
-                col.endswith(suffix)
-                for suffix in [
-                    "_martingales",
-                    "_martingales_feature0",
-                    "_martingales_feature1",
-                    "_martingales_feature2",
-                    "_martingales_feature3",
-                    "_martingales_feature4",
-                    "_martingales_feature5",
-                    "_martingales_feature6",
-                    "_martingales_feature7",
-                ]
-            )
+        # Explicitly define columns to exclude from aggregation
+        excluded_cols = [
+            "timestep",
+            "true_change_point",
+            "traditional_detected",
+            "horizon_detected",
+            "traditional_detected_count",
+            "horizon_detected_count",
+            "traditional_detection_rate",
+            "horizon_detection_rate",
         ]
 
         # Initialize aggregate dataframe with timestep column
@@ -530,28 +525,7 @@ class OutputManager:
         agg_df["traditional_detected_count"] = 0
         agg_df["horizon_detected_count"] = 0
 
-        # For each martingale column, calculate mean and standard deviation
-        for col in martingale_cols:
-            # Initialize arrays to collect values across trials
-            values_across_trials = np.full((len(trial_dfs), n_timesteps), np.nan)
-
-            # Collect values from each trial
-            for i, df in enumerate(trial_dfs):
-                if col in df.columns:
-                    values = df[col].values
-                    values_across_trials[i, : len(values)] = values
-
-            # Calculate mean and standard deviation (ignoring NaN values)
-            mean_values = np.nanmean(values_across_trials, axis=0)
-            std_values = np.nanstd(values_across_trials, axis=0)
-
-            # Add to aggregate dataframe
-            agg_df[f"{col}_mean"] = mean_values
-            agg_df[f"{col}_std"] = std_values
-            agg_df[f"{col}_upper"] = mean_values + std_values
-            agg_df[f"{col}_lower"] = mean_values - std_values
-
-        # Calculate detection rates for each timestep
+        # Calculate detection statistics for each timestep
         for i, df in enumerate(trial_dfs):
             if "traditional_detected" in df.columns:
                 # Add detections to the count
@@ -578,6 +552,148 @@ class OutputManager:
         agg_df["horizon_detection_rate"] = agg_df["horizon_detected_count"] / len(
             trial_dfs
         )
+
+        # Identify martingale columns for aggregation - only those with _martingales
+        martingale_cols = []
+        for col in all_cols:
+            # Skip excluded columns and columns that don't contain martingale data
+            if col in excluded_cols or "_martingales" not in col:
+                continue
+
+            # Skip detection flag columns
+            if col.endswith("_detected"):
+                continue
+
+            martingale_cols.append(col)
+
+        logger.info(f"Found {len(martingale_cols)} martingale columns to aggregate")
+
+        # Process each martingale column
+        for col in martingale_cols:
+            try:
+                # Check if all trials have this column
+                col_exists_in_all = all(col in df.columns for df in trial_dfs)
+                if not col_exists_in_all:
+                    logger.warning(
+                        f"Column '{col}' does not exist in all trials, skipping"
+                    )
+                    continue
+
+                # Check if there's actual data in the column
+                all_empty = True
+                for df in trial_dfs:
+                    if not df[col].isna().all() and not (df[col] == 0).all():
+                        all_empty = False
+                        break
+
+                if all_empty:
+                    logger.warning(
+                        f"Column '{col}' contains only NaN or zero values, skipping"
+                    )
+                    continue
+
+                # Pre-filter data from each trial
+                filtered_values = []
+
+                for i, df in enumerate(trial_dfs):
+                    values = df[col].values
+
+                    # If this is a horizon column, determine where the history building period ends
+                    if "horizon" in col:
+                        # Find the first non-zero value (end of history period)
+                        non_zero_indices = np.nonzero(values)[0]
+                        if len(non_zero_indices) > 0:
+                            start_idx = non_zero_indices[0]
+                            # Only include non-history values
+                            filtered_values.append(values[start_idx:])
+                        else:
+                            logger.warning(
+                                f"Column '{col}' in trial {i+1} has all zeros, skipping"
+                            )
+                            filtered_values.append([])
+                    else:
+                        # Traditional columns don't have history building
+                        filtered_values.append(values)
+
+                # Ensure we have data to aggregate
+                if all(len(v) == 0 for v in filtered_values):
+                    logger.warning(f"No valid data found in column '{col}', skipping")
+                    continue
+
+                # Find the shortest length to use for aggregation to avoid index errors
+                min_length = min(len(v) for v in filtered_values if len(v) > 0)
+
+                # Pad with NaN if necessary (for horizon columns that start at different points)
+                if "horizon" in col:
+                    # Find the latest start index among all trials
+                    latest_start = 0
+                    for i, df in enumerate(trial_dfs):
+                        values = df[col].values
+                        non_zero_indices = np.nonzero(values)[0]
+                        if len(non_zero_indices) > 0:
+                            start_idx = non_zero_indices[0]
+                            latest_start = max(latest_start, start_idx)
+
+                    # Prepare aligned array with correct padding
+                    aligned_values = np.full((len(trial_dfs), n_timesteps), np.nan)
+
+                    for i, df in enumerate(trial_dfs):
+                        values = df[col].values
+                        non_zero_indices = np.nonzero(values)[0]
+                        if len(non_zero_indices) > 0:
+                            start_idx = non_zero_indices[0]
+                            # Copy valid data to the correct positions
+                            valid_length = min(
+                                len(values) - start_idx, n_timesteps - start_idx
+                            )
+                            if valid_length > 0:
+                                aligned_values[
+                                    i, start_idx : start_idx + valid_length
+                                ] = values[start_idx : start_idx + valid_length]
+                else:
+                    # For traditional columns, just use the data as-is
+                    aligned_values = np.full((len(trial_dfs), n_timesteps), np.nan)
+                    for i, df in enumerate(trial_dfs):
+                        valid_length = min(len(df[col]), n_timesteps)
+                        aligned_values[i, :valid_length] = df[col].values[:valid_length]
+
+                # Calculate statistics safely using masked arrays to handle NaN values properly
+                masked_values = np.ma.masked_invalid(aligned_values)
+
+                # Only compute statistics where we have at least one valid value
+                valid_mask = np.sum(~np.ma.getmaskarray(masked_values), axis=0) > 0
+
+                # Initialize result arrays with NaN
+                mean_values = np.full(n_timesteps, np.nan)
+                std_values = np.full(n_timesteps, np.nan)
+
+                # Calculate statistics only where we have valid data
+                with np.errstate(all="ignore"):  # Suppress all warnings
+                    if np.any(valid_mask):
+                        mean_values[valid_mask] = np.ma.mean(
+                            masked_values[:, valid_mask], axis=0
+                        ).filled(np.nan)
+                        # Only compute std dev where we have at least two values
+                        std_mask = (
+                            np.sum(~np.ma.getmaskarray(masked_values), axis=0) > 1
+                        )
+                        if np.any(std_mask):
+                            std_values[std_mask] = np.ma.std(
+                                masked_values[:, std_mask], axis=0
+                            ).filled(np.nan)
+
+                # Add to aggregate dataframe
+                agg_df[f"{col}_mean"] = mean_values
+                agg_df[f"{col}_std"] = std_values
+                agg_df[f"{col}_upper"] = mean_values + std_values
+                agg_df[f"{col}_lower"] = mean_values - std_values
+
+                logger.debug(f"Successfully aggregated column '{col}'")
+
+            except Exception as e:
+                logger.error(f"Error processing column '{col}': {str(e)}")
+                # Continue with next column even if this one fails
+                continue
 
         # Calculate average detection delays for true change points
         cp_delays = {}
@@ -642,3 +758,7 @@ class OutputManager:
         # Write both dataframes to the Excel file
         agg_df.to_excel(writer, sheet_name="Aggregate", index=False)
         cp_df.to_excel(writer, sheet_name="ChangePointMetadata", index=False)
+
+        logger.info(
+            f"Successfully created aggregate sheet with {len(agg_df.columns)} columns"
+        )
