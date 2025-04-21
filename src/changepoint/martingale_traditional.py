@@ -31,6 +31,7 @@ def compute_traditional_martingale(
     data: List[DataPoint],
     config: Optional[MartingaleConfig] = None,
     state: Optional[MartingaleState] = None,
+    printing_from_horizon: bool = False,
 ) -> Dict[str, Any]:
     """Compute a traditional martingale for online change detection over a univariate data stream.
 
@@ -41,6 +42,7 @@ def compute_traditional_martingale(
         data: Sequential observations to monitor.
         config: Configuration for martingale computation.
         state: Optional state for continuing computation from a previous run.
+        printing_from_horizon: Whether to print detection events from horizon martingale.
 
     Returns:
         Dictionary containing:
@@ -101,9 +103,10 @@ def compute_traditional_martingale(
             # Check if the updated traditional martingale exceeds the threshold.
             detected_trad = False
             if config.reset and new_trad > config.threshold:
-                logger.debug(
-                    f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {config.threshold}"
-                )
+                if not printing_from_horizon:
+                    logger.info(
+                        f"Traditional martingale detected change at t={i}: {new_trad:.4f} > {config.threshold}"
+                    )
                 detected_trad = True
                 state.traditional_change_points.append(i)
 
@@ -135,7 +138,7 @@ def multiview_traditional_martingale(
     config: Optional[MartingaleConfig] = None,
     state: Optional[MultiviewMartingaleState] = None,
     batch_size: int = 1000,
-    silent: bool = False,
+    printing_from_horizon: bool = False,
 ) -> Dict[str, Any]:
     """Compute a multivariate (multiview) traditional martingale test by aggregating evidence across features.
 
@@ -236,10 +239,10 @@ def multiview_traditional_martingale(
 
                 # Check if traditional martingale crosses threshold
                 if total_traditional > config.threshold:
-                    # Traditional martingale detection
-                    if not silent:
+                    # Traditional martingale detection at t-1 because we're using t-1 values to update t
+                    if not printing_from_horizon:
                         logger.info(
-                            f"Traditional martingale detected change at t={i}: Sum={total_traditional:.4f} > {config.threshold}"
+                            f"Traditional martingale detected change at t={i - 1}: Sum={total_traditional:.4f} > {config.threshold}"
                         )
                     state.traditional_change_points.append(i)
 

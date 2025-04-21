@@ -78,7 +78,9 @@ def compute_horizon_martingale(
     # Calculate traditional martingale values if not provided
     if traditional_martingale_values is None:
         # Compute traditional martingale
-        trad_result = compute_traditional_martingale(data, config, None)
+        trad_result = compute_traditional_martingale(
+            data, config, None, printing_from_horizon=True
+        )
         traditional_martingale_values = trad_result.get(
             "traditional_martingales", np.ones(len(data))
         ).tolist()
@@ -374,7 +376,7 @@ def multiview_horizon_martingale(
         if traditional_result is None:
             # Compute traditional martingale
             trad_result = multiview_traditional_martingale(
-                data, config, None, batch_size, silent=True
+                data, config, None, batch_size, printing_from_horizon=True
             )
         else:
             trad_result = traditional_result

@@ -55,11 +55,11 @@ detection:
   threshold: 60.0  # Threshold
   batch_size: 1000  # Batch size for multiview processing
   reset: true  # Reset martingales after detection
-  reset_on_traditional: false  # Whether to reset horizon martingales when traditional martingale detects a change
+  reset_on_traditional: true  # Whether to reset horizon martingales when traditional martingale detects a change
   max_window: null  # Maximum window size (null for adaptive)
   prediction_horizon: 5  # Number of steps to predict ahead
   enable_pvalue_dampening: true  # Whether to dampen p-values based on prediction error
-  cooldown_period: 15  # Minimum timesteps between consecutive detections
+  cooldown_period: 10  # Minimum timesteps between consecutive detections
   
   # Betting function configuration
   betting_func_config:
