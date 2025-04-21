@@ -14,11 +14,9 @@ from src.graph import GraphGenerator, NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
 from src.predictor import PredictorFactory
 from src.utils import (
-    MartingaleVisualizer,
     normalize_features,
     normalize_predictions,
     OutputManager,
-    prepare_martingale_visualization_data,
     prepare_result_data,
 )
 
@@ -339,61 +337,6 @@ class GraphChangeDetection:
             "random_seeds": random_seeds.tolist(),
         }
 
-    def _create_visualizations(
-        self, detection_result, true_change_points, features_raw
-    ):
-        """Create visualizations of the detection results.
-
-        Args:
-            detection_result: Dict containing detection results
-            true_change_points: List of ground truth change points
-            features_raw: Raw feature data
-        """
-
-        output_config = self.config["output"]
-        det_config = self.config["detection"]
-
-        try:
-            # Prepare the data for visualization using the utility function
-            complete_result = prepare_martingale_visualization_data(detection_result)
-
-            # Use the actual betting configuration from initialization
-            betting_func_name = det_config["betting_func_config"]["name"]
-            betting_params = {}
-
-            # Only include params specific to the selected betting function
-            if betting_func_name in det_config["betting_func_config"]:
-                betting_params = {
-                    betting_func_name: det_config["betting_func_config"][
-                        betting_func_name
-                    ]
-                }
-
-            betting_config = {
-                "function": betting_func_name,
-                "params": betting_params,
-            }
-
-            # Create visualization
-            visualizer = MartingaleVisualizer(
-                martingales=complete_result,
-                change_points=true_change_points,
-                threshold=det_config["threshold"],
-                betting_config=betting_config,
-                output_dir=output_config["directory"],
-                prefix=output_config["prefix"],
-                skip_shap=output_config["visualization"]["skip_shap"],
-                method=self.config["model"]["type"],
-            )
-            visualizer.create_visualization()
-
-        except Exception as e:
-            logger.error(f"Visualization creation failed: {str(e)}")
-            logger.error("Continuing without visualizations")
-            import traceback
-
-            logger.debug(traceback.format_exc())
-
     def _export_results_to_csv(self, trial_results, true_change_points):
         """Export detection results to CSV files.
 
@@ -413,13 +356,11 @@ class GraphChangeDetection:
         except Exception as e:
             logger.error(f"Failed to export results to CSV: {str(e)}")
 
-    def run(self, prediction=None, visualize=None, save_csv=None):
+    def run(self, prediction=None, save_csv=None):
         """Run the complete detection pipeline.
 
         Args:
             prediction: Whether to generate and use predictions for detection.
-                       If None, uses config value.
-            visualize: Whether to create visualizations of the results.
                        If None, uses config value.
             save_csv: Whether to save results to CSV files.
                       If None, uses config value.
@@ -436,11 +377,7 @@ class GraphChangeDetection:
             if prediction is not None
             else self.config["execution"].get("enable_prediction", True)
         )
-        enable_visualization = (
-            visualize
-            if visualize is not None
-            else self.config["execution"].get("enable_visualization", True)
-        )
+
         enable_csv_export = (
             save_csv
             if save_csv is not None
@@ -473,18 +410,6 @@ class GraphChangeDetection:
             trial_results = self._run_detection_trials(
                 features_numeric, predicted_features, true_change_points
             )
-
-            # Optional visualization
-            if (
-                enable_visualization
-                and self.config["output"]["visualization"]["enabled"]
-                and trial_results["aggregated"]
-            ):
-                self._create_visualizations(
-                    trial_results["aggregated"],
-                    true_change_points,
-                    features_raw,
-                )
 
             # Optional CSV export
             if enable_csv_export and trial_results["aggregated"]:

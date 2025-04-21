@@ -53,6 +53,7 @@ class OutputManager:
             with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
 
                 # Create individual trial sheets
+                trial_dfs = []  # Store dataframes for aggregation
                 for i, trial_result in enumerate(individual_trials):
                     if trial_result:  # Check if trial result is not None
                         sheet_name = f"Trial{i+1}"
@@ -60,6 +61,7 @@ class OutputManager:
                             trial_result, true_change_points, n_timesteps
                         )
                         df_trial.to_excel(writer, sheet_name=sheet_name, index=False)
+                        trial_dfs.append(df_trial)  # Store for later aggregation
 
                 # Also add a summary sheet with detection information
                 if individual_trials:
@@ -71,6 +73,12 @@ class OutputManager:
                     self._create_expanded_detection_details(
                         individual_trials, true_change_points, writer
                     )
+
+                    # Create aggregate sheet with statistics across all trials
+                    if len(trial_dfs) > 1:
+                        self._create_aggregate_statistics_sheet(
+                            trial_dfs, true_change_points, writer
+                        )
 
             logger.info(f"Results saved to {excel_path}")
 
@@ -462,3 +470,175 @@ class OutputManager:
         except Exception as e:
             logger.warning(f"Could not determine timestep count from config: {str(e)}")
             return 200  # Default fallback
+
+    def _create_aggregate_statistics_sheet(
+        self,
+        trial_dfs: List[pd.DataFrame],
+        true_change_points: List[int],
+        writer: pd.ExcelWriter,
+    ) -> None:
+        """Create an aggregate sheet with statistics across all trials for easy plotting.
+
+        This method computes mean and standard deviation of martingale values across all trials,
+        allowing for easy creation of confidence band visualizations.
+
+        Args:
+            trial_dfs: List of dataframes from individual trials
+            true_change_points: List of actual change points
+            writer: Excel writer object to append the sheet to
+        """
+        if not trial_dfs:
+            return
+
+        # Get common martingale columns to aggregate
+        all_cols = set()
+        for df in trial_dfs:
+            all_cols.update(df.columns)
+
+        # Identify martingale columns (exclude flags, metadata, etc.)
+        martingale_cols = [
+            col
+            for col in all_cols
+            if any(
+                col.endswith(suffix)
+                for suffix in [
+                    "_martingales",
+                    "_martingales_feature0",
+                    "_martingales_feature1",
+                    "_martingales_feature2",
+                    "_martingales_feature3",
+                    "_martingales_feature4",
+                    "_martingales_feature5",
+                    "_martingales_feature6",
+                    "_martingales_feature7",
+                ]
+            )
+        ]
+
+        # Initialize aggregate dataframe with timestep column
+        n_timesteps = len(trial_dfs[0])
+        agg_df = pd.DataFrame(
+            {
+                "timestep": list(range(n_timesteps)),
+                "true_change_point": [
+                    1 if t in true_change_points else 0 for t in range(n_timesteps)
+                ],
+            }
+        )
+
+        # Create placeholders for the detected points
+        agg_df["traditional_detected_count"] = 0
+        agg_df["horizon_detected_count"] = 0
+
+        # For each martingale column, calculate mean and standard deviation
+        for col in martingale_cols:
+            # Initialize arrays to collect values across trials
+            values_across_trials = np.full((len(trial_dfs), n_timesteps), np.nan)
+
+            # Collect values from each trial
+            for i, df in enumerate(trial_dfs):
+                if col in df.columns:
+                    values = df[col].values
+                    values_across_trials[i, : len(values)] = values
+
+            # Calculate mean and standard deviation (ignoring NaN values)
+            mean_values = np.nanmean(values_across_trials, axis=0)
+            std_values = np.nanstd(values_across_trials, axis=0)
+
+            # Add to aggregate dataframe
+            agg_df[f"{col}_mean"] = mean_values
+            agg_df[f"{col}_std"] = std_values
+            agg_df[f"{col}_upper"] = mean_values + std_values
+            agg_df[f"{col}_lower"] = mean_values - std_values
+
+        # Calculate detection rates for each timestep
+        for i, df in enumerate(trial_dfs):
+            if "traditional_detected" in df.columns:
+                # Add detections to the count
+                detected_indices = df.loc[
+                    df["traditional_detected"] == 1, "timestep"
+                ].values
+                for idx in detected_indices:
+                    if 0 <= idx < n_timesteps:
+                        agg_df.loc[int(idx), "traditional_detected_count"] += 1
+
+            if "horizon_detected" in df.columns:
+                # Add detections to the count
+                detected_indices = df.loc[
+                    df["horizon_detected"] == 1, "timestep"
+                ].values
+                for idx in detected_indices:
+                    if 0 <= idx < n_timesteps:
+                        agg_df.loc[int(idx), "horizon_detected_count"] += 1
+
+        # Calculate detection rates (as percentage of trials)
+        agg_df["traditional_detection_rate"] = agg_df[
+            "traditional_detected_count"
+        ] / len(trial_dfs)
+        agg_df["horizon_detection_rate"] = agg_df["horizon_detected_count"] / len(
+            trial_dfs
+        )
+
+        # Calculate average detection delays for true change points
+        cp_delays = {}
+        for cp in true_change_points:
+            trad_delays = []
+            horizon_delays = []
+
+            for df in trial_dfs:
+                # Find traditional detections that happen after this change point
+                if "traditional_detected" in df.columns:
+                    detections = df.loc[
+                        (df["traditional_detected"] == 1) & (df["timestep"] >= cp),
+                        "timestep",
+                    ].values
+                    if len(detections) > 0:
+                        # Use the earliest detection
+                        trad_delays.append(min(detections) - cp)
+
+                # Find horizon detections that happen after this change point
+                if "horizon_detected" in df.columns:
+                    detections = df.loc[
+                        (df["horizon_detected"] == 1) & (df["timestep"] >= cp),
+                        "timestep",
+                    ].values
+                    if len(detections) > 0:
+                        # Use the earliest detection
+                        horizon_delays.append(min(detections) - cp)
+
+            # Calculate average delays
+            avg_trad_delay = np.mean(trad_delays) if trad_delays else np.nan
+            avg_horizon_delay = np.mean(horizon_delays) if horizon_delays else np.nan
+
+            # Store delays for this change point
+            cp_delays[cp] = {
+                "traditional_avg_delay": avg_trad_delay,
+                "horizon_avg_delay": avg_horizon_delay,
+                "delay_reduction": (
+                    (avg_trad_delay - avg_horizon_delay) / avg_trad_delay
+                    if avg_trad_delay
+                    and not np.isnan(avg_trad_delay)
+                    and avg_trad_delay > 0
+                    else np.nan
+                ),
+            }
+
+        # Add metadata about change points and delays to the aggregate dataframe
+        # This will be useful for plotting annotations
+        cp_data = []
+        for cp, delays in cp_delays.items():
+            cp_data.append(
+                {
+                    "change_point": cp,
+                    "traditional_avg_delay": delays["traditional_avg_delay"],
+                    "horizon_avg_delay": delays["horizon_avg_delay"],
+                    "delay_reduction": delays["delay_reduction"],
+                }
+            )
+
+        # Create a separate dataframe for change point metadata
+        cp_df = pd.DataFrame(cp_data)
+
+        # Write both dataframes to the Excel file
+        agg_df.to_excel(writer, sheet_name="Aggregate", index=False)
+        cp_df.to_excel(writer, sheet_name="ChangePointMetadata", index=False)

@@ -6,7 +6,6 @@ from typing import Dict, List, Any, Optional, Tuple
 import logging
 import numpy as np
 from tabulate import tabulate
-from collections import Counter
 
 logger = logging.getLogger(__name__)
 
