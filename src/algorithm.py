@@ -87,6 +87,7 @@ class GraphChangeDetection:
             self.config["output"]["directory"],
             exist_ok=True,
         )
+        logger.debug(f"Created output directory: {self.config['output']['directory']}")
 
     def _init_generator(self):
         """Initialize the graph sequence generator.
@@ -288,6 +289,13 @@ class GraphChangeDetection:
         # Core detector seed - same for all trials
         core_detector_seed = 42
 
+        logger.info(
+            f"Running {n_trials} detection trials using fixed detector seed {core_detector_seed}"
+        )
+        logger.debug(
+            f"Using betting seeds: {betting_seeds[:min(5, len(betting_seeds))]}{' ...' if len(betting_seeds) > 5 else ''}"
+        )
+
         # Run individual trials
         individual_results = []
         for trial_idx, betting_seed in enumerate(betting_seeds):
@@ -295,7 +303,7 @@ class GraphChangeDetection:
                 break
 
             logger.info(
-                f"Running trial {trial_idx + 1}/{n_trials} with seed {betting_seed}"
+                f"Running trial {trial_idx + 1}/{n_trials} with betting seed {betting_seed}"
             )
 
             # Create modified features and predictions based on variation pattern
@@ -318,10 +326,21 @@ class GraphChangeDetection:
                 )
 
                 if detection_result is None:
-                    logger.warning(f"Detection returned None for trial {trial_idx + 1}")
+                    logger.warning(
+                        f"Trial {trial_idx + 1}/{n_trials} failed: No detection result"
+                    )
                     continue
 
                 individual_results.append(detection_result)
+
+                # Log key results from this trial
+                if "traditional_change_points" in detection_result:
+                    trad_cp = detection_result.get("traditional_change_points", [])
+                    horizon_cp = detection_result.get("horizon_change_points", [])
+                    logger.debug(
+                        f"Trial {trial_idx + 1} results: Traditional CPs: {trad_cp}, Horizon CPs: {horizon_cp}"
+                    )
+
             except Exception as e:
                 logger.error(f"Trial {trial_idx + 1}/{n_trials} failed: {str(e)}")
                 continue
@@ -392,15 +411,24 @@ class GraphChangeDetection:
 
         try:
             # Create output directory with descriptive name
+            logger.info("STEP 1: Setting up output directory")
             self._setup_output_directory()
 
             # Run each pipeline stage
+            logger.info("STEP 2: Generating graph sequence")
             generator = self._init_generator()
             sequence_result = self._generate_sequence(generator)
             graphs = sequence_result["graphs"]
             true_change_points = sequence_result["change_points"]
+            logger.info(
+                f"Generated sequence with {len(graphs)} graphs and {len(true_change_points)} change points at: {true_change_points}"
+            )
 
+            logger.info("STEP 3: Extracting features")
             features_numeric, features_raw = self._extract_features(graphs)
+            logger.info(
+                f"Extracted {features_numeric.shape[1]} features across {features_numeric.shape[0]} timesteps"
+            )
 
             # Prediction is optional
             predictor = None
@@ -408,13 +436,27 @@ class GraphChangeDetection:
             predicted_features = None
 
             if enable_prediction:
+                logger.info("STEP 4: Generating predictions")
                 predictor = self._init_predictor()
                 predicted_graphs = self._generate_predictions(graphs, predictor)
                 predicted_features = self._process_predictions(predicted_graphs)
+                if predicted_features is not None:
+                    logger.info(
+                        f"Generated {len(predicted_features)} predictions with {predicted_features.shape[1]} horizons"
+                    )
+            else:
+                logger.info("STEP 4: Prediction disabled, skipping")
 
             # Normalize features ONCE before all trials
+            logger.info("STEP 5: Normalizing features")
             features_normalized, feature_means, feature_stds = normalize_features(
                 features_numeric
+            )
+            logger.debug(
+                f"Feature means: {feature_means[:3]}{' ...' if len(feature_means) > 3 else ''}"
+            )
+            logger.debug(
+                f"Feature std devs: {feature_stds[:3]}{' ...' if len(feature_stds) > 3 else ''}"
             )
 
             # Normalize predicted features if available
@@ -423,17 +465,23 @@ class GraphChangeDetection:
                 predicted_normalized = normalize_predictions(
                     predicted_features, feature_means, feature_stds
                 )
+                logger.debug(f"Normalized {len(predicted_normalized)} predictions")
 
             # Run detection trials
+            logger.info("STEP 6: Running detection trials")
             trial_results = self._run_detection_trials(
                 features_normalized, predicted_normalized, true_change_points
             )
 
             # Optional CSV export
             if enable_csv_export and trial_results["aggregated"]:
+                logger.info("STEP 7: Exporting results to CSV")
                 self._export_results_to_csv(trial_results, true_change_points)
+            else:
+                logger.info("STEP 7: CSV export disabled, skipping")
 
             # Compile final results
+            logger.info("STEP 8: Preparing result data")
             results = prepare_result_data(
                 sequence_result,
                 features_numeric,
@@ -444,6 +492,7 @@ class GraphChangeDetection:
                 self.config,
             )
 
+            logger.info("Pipeline execution completed successfully")
             return results
 
         except Exception as e:
