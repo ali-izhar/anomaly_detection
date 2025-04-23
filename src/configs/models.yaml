@@ -37,7 +37,7 @@ erdos_renyi:
   seq_len: 200  # Total length of the time series
   min_segment: 40  # Minimum length of each stable segment
   min_changes: 1  # Minimum number of change points
-  max_changes: 1  # Maximum number of change points
+  max_changes: 2  # Maximum number of change points
   # Initial probability
   prob: 0.05  # Start with sparse connections
   min_prob: 0.05  # Very sparse phase

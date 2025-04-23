@@ -298,70 +298,15 @@ class GraphChangeDetection:
                 f"Running trial {trial_idx + 1}/{n_trials} with seed {betting_seed}"
             )
 
-            # Set a random state for data variation
-            data_rng = np.random.RandomState(int(betting_seed))
-
-            # Create a controlled variation of the data for this trial
-            # This simulates a different experiment run while using the same base data
-            data_variation = (
-                trial_idx % 2
-            )  # Use modulo to create 2 distinct variation patterns (no feature removal)
-
             # Create modified features and predictions based on variation pattern
-            if n_trials == 1:
-                # For single trial, use data as is
-                trial_features = features_normalized
-                trial_predictions = predicted_normalized
-            else:
-                # Choose variation method based on pattern
-                if data_variation == 0:
-                    # Method 1: Sample selection (use 90% of samples randomly)
-                    sample_count = features_normalized.shape[0]
-                    sample_indices = data_rng.choice(
-                        sample_count, size=int(sample_count * 0.9), replace=False
-                    )
-                    sample_indices.sort()  # Keep time order
-
-                    # Create modified features and predictions
-                    trial_features = features_normalized[sample_indices]
-                    if predicted_normalized is not None:
-                        # Select from predictions that are available
-                        pred_indices = [
-                            i for i in sample_indices if i < len(predicted_normalized)
-                        ]
-                        if pred_indices:
-                            trial_predictions = predicted_normalized[pred_indices]
-                        else:
-                            trial_predictions = None
-                    else:
-                        trial_predictions = None
-
-                else:
-                    # Method 2: Slight feature perturbation
-                    # Add a tiny amount of random noise (±0.5%) to create variation without affecting detection
-                    noise_factor = 0.005  # 0.5% noise
-
-                    # Generate different noise for each sample and feature
-                    noise = data_rng.normal(
-                        0, noise_factor, size=features_normalized.shape
-                    )
-
-                    # Apply noise to create trial variation
-                    trial_features = features_normalized + noise
-
-                    # Do the same for predictions if available
-                    if predicted_normalized is not None:
-                        pred_noise = data_rng.normal(
-                            0, noise_factor, size=predicted_normalized.shape
-                        )
-                        trial_predictions = predicted_normalized + pred_noise
-                    else:
-                        trial_predictions = None
+            # For all trials, use the actual data without modifications
+            trial_features = features_normalized
+            trial_predictions = predicted_normalized
 
             # Initialize detector with fixed core seed but variable betting seed
             detector = self._init_detector(
                 random_state=core_detector_seed,  # Fixed seed for maximum stability
-                betting_seed=int(betting_seed),  # Full variation for betting function
+                betting_seed=int(betting_seed),  # Variation for betting function only
             )
 
             try:
