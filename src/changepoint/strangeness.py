@@ -86,6 +86,7 @@ class StrangenessConfig:
 def strangeness_point(
     data: Union[DataSequence, np.ndarray],
     config: Optional[StrangenessConfig] = None,
+    random_state: Optional[int] = None,
 ) -> np.ndarray:
     """Compute strangeness values for each point in the sequence.
 
@@ -95,6 +96,7 @@ def strangeness_point(
     Args:
         data: Input sequence of shape (n_samples, n_features) or (n_samples, time, n_features)
         config: Configuration for strangeness computation
+        random_state: Optional random seed that overrides config's random_state
 
     Returns:
         Array of shape (n_samples,) containing strangeness values
@@ -105,6 +107,16 @@ def strangeness_point(
     """
     # Use provided configuration or fall back to defaults.
     config = config or StrangenessConfig()
+
+    # Override config's random_state if one is provided
+    if random_state is not None:
+        # Create a copy of the config with the new random_state
+        config = StrangenessConfig(
+            n_clusters=config.n_clusters,
+            batch_size=config.batch_size,
+            random_state=random_state,  # Use the provided random_state
+            distance_config=config.distance_config,
+        )
 
     try:
         # Handle empty input cases first

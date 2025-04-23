@@ -91,10 +91,13 @@ def compute_traditional_martingale(
                 s_vals = strangeness_point(
                     window_data,
                     config=config.strangeness_config,
+                    random_state=config.strangeness_seed or config.random_state,
                 )
 
             # Compute conformal p-value using the strangeness scores.
-            pvalue = get_pvalue(s_vals, random_state=config.random_state)
+            pvalue = get_pvalue(
+                s_vals, random_state=config.pvalue_seed or config.random_state
+            )
 
             # Update traditional martingale using the betting function.
             prev_trad = state.traditional_martingale
@@ -226,9 +229,12 @@ def multiview_traditional_martingale(
                         s_vals = strangeness_point(
                             window_data,
                             config=config.strangeness_config,
+                            random_state=config.strangeness_seed or config.random_state,
                         )
                     # Compute p-value and update traditional martingale for feature j using M_{t-1}
-                    pv = get_pvalue(s_vals, random_state=config.random_state)
+                    pv = get_pvalue(
+                        s_vals, random_state=config.pvalue_seed or config.random_state
+                    )
                     prev_val = prev_traditional_t_minus_1[j]  # Use M_{t-1}
                     new_val = betting_function(prev_val, pv)
                     new_traditional.append(new_val)

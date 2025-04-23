@@ -75,8 +75,10 @@ class DetectorConfig:
         betting_func_config: Configuration for the betting function
         distance_measure: Distance metric for strangeness computation
         distance_p: Order parameter for Minkowski distance
-        random_state: Random seed for core detection components (strangeness, p-values)
+        random_state: Random seed for general detector components
         betting_random_state: Optional separate random seed for betting functions
+        strangeness_seed: Optional separate random seed for strangeness calculation
+        pvalue_seed: Optional separate random seed for p-value computation
     """
 
     method: DetectionMethod = "multiview"
@@ -91,6 +93,8 @@ class DetectorConfig:
     distance_p: float = 2.0
     random_state: Optional[int] = 42
     betting_random_state: Optional[int] = None
+    strangeness_seed: Optional[int] = None
+    pvalue_seed: Optional[int] = None
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -367,13 +371,15 @@ class ChangePointDetector(Generic[ScalarType]):
             reset_on_traditional=self.config.reset_on_traditional,
             window_size=self.config.max_window,
             random_state=self.config.random_state,
+            strangeness_seed=self.config.strangeness_seed,
+            pvalue_seed=self.config.pvalue_seed,
             betting_func_config=self.config.betting_func_config,
             distance_measure=self.config.distance_measure,
             distance_p=self.config.distance_p,
             strangeness_config=StrangenessConfig(
                 n_clusters=1,
                 batch_size=None,
-                random_state=self.config.random_state,
+                random_state=self.config.strangeness_seed or self.config.random_state,
                 distance_config=DistanceConfig(
                     metric=self.config.distance_measure,
                     p=self.config.distance_p,
@@ -467,13 +473,15 @@ class ChangePointDetector(Generic[ScalarType]):
             reset_on_traditional=self.config.reset_on_traditional,
             window_size=self.config.max_window,
             random_state=self.config.random_state,
+            strangeness_seed=self.config.strangeness_seed,
+            pvalue_seed=self.config.pvalue_seed,
             betting_func_config=self.config.betting_func_config,
             distance_measure=self.config.distance_measure,
             distance_p=self.config.distance_p,
             strangeness_config=StrangenessConfig(
                 n_clusters=1,
                 batch_size=None,
-                random_state=self.config.random_state,
+                random_state=self.config.strangeness_seed or self.config.random_state,
                 distance_config=DistanceConfig(
                     metric=self.config.distance_measure,
                     p=self.config.distance_p,

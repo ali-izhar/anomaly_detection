@@ -37,7 +37,9 @@ class MartingaleConfig:
         reset: Whether to reset after detection.
         reset_on_traditional: Whether horizon martingales should reset when traditional detects a change.
         window_size: Maximum window size for strangeness computation.
-        random_state: Random seed for reproducibility.
+        random_state: Random seed for general randomization.
+        strangeness_seed: Optional separate random seed for strangeness calculation.
+        pvalue_seed: Optional separate random seed for p-value computation.
         betting_func_config: Configuration for betting function.
         distance_measure: Distance metric for strangeness computation.
         distance_p: Order parameter for Minkowski distance.
@@ -52,6 +54,8 @@ class MartingaleConfig:
     reset_on_traditional: bool = False
     window_size: Optional[int] = None
     random_state: Optional[int] = None
+    strangeness_seed: Optional[int] = None
+    pvalue_seed: Optional[int] = None
     betting_func_config: Optional[BettingFunctionConfig] = None
     distance_measure: str = "euclidean"
     distance_p: float = 2.0

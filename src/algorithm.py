@@ -112,11 +112,19 @@ class GraphChangeDetection:
             predictor_config["config"],
         )
 
-    def _init_detector(self, random_state=None, betting_seed=None):
+    def _init_detector(
+        self,
+        random_state=None,
+        strangeness_seed=None,
+        pvalue_seed=None,
+        betting_seed=None,
+    ):
         """Initialize the change point detector.
 
         Args:
-            random_state: Optional random seed for core detector components
+            random_state: Optional random seed for general detector components
+            strangeness_seed: Optional separate seed for strangeness calculation
+            pvalue_seed: Optional separate seed for p-value computation
             betting_seed: Optional separate seed for betting function randomization
 
         Returns:
@@ -153,7 +161,9 @@ class GraphChangeDetection:
             betting_func_config=betting_func_config,
             distance_measure=det_config["distance"]["measure"],
             distance_p=det_config["distance"]["p"],
-            random_state=random_state,
+            random_state=random_state,  # Main random state
+            strangeness_seed=strangeness_seed,  # Seed for strangeness calculation
+            pvalue_seed=pvalue_seed,  # Seed for p-value computation
         )
 
         return ChangePointDetector(detector_config)
@@ -274,51 +284,63 @@ class GraphChangeDetection:
         n_trials = trials_config["n_trials"]
         base_seed = trials_config["random_seeds"]
 
-        # Handle random seeds for betting functions only
+        # Handle random seeds for all randomized components
         if base_seed is None:
             # Generate completely random seeds
-            betting_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
+            random_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
         elif isinstance(base_seed, (int, float)):
             # Generate deterministic sequence of seeds from base seed
             rng = np.random.RandomState(int(base_seed))
-            betting_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
+            random_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
         else:
             # Use provided list of seeds
-            betting_seeds = np.array(base_seed)
+            random_seeds = np.array(base_seed)
 
-        # Core detector seed - same for all trials
-        core_detector_seed = 42
-
-        logger.info(
-            f"Running {n_trials} detection trials using fixed detector seed {core_detector_seed}"
-        )
+        logger.info(f"Running {n_trials} detection trials with varying algorithm seeds")
         logger.debug(
-            f"Using betting seeds: {betting_seeds[:min(5, len(betting_seeds))]}{' ...' if len(betting_seeds) > 5 else ''}"
+            f"Using random seeds: {random_seeds[:min(5, len(random_seeds))]}{' ...' if len(random_seeds) > 5 else ''}"
         )
 
         # Run individual trials
         individual_results = []
-        for trial_idx, betting_seed in enumerate(betting_seeds):
+        for trial_idx, seed in enumerate(random_seeds):
             if trial_idx >= n_trials:
                 break
 
+            # Convert seed to integer if needed
+            int_seed = int(seed) if seed is not None else None
+
             logger.info(
-                f"Running trial {trial_idx + 1}/{n_trials} with betting seed {betting_seed}"
+                f"Running trial {trial_idx + 1}/{n_trials} with seed {int_seed}"
             )
 
-            # Create modified features and predictions based on variation pattern
             # For all trials, use the actual data without modifications
             trial_features = features_normalized
             trial_predictions = predicted_normalized
 
-            # Initialize detector with fixed core seed but variable betting seed
+            # Create different seeds for various components from the main seed
+            # This creates controlled variation in different parts of the algorithm
+            detector_seed = int_seed
+            strangeness_seed = (int_seed + 1) % (
+                2**31 - 1
+            )  # Different seed for strangeness calculation
+            pvalue_seed = (int_seed + 2) % (
+                2**31 - 1
+            )  # Different seed for p-value computation
+            betting_seed = (int_seed + 3) % (
+                2**31 - 1
+            )  # Different seed for betting function
+
+            # Initialize detector with this trial's seeds
             detector = self._init_detector(
-                random_state=core_detector_seed,  # Fixed seed for maximum stability
-                betting_seed=int(betting_seed),  # Variation for betting function only
+                random_state=detector_seed,  # Main detector seed
+                strangeness_seed=strangeness_seed,  # Seed for strangeness calculation
+                pvalue_seed=pvalue_seed,  # Seed for p-value computation
+                betting_seed=betting_seed,  # Seed for betting function
             )
 
             try:
-                # Run detection using the trial-specific data
+                # Run detection using the original data but varied algorithm seeds
                 detection_result = detector.run(
                     data=trial_features,
                     predicted_data=trial_predictions,
@@ -359,7 +381,7 @@ class GraphChangeDetection:
         return {
             "individual_trials": individual_results,
             "aggregated": aggregated_results,
-            "random_seeds": betting_seeds.tolist(),
+            "random_seeds": random_seeds.tolist(),
         }
 
     def _export_results_to_csv(self, trial_results, true_change_points):

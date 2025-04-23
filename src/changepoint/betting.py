@@ -558,13 +558,43 @@ def create_betting_function(
     betting_name = config.name
     params = config.params or {}
 
-    # Set a specific random seed for betting functions if provided
+    # Create a local random state for this betting function if random_seed is provided
+    # This avoids affecting global random state
+    local_rng = None
     if config.random_seed is not None:
-        np.random.seed(config.random_seed)
+        local_rng = np.random.RandomState(config.random_seed)
+
+        # For kernel betting, we need to initialize with random values
+        if betting_name == "kernel" and "past_pvalues" not in params:
+            # Generate some initial p-values using the local RNG
+            initial_pvalues = local_rng.uniform(0, 1, 10)
+            params = params.copy()  # Create a copy to avoid modifying the original
+            params["past_pvalues"] = initial_pvalues.tolist()
 
     # Create betting function instance based on the requested type
     betting_class = BETTING_FUNCTIONS[betting_name]
     betting_instance = betting_class(params)
 
-    # Return the callable __call__ method of the betting function instance for updating martingale values
+    # If we have a local RNG, create a wrapper that uses it for any randomness
+    if local_rng is not None:
+        # Original call method from the betting function
+        original_call = betting_instance.__call__
+
+        # Create a wrapper function that sets the random seed before each call
+        def seeded_betting_call(prev_m: float, pvalue: float) -> float:
+            # Use our local RNG for any random operations within the betting function
+            with np.errstate(all="ignore"):  # Suppress numpy warnings
+                old_state = np.random.get_state()
+                np.random.set_state(local_rng.get_state())
+                try:
+                    result = original_call(prev_m, pvalue)
+                    return result
+                finally:
+                    # Restore the global random state
+                    np.random.set_state(old_state)
+
+        # Return the wrapped function
+        return seeded_betting_call
+
+    # If no random seed was provided, return the original function
     return betting_instance.__call__

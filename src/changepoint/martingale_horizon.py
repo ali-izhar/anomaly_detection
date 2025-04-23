@@ -258,8 +258,12 @@ def compute_horizon_martingale(
                     pred_s_val = strangeness_point(
                         np.vstack([window_data, actual_data]),
                         config=config.strangeness_config,
+                        random_state=config.strangeness_seed or config.random_state,
                     )
-                    pred_pv = get_pvalue(pred_s_val, random_state=config.random_state)
+                    pred_pv = get_pvalue(
+                        pred_s_val,
+                        random_state=config.pvalue_seed or config.random_state,
+                    )
 
                     # Adjust p-value based on prediction error (lower p-value = more surprised) only if enabled
                     if config.enable_pvalue_dampening:
@@ -626,9 +630,12 @@ def multiview_horizon_martingale(
                             pred_s_val = strangeness_point(
                                 np.vstack([window_data, actual_data]),
                                 config=config.strangeness_config,
+                                random_state=config.strangeness_seed
+                                or config.random_state,
                             )
                             pred_pv = get_pvalue(
-                                pred_s_val, random_state=config.random_state
+                                pred_s_val,
+                                random_state=config.pvalue_seed or config.random_state,
                             )
 
                             # Adjust p-value based on prediction error only if dampening is enabled
