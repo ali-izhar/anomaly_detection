@@ -25,7 +25,7 @@ References:
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -42,6 +42,10 @@ from typing import (
 
 import numpy as np
 from scipy.stats import beta, gaussian_kde
+import logging
+from functools import partial
+
+logger = logging.getLogger(__name__)
 
 # Define allowed betting function names as literal types
 BettingFunctionName = Literal[
@@ -51,22 +55,34 @@ BettingFunctionName = Literal[
 VALID_BETTING_FUNCTIONS: tuple[str, ...] = get_args(BettingFunctionName)
 
 
-class BettingFunctionConfig(TypedDict, total=False):
-    """Configuration for betting functions.
+@dataclass(frozen=True)
+class BettingFunctionConfig:
+    """Configuration for betting functions used in martingale computation.
 
     Attributes:
-        name: The name of the betting function to use.
-        params: Parameters specific to the chosen betting function.
-
-    Example:
-        >>> config = {
-        ...     "name": "power",
-        ...     "params": {"epsilon": 0.7}
-        ... }
+        name: Name of the betting function to use.
+        params: Parameters for the selected betting function.
+        random_seed: Optional random seed specifically for betting function randomness.
     """
 
-    name: BettingFunctionName
-    params: Dict[str, Union[float, List[float], List[Any]]]
+    name: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    random_seed: Optional[int] = None
+
+    def __post_init__(self):
+        """Validate the betting function configuration."""
+        valid_functions = [
+            "constant",
+            "power",
+            "exponential",
+            "mixture",
+            "beta",
+            "kernel",
+        ]
+        if self.name not in valid_functions:
+            raise ValueError(
+                f"Invalid betting function '{self.name}'. Must be one of {valid_functions}"
+            )
 
 
 @dataclass(frozen=True)
@@ -527,36 +543,28 @@ BETTING_FUNCTIONS: Dict[BettingFunctionName, type[BettingFunction]] = {
 }
 
 
-def get_betting_function(
+def create_betting_function(
     config: BettingFunctionConfig,
 ) -> Callable[[float, float], float]:
-    """Get a configured betting function instance.
+    """Create a betting function based on the provided configuration.
 
     Args:
-        config: Betting function configuration with name and parameters.
+        config: Configuration for the betting function.
 
     Returns:
-        A callable that implements the betting function with the specified configuration.
-
-    Raises:
-        ValueError: If the betting function name is unknown or required parameters are missing.
-
-    Example:
-        >>> config = {"name": "power", "params": {"epsilon": 0.7}}
-        >>> betting_func = get_betting_function(config)
-        >>> new_value = betting_func(1.0, 0.05)  # Update martingale
+        A callable betting function that maps p-values to betting factors.
     """
-    # Check that the provided betting function name is valid
-    if config["name"] not in BETTING_FUNCTIONS:
-        raise ValueError(
-            f"Unknown betting function '{config['name']}'. "
-            f"Available options are: {list(BETTING_FUNCTIONS.keys())}"
-        )
+    # Get betting function configuration
+    betting_name = config.name
+    params = config.params or {}
 
-    # Retrieve the corresponding betting function class
-    betting_class = BETTING_FUNCTIONS[config["name"]]
-    # Instantiate the betting function using the provided parameters (or defaults if none provided)
-    betting_instance = betting_class(config.get("params", {}))
+    # Set a specific random seed for betting functions if provided
+    if config.random_seed is not None:
+        np.random.seed(config.random_seed)
+
+    # Create betting function instance based on the requested type
+    betting_class = BETTING_FUNCTIONS[betting_name]
+    betting_instance = betting_class(params)
 
     # Return the callable __call__ method of the betting function instance for updating martingale values
     return betting_instance.__call__

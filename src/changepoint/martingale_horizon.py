@@ -23,7 +23,7 @@ from .martingale_traditional import (
 )
 
 from .betting import (
-    get_betting_function,
+    create_betting_function,
 )
 
 from .strangeness import (
@@ -91,7 +91,7 @@ def compute_horizon_martingale(
         traditional_martingale_values = padding + traditional_martingale_values
 
     # Obtain the betting function callable based on the betting_func_config.
-    betting_function = get_betting_function(config.betting_func_config)
+    betting_function = create_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
     logger.debug("Horizon Martingale Input Dimensions:")
@@ -414,7 +414,7 @@ def multiview_horizon_martingale(
         state.reset(len(data))
 
     # Get the betting function based on the provided configuration.
-    betting_function = get_betting_function(config.betting_func_config)
+    betting_function = create_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
     logger.debug("Multiview Horizon Martingale Input Dimensions:")

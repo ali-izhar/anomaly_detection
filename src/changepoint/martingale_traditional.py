@@ -16,7 +16,7 @@ from .martingale_base import (
 )
 
 from .betting import (
-    get_betting_function,
+    create_betting_function,
 )
 from .strangeness import (
     strangeness_point,
@@ -63,7 +63,7 @@ def compute_traditional_martingale(
         state = MartingaleState()
 
     # Obtain the betting function callable based on the betting_func_config.
-    betting_function = get_betting_function(config.betting_func_config)
+    betting_function = create_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
     logger.debug("Single-view Traditional Martingale Input Dimensions:")
@@ -175,7 +175,7 @@ def multiview_traditional_martingale(
         state.reset(len(data))
 
     # Get the betting function based on the provided configuration.
-    betting_function = get_betting_function(config.betting_func_config)
+    betting_function = create_betting_function(config.betting_func_config)
 
     # Log input dimensions and configuration details.
     logger.debug("Multiview Traditional Martingale Input Dimensions:")

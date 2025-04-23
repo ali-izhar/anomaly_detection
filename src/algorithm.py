@@ -111,11 +111,12 @@ class GraphChangeDetection:
             predictor_config["config"],
         )
 
-    def _init_detector(self, random_state=None):
+    def _init_detector(self, random_state=None, betting_seed=None):
         """Initialize the change point detector.
 
         Args:
-            random_state: Optional random seed for reproducibility
+            random_state: Optional random seed for core detector components
+            betting_seed: Optional separate seed for betting function randomization
 
         Returns:
             ChangePointDetector instance
@@ -134,7 +135,9 @@ class GraphChangeDetection:
 
         # Create proper BettingFunctionConfig
         betting_func_config = BettingFunctionConfig(
-            name=betting_func_name, params=betting_func_params
+            name=betting_func_name,
+            params=betting_func_params,
+            random_seed=betting_seed,  # Pass separate betting seed
         )
 
         # Create detector config
@@ -251,13 +254,13 @@ class GraphChangeDetection:
         return predicted_array
 
     def _run_detection_trials(
-        self, features_numeric, predicted_features, true_change_points
+        self, features_normalized, predicted_normalized, true_change_points
     ):
         """Run multiple trials of the detector.
 
         Args:
-            features_numeric: Extracted numeric features
-            predicted_features: Predicted feature vectors (can be None)
+            features_normalized: Normalized feature vectors
+            predicted_normalized: Normalized predicted feature vectors (can be None)
             true_change_points: Ground truth change points
 
         Returns:
@@ -270,44 +273,102 @@ class GraphChangeDetection:
         n_trials = trials_config["n_trials"]
         base_seed = trials_config["random_seeds"]
 
-        # Handle random seeds
+        # Handle random seeds for betting functions only
         if base_seed is None:
             # Generate completely random seeds
-            random_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
+            betting_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
         elif isinstance(base_seed, (int, float)):
             # Generate deterministic sequence of seeds from base seed
             rng = np.random.RandomState(int(base_seed))
-            random_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
+            betting_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
         else:
             # Use provided list of seeds
-            random_seeds = np.array(base_seed)
+            betting_seeds = np.array(base_seed)
 
-        # Normalize features using the utility function
-        features_normalized, feature_means, feature_stds = normalize_features(
-            features_numeric
-        )
-
-        # Normalize predicted features if available
-        predicted_normalized = None
-        if predicted_features is not None:
-            predicted_normalized = normalize_predictions(
-                predicted_features, feature_means, feature_stds
-            )
+        # Core detector seed - same for all trials
+        core_detector_seed = 42
 
         # Run individual trials
         individual_results = []
-        for trial_idx, seed in enumerate(random_seeds):
-            logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
+        for trial_idx, betting_seed in enumerate(betting_seeds):
+            if trial_idx >= n_trials:
+                break
 
-            int_seed = int(seed) if seed is not None else None
+            logger.info(
+                f"Running trial {trial_idx + 1}/{n_trials} with seed {betting_seed}"
+            )
 
-            # Initialize detector with this trial's seed
-            detector = self._init_detector(random_state=int_seed)
+            # Set a random state for data variation
+            data_rng = np.random.RandomState(int(betting_seed))
+
+            # Create a controlled variation of the data for this trial
+            # This simulates a different experiment run while using the same base data
+            data_variation = (
+                trial_idx % 2
+            )  # Use modulo to create 2 distinct variation patterns (no feature removal)
+
+            # Create modified features and predictions based on variation pattern
+            if n_trials == 1:
+                # For single trial, use data as is
+                trial_features = features_normalized
+                trial_predictions = predicted_normalized
+            else:
+                # Choose variation method based on pattern
+                if data_variation == 0:
+                    # Method 1: Sample selection (use 90% of samples randomly)
+                    sample_count = features_normalized.shape[0]
+                    sample_indices = data_rng.choice(
+                        sample_count, size=int(sample_count * 0.9), replace=False
+                    )
+                    sample_indices.sort()  # Keep time order
+
+                    # Create modified features and predictions
+                    trial_features = features_normalized[sample_indices]
+                    if predicted_normalized is not None:
+                        # Select from predictions that are available
+                        pred_indices = [
+                            i for i in sample_indices if i < len(predicted_normalized)
+                        ]
+                        if pred_indices:
+                            trial_predictions = predicted_normalized[pred_indices]
+                        else:
+                            trial_predictions = None
+                    else:
+                        trial_predictions = None
+
+                else:
+                    # Method 2: Slight feature perturbation
+                    # Add a tiny amount of random noise (±0.5%) to create variation without affecting detection
+                    noise_factor = 0.005  # 0.5% noise
+
+                    # Generate different noise for each sample and feature
+                    noise = data_rng.normal(
+                        0, noise_factor, size=features_normalized.shape
+                    )
+
+                    # Apply noise to create trial variation
+                    trial_features = features_normalized + noise
+
+                    # Do the same for predictions if available
+                    if predicted_normalized is not None:
+                        pred_noise = data_rng.normal(
+                            0, noise_factor, size=predicted_normalized.shape
+                        )
+                        trial_predictions = predicted_normalized + pred_noise
+                    else:
+                        trial_predictions = None
+
+            # Initialize detector with fixed core seed but variable betting seed
+            detector = self._init_detector(
+                random_state=core_detector_seed,  # Fixed seed for maximum stability
+                betting_seed=int(betting_seed),  # Full variation for betting function
+            )
+
             try:
-                # Run detection
+                # Run detection using the trial-specific data
                 detection_result = detector.run(
-                    data=features_normalized,
-                    predicted_data=predicted_normalized,
+                    data=trial_features,
+                    predicted_data=trial_predictions,
                     reset_state=True,
                 )
 
@@ -334,7 +395,7 @@ class GraphChangeDetection:
         return {
             "individual_trials": individual_results,
             "aggregated": aggregated_results,
-            "random_seeds": random_seeds.tolist(),
+            "random_seeds": betting_seeds.tolist(),
         }
 
     def _export_results_to_csv(self, trial_results, true_change_points):
@@ -406,9 +467,21 @@ class GraphChangeDetection:
                 predicted_graphs = self._generate_predictions(graphs, predictor)
                 predicted_features = self._process_predictions(predicted_graphs)
 
+            # Normalize features ONCE before all trials
+            features_normalized, feature_means, feature_stds = normalize_features(
+                features_numeric
+            )
+
+            # Normalize predicted features if available
+            predicted_normalized = None
+            if predicted_features is not None:
+                predicted_normalized = normalize_predictions(
+                    predicted_features, feature_means, feature_stds
+                )
+
             # Run detection trials
             trial_results = self._run_detection_trials(
-                features_numeric, predicted_features, true_change_points
+                features_normalized, predicted_normalized, true_change_points
             )
 
             # Optional CSV export

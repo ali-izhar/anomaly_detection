@@ -75,7 +75,8 @@ class DetectorConfig:
         betting_func_config: Configuration for the betting function
         distance_measure: Distance metric for strangeness computation
         distance_p: Order parameter for Minkowski distance
-        random_state: Random seed for reproducibility
+        random_state: Random seed for core detection components (strangeness, p-values)
+        betting_random_state: Optional separate random seed for betting functions
     """
 
     method: DetectionMethod = "multiview"
@@ -89,6 +90,7 @@ class DetectorConfig:
     distance_measure: str = "euclidean"
     distance_p: float = 2.0
     random_state: Optional[int] = 42
+    betting_random_state: Optional[int] = None
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -145,12 +147,25 @@ class ChangePointDetector(Generic[ScalarType]):
 
         # If no betting function config is provided, set a default configuration.
         if self.config.betting_func_config is None:
-            self.config.betting_func_config = {
-                "name": "power",
-                "params": {"epsilon": 0.7},
-            }
+            # Create default config, using betting_random_state if available
+            self.config.betting_func_config = BettingFunctionConfig(
+                name="power",
+                params={"epsilon": 0.7},
+                random_seed=self.config.betting_random_state,
+            )
             logger.debug(
                 f"No betting function config provided. Using default: {self.config.betting_func_config}"
+            )
+        elif (
+            self.config.betting_random_state is not None
+            and self.config.betting_func_config.random_seed is None
+        ):
+            # If betting_random_state is provided but not already set in the betting function config,
+            # create a new betting function config with the random seed
+            self.config.betting_func_config = BettingFunctionConfig(
+                name=self.config.betting_func_config.name,
+                params=self.config.betting_func_config.params,
+                random_seed=self.config.betting_random_state,
             )
 
         # Initialize the internal state of the detector.
@@ -167,7 +182,11 @@ class ChangePointDetector(Generic[ScalarType]):
         logger.debug(
             f"  Distance: {self.config.distance_measure} (p={self.config.distance_p})"
         )
-        logger.debug(f"  Betting function: {self.config.betting_func_config['name']}")
+        logger.debug(f"  Core random state: {self.config.random_state}")
+        logger.debug(f"  Betting function: {self.config.betting_func_config.name}")
+        logger.debug(
+            f"  Betting random state: {self.config.betting_func_config.random_seed}"
+        )
 
     def _reset_state(self) -> None:
         """Reset the detector's internal state."""
