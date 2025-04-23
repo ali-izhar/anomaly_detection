@@ -17,7 +17,7 @@ if project_root not in sys.path:
 from src.configs.loader import get_config
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
-from src.plot.plot_graph import NetworkVisualizer
+from src.utils.plot_graph import NetworkVisualizer
 from src.predictor.factory import PredictorFactory
 from src.graph.metrics import (
     compute_feature_metrics,
@@ -25,7 +25,7 @@ from src.graph.metrics import (
     FeatureMetrics,
     DistributionMetrics,
 )
-from src.plot.plot_config import (
+from src.utils.plotting_config import (
     FIGURE_DIMENSIONS as FD,
     TYPOGRAPHY as TYPO,
     LINE_STYLE as LS,
@@ -60,6 +60,10 @@ def generate_network_and_features():
     result = generator.generate_sequence(params)
     graphs = result["graphs"]
     change_points = result["change_points"]
+
+    print(
+        f"Generated {len(graphs)} graphs with {len(change_points)} change points at: {change_points}"
+    )
 
     # Extract features for each graph
     print("Extracting network features...")
@@ -153,13 +157,14 @@ def compare_predictors(
     feature_extractor = NetworkFeatureExtractor()
 
     # Get all predictor types
-    predictor_types = list(PredictorFactory.PREDICTOR_TYPES.keys())
+    # predictor_types = list(PredictorFactory.PREDICTOR_TYPES.keys())
+    predictor_types = ["graph"]
 
     # Store results for each predictor
     results = {}
 
-    # Initial warmup period
-    warmup = 50
+    # Minimum warmup period to have enough history (smaller than first change point)
+    warmup = 10
 
     # Run each predictor on the same data
     for predictor_type in predictor_types:
@@ -174,7 +179,7 @@ def compare_predictors(
         history = []
         predicted_features = []
 
-        # Warmup period
+        # Minimum warmup period (just enough for history requirements)
         for t in range(warmup):
             state = {"adjacency": graphs[t], "time": t}
             history.append(state)
@@ -196,13 +201,18 @@ def compare_predictors(
             # Update predictor state
             predictor.update_state(state)
 
-        # Get actual features for comparison
-        actual_features = features[warmup + 1 : len(graphs)]
+        # Get all actual features for full timeline display
+        actual_features = features
+
+        # Get actual features for metrics calculation - should align with predictions (warmup+1 to end)
+        metrics_actual_features = features[warmup + 1 : len(graphs)]
 
         # Compute metrics
-        basic_metrics = compute_feature_metrics(actual_features, predicted_features)
+        basic_metrics = compute_feature_metrics(
+            metrics_actual_features, predicted_features
+        )
         dist_metrics = compute_feature_distribution_metrics(
-            actual_features, predicted_features
+            metrics_actual_features, predicted_features
         )
 
         # Store results
@@ -210,6 +220,8 @@ def compare_predictors(
             "basic_metrics": basic_metrics,
             "distribution_metrics": dist_metrics,
             "predicted_features": predicted_features,
+            "actual_features": actual_features,
+            "warmup": warmup,
         }
 
         # Plot individual predictor results
@@ -259,28 +271,34 @@ def plot_prediction_comparison(
     feature_names = list(actual_features[0].keys())
     for i, feature in enumerate(feature_names):
         ax = axes[i]
-        time = np.arange(len(actual_features))
+
+        # Full time range for x-axis
+        full_time = np.arange(len(actual_features))
 
         # For list features (like degrees), plot mean and std
         if isinstance(actual_features[0][feature], list):
-            # Actual values
+            # Actual values (full timeline)
             actual_means = [np.mean(f[feature]) for f in actual_features]
             actual_stds = [np.std(f[feature]) for f in actual_features]
-            ax.plot(time, actual_means, label="Actual", color=COLORS["actual"])
+            ax.plot(full_time, actual_means, label="Actual", color=COLORS["actual"])
             ax.fill_between(
-                time,
+                full_time,
                 np.array(actual_means) - np.array(actual_stds),
                 np.array(actual_means) + np.array(actual_stds),
                 color=COLORS["actual"],
                 alpha=0.1,
             )
 
-            # Predicted values
+            # Predicted values (starting from warmup+1)
             pred_means = [np.mean(f[feature]) for f in predicted_features]
             pred_stds = [np.std(f[feature]) for f in predicted_features]
-            ax.plot(time, pred_means, label="Predicted", color=COLORS["predicted"])
+
+            # Create time points for predictions (starting from warmup+1)
+            pred_time = np.arange(warmup + 1, warmup + 1 + len(predicted_features))
+
+            ax.plot(pred_time, pred_means, label="Predicted", color=COLORS["predicted"])
             ax.fill_between(
-                time,
+                pred_time,
                 np.array(pred_means) - np.array(pred_stds),
                 np.array(pred_means) + np.array(pred_stds),
                 color=COLORS["predicted"],
@@ -300,8 +318,14 @@ def plot_prediction_comparison(
             # For scalar features
             actual_values = [f[feature] for f in actual_features]
             pred_values = [f[feature] for f in predicted_features]
-            ax.plot(time, actual_values, label="Actual", color=COLORS["actual"])
-            ax.plot(time, pred_values, label="Predicted", color=COLORS["predicted"])
+
+            # Create time points for predictions (starting from warmup+1)
+            pred_time = np.arange(warmup + 1, warmup + 1 + len(predicted_features))
+
+            ax.plot(full_time, actual_values, label="Actual", color=COLORS["actual"])
+            ax.plot(
+                pred_time, pred_values, label="Predicted", color=COLORS["predicted"]
+            )
             metrics_text = ""
 
         # Add basic metrics
@@ -328,15 +352,14 @@ def plot_prediction_comparison(
             bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
         )
 
-        # Mark change points
+        # Mark change points at their absolute positions
         for cp in change_points:
-            if cp >= warmup and cp < len(actual_features) + warmup:
-                ax.axvline(
-                    cp - warmup,
-                    color=COLORS["change_point"],
-                    linestyle="--",
-                    alpha=0.5,
-                )
+            ax.axvline(
+                cp,
+                color=COLORS["change_point"],
+                linestyle="--",
+                alpha=0.5,
+            )
 
         ax.set_title(feature.replace("_", " ").title(), fontsize=TYPO["TITLE_SIZE"])
         ax.set_xlabel("Time", fontsize=TYPO["LABEL_SIZE"])

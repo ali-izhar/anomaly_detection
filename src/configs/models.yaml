@@ -51,7 +51,7 @@ stochastic_block_model:
   n: 50  # Number of nodes in the graph
   seq_len: 200  # Total length of the time series
   min_segment: 40  # Minimum length of each stable segment
-  min_changes: 1  # Minimum number of change points
+  min_changes: 2  # Minimum number of change points
   max_changes: 2  # Maximum number of change points
   num_blocks: 2  # Number of communities/blocks
   min_block_size: 25  # Minimum size of each block (n//2)
