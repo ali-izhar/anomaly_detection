@@ -79,6 +79,12 @@ def test_network_feature_visualization(
     model_name, params, graphs, change_points, features
 ):
     """Test network feature visualization for different graph models."""
+    # This function is temporarily disabled
+    print("Network state visualization is disabled.")
+    return
+
+    # Original code below
+    """
     output_dir = "tests/test_predictor/output"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -139,6 +145,215 @@ def test_network_feature_visualization(
     plt.close()
 
     print(f"Done! Network state visualizations have been saved to {output_dir}/")
+    """
+
+
+def create_prediction_comparison_matrix(
+    actual_adj: np.ndarray, predicted_adj: np.ndarray
+):
+    """Create a color-coded matrix comparing actual and predicted adjacency matrices.
+
+    Colors:
+    - Green: Correct predictions (true positives)
+    - Red: False positives
+    - Gray: Missed edges (false negatives)
+    - Black: Correct non-edges (true negatives)
+
+    Returns:
+        RGB matrix and prediction metrics
+    """
+    # Create RGB matrix (initialize with black for correct non-edges)
+    height, width = actual_adj.shape
+    rgb_matrix = np.zeros((height, width, 3))
+
+    # Green for correct predictions (true positives)
+    true_positives = (actual_adj == 1) & (predicted_adj == 1)
+    rgb_matrix[true_positives, 0] = 0  # R
+    rgb_matrix[true_positives, 1] = 1  # G
+    rgb_matrix[true_positives, 2] = 0  # B
+
+    # Red for false positives
+    false_positives = (actual_adj == 0) & (predicted_adj == 1)
+    rgb_matrix[false_positives, 0] = 1  # R
+    rgb_matrix[false_positives, 1] = 0  # G
+    rgb_matrix[false_positives, 2] = 0  # B
+
+    # Gray for missed edges (false negatives)
+    false_negatives = (actual_adj == 1) & (predicted_adj == 0)
+    rgb_matrix[false_negatives, 0] = 0.7  # R
+    rgb_matrix[false_negatives, 1] = 0.7  # G
+    rgb_matrix[false_negatives, 2] = 0.7  # B
+
+    # Compute metrics
+    tp = np.sum(true_positives)
+    fp = np.sum(false_positives)
+    fn = np.sum(false_negatives)
+
+    # Avoid division by zero
+    if tp + fn > 0:
+        coverage = tp / (tp + fn)
+    else:
+        coverage = 0
+
+    if tp + fp > 0:
+        precision = tp / (tp + fp)
+    else:
+        precision = 0
+
+    # False positive rate
+    total_negatives = np.sum(actual_adj == 0)
+    if total_negatives > 0:
+        fpr = fp / total_negatives
+    else:
+        fpr = 0
+
+    # Overall score (harmonic mean of coverage and 1-FPR)
+    if coverage > 0 and fpr < 1:
+        score = 2 * coverage * (1 - fpr) / (coverage + (1 - fpr))
+    else:
+        score = 0
+
+    metrics = {"coverage": coverage, "fpr": fpr, "score": score}
+
+    return rgb_matrix, metrics
+
+
+def plot_adjacency_comparison_around_change_points(
+    model_name: str,
+    predictor_type: str,
+    graphs: List[np.ndarray],
+    predicted_adjs: List[np.ndarray],
+    change_points: List[int],
+    warmup: int,
+    viz: NetworkVisualizer,
+    output_dir: str,
+):
+    """Plot actual vs predicted adjacency matrices before and after change points."""
+    print("Creating adjacency comparison visualizations around change points...")
+
+    # Filter change points that occur after warmup
+    valid_change_points = [cp for cp in change_points if cp > warmup + 1]
+
+    if not valid_change_points:
+        print("No change points available after warmup period for comparison.")
+        return
+
+    # Only use the first valid change point
+    cp = valid_change_points[0]
+    print(f"Creating visualization for first change point at t={cp}")
+
+    # Calculate indices for actual and predicted adjacency matrices
+    before_idx = cp - 1
+    after_idx = cp + 1
+    stable_idx = cp + 30  # 30 steps after the change point to show stabilization
+
+    # Check if indices are within range
+    if stable_idx >= len(graphs):
+        print(f"Warning: t+30 is out of range, using last available point instead")
+        stable_idx = len(graphs) - 1
+
+    # Actual matrices
+    actual_before = graphs[before_idx]
+    actual_after = graphs[after_idx]
+    actual_stable = graphs[stable_idx]
+
+    # Predicted matrices (offset by warmup+1)
+    pred_before_idx = before_idx - (warmup + 1)
+    pred_after_idx = after_idx - (warmup + 1)
+    pred_stable_idx = stable_idx - (warmup + 1)
+
+    # Check if we have predictions for these indices
+    if pred_before_idx < 0 or pred_before_idx >= len(predicted_adjs):
+        print(f"Skip change point at t={cp} due to prediction index out of range")
+        return
+
+    if pred_after_idx >= len(predicted_adjs) or pred_stable_idx >= len(predicted_adjs):
+        print(f"Skip change point at t={cp} due to prediction index out of range")
+        return
+
+    pred_before = predicted_adjs[pred_before_idx]
+    pred_after = predicted_adjs[pred_after_idx]
+    pred_stable = predicted_adjs[pred_stable_idx]
+
+    # Create comparison matrices with color coding
+    before_comparison, before_metrics = create_prediction_comparison_matrix(
+        actual_before, pred_before
+    )
+    after_comparison, after_metrics = create_prediction_comparison_matrix(
+        actual_after, pred_after
+    )
+    stable_comparison, stable_metrics = create_prediction_comparison_matrix(
+        actual_stable, pred_stable
+    )
+
+    # Increased font sizes
+    TITLE_SIZE = 14
+    METRICS_SIZE = 13
+    LEGEND_SIZE = 12
+
+    # Create figure with 2x3 grid
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+
+    # Plot actual matrices on top row
+    axes[0, 0].imshow(actual_before, cmap="Blues")
+    axes[0, 0].set_title(f"Actual t={before_idx}\n(before change)", fontsize=TITLE_SIZE)
+    axes[0, 0].axis("off")
+
+    axes[0, 1].imshow(actual_after, cmap="Blues")
+    axes[0, 1].set_title(f"Actual t={after_idx}\n(after change)", fontsize=TITLE_SIZE)
+    axes[0, 1].axis("off")
+
+    axes[0, 2].imshow(actual_stable, cmap="Blues")
+    axes[0, 2].set_title(f"Actual t={stable_idx}\n(stabilized)", fontsize=TITLE_SIZE)
+    axes[0, 2].axis("off")
+
+    # Plot comparison matrices on bottom row
+    axes[1, 0].imshow(before_comparison)
+    metrics_text = f"Coverage: {before_metrics['coverage']:.3f}\nFPR: {before_metrics['fpr']:.3f}\nScore: {before_metrics['score']:.3f}"
+    axes[1, 0].set_title(
+        f"Prediction t={before_idx}\n{metrics_text}", fontsize=METRICS_SIZE
+    )
+    axes[1, 0].axis("off")
+
+    axes[1, 1].imshow(after_comparison)
+    metrics_text = f"Coverage: {after_metrics['coverage']:.3f}\nFPR: {after_metrics['fpr']:.3f}\nScore: {after_metrics['score']:.3f}"
+    axes[1, 1].set_title(
+        f"Prediction t={after_idx}\n{metrics_text}", fontsize=METRICS_SIZE
+    )
+    axes[1, 1].axis("off")
+
+    axes[1, 2].imshow(stable_comparison)
+    metrics_text = f"Coverage: {stable_metrics['coverage']:.3f}\nFPR: {stable_metrics['fpr']:.3f}\nScore: {stable_metrics['score']:.3f}"
+    axes[1, 2].set_title(
+        f"Prediction t={stable_idx}\n{metrics_text}", fontsize=METRICS_SIZE
+    )
+    axes[1, 2].axis("off")
+
+    # Add legend for color coding
+    legend_elements = [
+        plt.Rectangle((0, 0), 1, 1, color="green", label="Correct Prediction"),
+        plt.Rectangle((0, 0), 1, 1, color="red", label="False Positive"),
+        plt.Rectangle((0, 0), 1, 1, color="gray", label="Missed Edge"),
+        plt.Rectangle((0, 0), 1, 1, color="black", label="Correct Non-edge"),
+    ]
+    fig.legend(
+        handles=legend_elements,
+        loc="center right",
+        bbox_to_anchor=(1.12, 0.5),
+        fontsize=LEGEND_SIZE,
+    )
+
+    # Add padding for better layout with larger text
+    plt.tight_layout(pad=2.0)
+    plt.savefig(
+        Path(output_dir)
+        / f"{model_name}_{predictor_type}_change_point_{cp}_comparison.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close()
+
+    print(f"Done! Adjacency comparison visualization has been saved to {output_dir}/")
 
 
 def compare_predictors(
@@ -178,6 +393,7 @@ def compare_predictors(
         # Initialize history
         history = []
         predicted_features = []
+        predicted_adjs = []  # Store predicted adjacency matrices
 
         # Minimum warmup period (just enough for history requirements)
         for t in range(warmup):
@@ -194,8 +410,12 @@ def compare_predictors(
                 history = history[-predictor.history_size :]
 
             # Get predicted next state features
-            pred_adjs = predictor.predict(history, horizon=1)
-            pred_graph = nx.from_numpy_array(pred_adjs[0])
+            pred_adjs_list = predictor.predict(history, horizon=1)
+            pred_adj = pred_adjs_list[0]
+            pred_graph = nx.from_numpy_array(pred_adj)
+
+            # Store predictions
+            predicted_adjs.append(pred_adj)
             predicted_features.append(feature_extractor.get_features(pred_graph))
 
             # Update predictor state
@@ -220,6 +440,7 @@ def compare_predictors(
             "basic_metrics": basic_metrics,
             "distribution_metrics": dist_metrics,
             "predicted_features": predicted_features,
+            "predicted_adjs": predicted_adjs,  # Store predicted adjacency matrices
             "actual_features": actual_features,
             "warmup": warmup,
         }
@@ -238,8 +459,20 @@ def compare_predictors(
             output_dir,
         )
 
-    # Create comparison plot across predictors
-    plot_predictor_comparison(model_name, results, viz, output_dir)
+        # Plot adjacency comparisons around change points
+        plot_adjacency_comparison_around_change_points(
+            model_name,
+            predictor_type,
+            graphs,
+            predicted_adjs,
+            change_points,
+            warmup,
+            viz,
+            output_dir,
+        )
+
+    # Create comparison plot across predictors - DISABLED
+    # plot_predictor_comparison(model_name, results, viz, output_dir)
 
     return results
 
@@ -260,12 +493,17 @@ def plot_prediction_comparison(
     fig, axes = plt.subplots(
         4, 2, figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2)
     )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
-        fontsize=TYPO["TITLE_SIZE"],
-        y=0.98,
-    )
+    # Remove suptitle
+    # fig.suptitle(
+    #     f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
+    #     fontsize=TYPO["TITLE_SIZE"],
+    #     y=0.98,
+    # )
     axes = axes.flatten()
+
+    # Create references for legend (will use plot from first subplot)
+    legend_lines = []
+    legend_labels = []
 
     # Plot each feature comparison
     feature_names = list(actual_features[0].keys())
@@ -280,7 +518,7 @@ def plot_prediction_comparison(
             # Actual values (full timeline)
             actual_means = [np.mean(f[feature]) for f in actual_features]
             actual_stds = [np.std(f[feature]) for f in actual_features]
-            ax.plot(full_time, actual_means, label="Actual", color=COLORS["actual"])
+            (actual_line,) = ax.plot(full_time, actual_means, color=COLORS["actual"])
             ax.fill_between(
                 full_time,
                 np.array(actual_means) - np.array(actual_stds),
@@ -296,7 +534,7 @@ def plot_prediction_comparison(
             # Create time points for predictions (starting from warmup+1)
             pred_time = np.arange(warmup + 1, warmup + 1 + len(predicted_features))
 
-            ax.plot(pred_time, pred_means, label="Predicted", color=COLORS["predicted"])
+            (pred_line,) = ax.plot(pred_time, pred_means, color=COLORS["predicted"])
             ax.fill_between(
                 pred_time,
                 np.array(pred_means) - np.array(pred_stds),
@@ -304,6 +542,11 @@ def plot_prediction_comparison(
                 color=COLORS["predicted"],
                 alpha=0.1,
             )
+
+            # Save lines for legend (only from first subplot)
+            if i == 0:
+                legend_lines = [actual_line, pred_line]
+                legend_labels = ["Actual", "Predicted"]
 
             # Add distribution metrics if available
             if feature in dist_metrics:
@@ -322,10 +565,14 @@ def plot_prediction_comparison(
             # Create time points for predictions (starting from warmup+1)
             pred_time = np.arange(warmup + 1, warmup + 1 + len(predicted_features))
 
-            ax.plot(full_time, actual_values, label="Actual", color=COLORS["actual"])
-            ax.plot(
-                pred_time, pred_values, label="Predicted", color=COLORS["predicted"]
-            )
+            (actual_line,) = ax.plot(full_time, actual_values, color=COLORS["actual"])
+            (pred_line,) = ax.plot(pred_time, pred_values, color=COLORS["predicted"])
+
+            # Save lines for legend (only from first subplot)
+            if i == 0:
+                legend_lines = [actual_line, pred_line]
+                legend_labels = ["Actual", "Predicted"]
+
             metrics_text = ""
 
         # Add basic metrics
@@ -340,17 +587,17 @@ def plot_prediction_comparison(
         if metrics_text:
             full_text += "\n" + metrics_text
 
-        # Add metrics text to plot
-        ax.text(
-            0.02,
-            0.98,
-            full_text,
-            transform=ax.transAxes,
-            verticalalignment="top",
-            horizontalalignment="left",
-            fontsize=TYPO["ANNOTATION_SIZE"],
-            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
-        )
+        # Remove the metrics text box display
+        # ax.text(
+        #     0.02,
+        #     0.98,
+        #     full_text,
+        #     transform=ax.transAxes,
+        #     verticalalignment="top",
+        #     horizontalalignment="left",
+        #     fontsize=TYPO["ANNOTATION_SIZE"],
+        #     bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
+        # )
 
         # Mark change points at their absolute positions
         for cp in change_points:
@@ -366,9 +613,20 @@ def plot_prediction_comparison(
         ax.set_ylabel("Value", fontsize=TYPO["LABEL_SIZE"])
         ax.tick_params(labelsize=TYPO["TICK_SIZE"])
         ax.grid(True, alpha=LS["GRID_ALPHA"])
-        ax.legend(fontsize=TYPO["LEGEND_SIZE"])
 
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
+        # Don't add legend to individual subplots
+        # ax.legend(fontsize=TYPO["LEGEND_SIZE"])
+
+    # Add a single legend for the entire figure
+    fig.legend(
+        legend_lines,
+        legend_labels,
+        loc="lower right",
+        fontsize=TYPO["LEGEND_SIZE"],
+        framealpha=0.7,
+    )
+
+    plt.tight_layout()
     plt.savefig(
         Path(output_dir) / f"{model_name}_{predictor_type}_prediction_features.png",
         bbox_inches="tight",
@@ -384,6 +642,12 @@ def plot_predictor_comparison(
     output_dir: str,
 ):
     """Plot comparison across all predictors."""
+    # This function is temporarily disabled
+    print("Predictor comparison is disabled.")
+    return
+
+    # Original code below
+    """
     # Get feature names from first predictor's results
     first_predictor = next(iter(results.values()))
     feature_names = list(first_predictor["basic_metrics"].keys())
@@ -432,6 +696,7 @@ def plot_predictor_comparison(
         dpi=300,
     )
     plt.close()
+    """
 
 
 if __name__ == "__main__":
@@ -462,10 +727,10 @@ if __name__ == "__main__":
         generate_network_and_features()
     )
 
-    # Run visualizations
-    test_network_feature_visualization(
-        model_name, params, graphs, change_points, features
-    )
+    # Run visualizations - DISABLED
+    # test_network_feature_visualization(
+    #     model_name, params, graphs, change_points, features
+    # )
 
     # Compare all predictors
     results = compare_predictors(
