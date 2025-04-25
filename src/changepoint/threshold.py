@@ -38,10 +38,12 @@ References:
     Predictions of Any Classifier." KDD '16.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 import logging
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 import shap
 
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -51,16 +53,41 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 logger = logging.getLogger(__name__)
 
 # Define a fixed feature order for consistent visualization and analysis in SHAP plots.
+# Updated to match the feature names used in the project
 FEATURE_ORDER = [
-    "degree",
-    "density",
-    "clustering",
-    "betweenness",
-    "eigenvector",
-    "closeness",
-    "singular_value",
-    "laplacian",
+    "degree",  # Feature 0
+    "density",  # Feature 1
+    "clustering",  # Feature 2
+    "betweenness",  # Feature 3
+    "eigenvector",  # Feature 4
+    "closeness",  # Feature 5
+    "spectral",  # Feature 6 (renamed from singular_value for consistency)
+    "laplacian",  # Feature 7
 ]
+
+# Feature mapping to use in visualization
+FEATURE_NAMES = {
+    "degree": "Degree",
+    "density": "Density",
+    "clustering": "Clustering",
+    "betweenness": "Betweenness",
+    "eigenvector": "Eigenvector",
+    "closeness": "Closeness",
+    "spectral": "Spectral",
+    "laplacian": "Laplacian",
+}
+
+# Feature ID mapping (for compatibility with martingale data formats)
+FEATURE_ID_MAP = {
+    "0": "degree",
+    "1": "density",
+    "2": "clustering",
+    "3": "betweenness",
+    "4": "eigenvector",
+    "5": "closeness",
+    "6": "spectral",
+    "7": "laplacian",
+}
 
 
 @dataclass(frozen=True)
@@ -78,7 +105,9 @@ class ShapConfig:
     window_size: int = 5
     test_size: float = 0.2
     random_state: int = 42
-    use_probabilities: bool = False
+    use_probabilities: bool = (
+        True  # Changed default to True for better probability estimates
+    )
     positive_class: bool = True
 
     def __post_init__(self):
@@ -110,7 +139,7 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
       - Interpretable decision rule.
     """
 
-    def __init__(self, threshold: float = 0.5) -> None:
+    def __init__(self, threshold: float = 60.0) -> None:
         """Initialize the model with a decision threshold.
 
         Args:
@@ -321,6 +350,126 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
 
         return shap_values, feature_names
 
+    def compute_shap_from_dataframe(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        change_points: Optional[List[int]] = None,
+        timesteps: Optional[np.ndarray] = None,
+        detection_index: Optional[int] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
+        """Compute SHAP values directly from a pandas DataFrame containing martingale data.
+
+        Args:
+            df: DataFrame with martingale values
+            feature_cols: List of column names for individual feature martingales
+            change_points: Optional indices of true change points
+            timesteps: Optional array of timesteps (if not provided, uses range(len(df)))
+            detection_index: Optional index where detection occurred
+
+        Returns:
+            Tuple of (SHAP values, feature names)
+        """
+        # If timesteps not provided, use range
+        if timesteps is None:
+            timesteps = np.arange(len(df))
+
+        # If change_points not provided but detection_index is, use that
+        if change_points is None and detection_index is not None:
+            change_points = [timesteps[detection_index]]
+        elif change_points is None:
+            # Try to find change points from true_change_point column
+            if "true_change_point" in df.columns:
+                change_points = timesteps[df["true_change_point"] == 1].tolist()
+            else:
+                change_points = []
+
+        # Get feature matrix
+        X = df[feature_cols].values
+
+        # Set up config
+        config = ShapConfig(window_size=5, test_size=0.2, use_probabilities=True)
+
+        # Create binary labels for SHAP analysis
+        sequence_length = len(df)
+
+        # Compute SHAP values
+        shap_values = self.compute_shap_values(
+            X=X,
+            change_points=change_points,
+            sequence_length=sequence_length,
+            config=config,
+        )
+
+        return shap_values, feature_cols
+
+    def visualize_shap_values(
+        self,
+        shap_values: np.ndarray,
+        X: Union[np.ndarray, pd.DataFrame],
+        feature_names: Optional[List[str]] = None,
+        output_path: Optional[str] = None,
+        title: str = "SHAP Values Analysis",
+    ) -> None:
+        """Create visualizations for SHAP values analysis.
+
+        Args:
+            shap_values: SHAP values from compute_shap_values
+            X: Feature data used for SHAP analysis
+            feature_names: Optional list of feature names
+            output_path: Optional file path to save visualization
+            title: Title for the plot
+        """
+        plt.figure(figsize=(10, 8))
+
+        # If X is a DataFrame, convert to numpy array and extract feature names
+        if isinstance(X, pd.DataFrame):
+            if feature_names is None:
+                feature_names = X.columns.tolist()
+            X = X.values
+
+        # Create a summary plot
+        plt.subplot(2, 1, 1)
+        shap.summary_plot(
+            shap_values, X, feature_names=feature_names, show=False, plot_size=(8, 6)
+        )
+        plt.title(f"{title} - Feature Importance")
+
+        # Create a decision plot
+        plt.subplot(2, 1, 2)
+        try:
+            shap.decision_plot(
+                self.threshold, shap_values, feature_names=feature_names, show=False
+            )
+            plt.title(f"{title} - Decision Contributions")
+        except Exception as e:
+            logger.warning(f"Could not create decision plot: {e}")
+            # Fall back to bar plot
+            plt.barh(
+                range(len(feature_names) if feature_names else shap_values.shape[1]),
+                np.mean(np.abs(shap_values), axis=0),
+                color="skyblue",
+            )
+            plt.yticks(
+                range(len(feature_names) if feature_names else shap_values.shape[1]),
+                (
+                    feature_names
+                    if feature_names
+                    else [f"Feature {i}" for i in range(shap_values.shape[1])]
+                ),
+            )
+            plt.title(f"{title} - Average SHAP Values")
+
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Saved SHAP visualization to {output_path}")
+        else:
+            plt.show()
+
+        plt.close()
+
     def get_feature_importances(self) -> np.ndarray:
         """Get uniform feature importances for SHAP analysis."""
         check_is_fitted(self)
@@ -349,3 +498,47 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
             logger.debug(f"Setting parameter {param}={value}")
             setattr(self, param, value)
         return self
+
+    def analyze_detection_point(
+        self,
+        X: np.ndarray,
+        detection_index: int,
+        feature_names: Optional[List[str]] = None,
+    ) -> pd.DataFrame:
+        """Analyze feature contributions at a specific detection point.
+
+        Args:
+            X: Feature matrix
+            detection_index: Index of detection point
+            feature_names: Optional list of feature names
+
+        Returns:
+            DataFrame with feature contributions
+        """
+        if feature_names is None:
+            feature_names = [f"Feature_{i}" for i in range(X.shape[1])]
+
+        # Get feature values at detection point
+        detection_values = X[detection_index]
+        total = np.sum(detection_values)
+
+        # Calculate percentage contributions
+        percentages = (
+            100 * detection_values / total
+            if total > 0
+            else np.zeros_like(detection_values)
+        )
+
+        # Create DataFrame with results
+        results = pd.DataFrame(
+            {
+                "Feature": feature_names,
+                "Martingale Value": detection_values,
+                "Contribution %": percentages,
+            }
+        )
+
+        # Sort by contribution percentage in descending order
+        results = results.sort_values("Contribution %", ascending=False)
+
+        return results
