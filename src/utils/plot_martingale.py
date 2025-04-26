@@ -17,18 +17,20 @@ def setup_plot_style():
             "font.size": 11,
             "axes.labelsize": 12,
             "axes.titlesize": 14,
-            "figure.titlesize": 14,
+            "figure.titlesize": 16,
             "xtick.labelsize": 10,
             "ytick.labelsize": 10,
             "legend.fontsize": 10,
-            "figure.figsize": (8, 6),
+            "figure.figsize": (10, 6),  # Slightly wider for better visualization
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
             "axes.grid": True,
-            "grid.alpha": 0.3,
+            "grid.alpha": 0.2,  # More subtle grid
             "axes.axisbelow": True,
             "lines.linewidth": 2,
+            "axes.spines.top": False,  # Remove top spine for cleaner look
+            "axes.spines.right": False,  # Remove right spine for cleaner look
         }
     )
 
@@ -94,7 +96,23 @@ def load_trial_data(file_path):
             metadata_df = pd.read_excel(file_path, sheet_name="ChangePointMetadata")
             change_points = metadata_df["change_point"].values.tolist()
             print(f"Found {len(change_points)} change points in metadata")
-        except Exception:
+
+            # Print delay information if available
+            if all(
+                col in metadata_df.columns
+                for col in ["horizon_avg_delay", "traditional_avg_delay"]
+            ):
+                for i, cp in enumerate(change_points):
+                    trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
+                    horizon_delay = metadata_df.iloc[i]["horizon_avg_delay"]
+                    reduction = metadata_df.iloc[i].get(
+                        "delay_reduction", 1 - horizon_delay / trad_delay
+                    )
+                    print(
+                        f"CP {cp}: Trad delay={trad_delay:.2f}, Horizon delay={horizon_delay:.2f}, Reduction={reduction:.2%}"
+                    )
+        except Exception as e:
+            print(f"Warning: Could not read metadata: {str(e)}")
             metadata_df = None
             change_points = []
 
@@ -116,7 +134,9 @@ def load_trial_data(file_path):
         return [], [], None
 
 
-def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=None):
+def plot_individual_martingales(
+    df, output_path, change_points=None, trial_dfs=None, metadata_df=None
+):
     """Create a grid of plots for individual feature martingales.
 
     Args:
@@ -124,6 +144,7 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
         output_path: Path to save the output image
         change_points: List of change points to mark on plots
         trial_dfs: List of DataFrames for individual trials (for box plots)
+        metadata_df: DataFrame with change point metadata
     """
     feature_cols = [
         col
@@ -142,17 +163,22 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
     n_rows = (n_features + n_cols - 1) // n_cols
 
     # Create figure
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 2.5 * n_rows), sharex=True)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 2.8 * n_rows), sharex=True)
     axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
 
     x = df["timestep"].values
 
-    # Determine a clean set of x-ticks - use fewer ticks to reduce clutter
+    # Determine full data range for consistent x-axis limits
     x_min, x_max = min(x), max(x)
-    tick_spacing = max(20, (x_max - x_min) // 8)  # No more than ~8 ticks
-    x_ticks = np.arange(
-        tick_spacing * (x_min // tick_spacing), x_max + tick_spacing, tick_spacing
-    )
+
+    # Use 40 instead of 20 as the tick spacing
+    tick_spacing = max(40, (x_max - x_min) // 5)
+
+    # Generate ticks from 0 to 200 by 40s
+    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+
+    # Explicitly set the x-axis limits to show just a little beyond 200
+    x_limits = (x_min, 205)
 
     # Find global maximum for consistent y-axis limits
     y_max = 0
@@ -163,6 +189,28 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
 
     # Round up to nearest 40
     y_max = ((y_max // 40) + 1) * 40
+
+    # Find max feature martingale values at change points to determine importance
+    feature_importance = {}
+    if change_points and trial_dfs:
+        for feature_id in range(len(feature_cols)):
+            trad_col = f"individual_traditional_martingales_feature{feature_id}"
+            hor_col = f"individual_horizon_martingales_feature{feature_id}"
+            max_val = 0
+
+            for cp in change_points:
+                # Look at window after change point
+                for trial_df in trial_dfs:
+                    cp_idx = np.argmin(np.abs(trial_df["timestep"].values - cp))
+                    window_end = min(len(trial_df), cp_idx + 10)
+                    if cp_idx < len(trial_df):
+                        window = trial_df.iloc[cp_idx:window_end]
+                        if trad_col in window.columns:
+                            max_val = max(max_val, window[trad_col].max())
+                        if hor_col in window.columns:
+                            max_val = max(max_val, window[hor_col].max())
+
+            feature_importance[feature_id] = max_val
 
     # If we have trial data, prepare for box plots
     has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
@@ -195,6 +243,22 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
             # Extract feature ID and get name
             feature_id = col.split("feature")[1].split("_")[0]
             feature_name = FEATURE_INFO.get(feature_id, f"Feature {feature_id}")
+
+            # Determine if this is an important feature
+            is_important = False
+            if feature_importance and int(feature_id) in feature_importance:
+                importance_val = feature_importance[int(feature_id)]
+                # Consider important if max value is at least 30% of the threshold
+                is_important = importance_val > 15
+
+            # Use background shading for important features
+            if is_important:
+                ax.set_facecolor(
+                    "#f8f8ff"
+                )  # Very light blue background for important features
+                title_fontweight = "bold"
+            else:
+                title_fontweight = "normal"
 
             if has_trial_data:
                 # Traditional martingales
@@ -242,9 +306,11 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
                         positions=trad_positions,
                         widths=box_width,
                         patch_artist=True,
-                        boxprops=dict(facecolor="lightblue", color="blue", alpha=0.7),
-                        whiskerprops=dict(color="blue", linewidth=1.0),
-                        medianprops=dict(color="darkblue", linewidth=1.5),
+                        boxprops=dict(
+                            facecolor="#ADD8E6", color="#0000CD", alpha=0.7
+                        ),  # Improved colors
+                        whiskerprops=dict(color="#0000CD", linewidth=1.0),
+                        medianprops=dict(color="#00008B", linewidth=1.5),
                         showfliers=False,
                         zorder=3,
                     )
@@ -255,36 +321,42 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
                         positions=hor_positions,
                         widths=box_width,
                         patch_artist=True,
-                        boxprops=dict(facecolor="bisque", color="orange", alpha=0.7),
-                        whiskerprops=dict(color="orange", linewidth=1.0),
-                        medianprops=dict(color="darkorange", linewidth=1.5),
+                        boxprops=dict(
+                            facecolor="#FFD580", color="#FF8C00", alpha=0.7
+                        ),  # Improved colors
+                        whiskerprops=dict(color="#FF8C00", linewidth=1.0),
+                        medianprops=dict(color="#FF4500", linewidth=1.5),
                         showfliers=False,
                         zorder=2,
                     )
 
                 # Also plot the means from the aggregate data as a line
-                ax.plot(x, df[col].values, "b-", linewidth=1.0, alpha=0.5, zorder=1)
+                ax.plot(
+                    x, df[col].values, "#0000CD", linewidth=1.0, alpha=0.5, zorder=1
+                )
 
                 horizon_col = col.replace("traditional", "horizon")
                 if horizon_col in df.columns:
                     ax.plot(
                         x,
                         df[horizon_col].values,
-                        "orange",
+                        "#FF8C00",
                         linewidth=1.0,
                         alpha=0.5,
                         zorder=1,
                     )
             else:
                 # Regular line plot (original behavior)
-                ax.plot(x, df[col].values, "b-", linewidth=1.5, label="Traditional")
+                ax.plot(
+                    x, df[col].values, "#0000CD", linewidth=1.5, label="Traditional"
+                )
 
                 horizon_col = col.replace("traditional", "horizon")
                 if horizon_col in df.columns:
                     ax.plot(
                         x,
                         df[horizon_col].values,
-                        "orange",
+                        "#FF8C00",
                         linewidth=1.5,
                         label="Horizon",
                     )
@@ -292,16 +364,23 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
             # Mark change points if provided
             if change_points:
                 for cp in change_points:
+                    # Add subtle background shading to highlight change points
+                    ax.axvspan(cp - 1, cp + 1, color="gray", alpha=0.15, zorder=0)
                     ax.axvline(
                         x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.2
                     )
 
             # Set title and labels
-            ax.set_title(feature_name, fontsize=10)
+            ax.set_title(
+                feature_name,
+                fontsize=11,
+                fontweight=title_fontweight,
+                color="#444444" if not is_important else "#000066",
+            )
             if i % n_cols == 0:
-                ax.set_ylabel("Martingale Value", fontsize=9)
+                ax.set_ylabel("Martingale Value", fontsize=10)
             if i >= n_features - n_cols:
-                ax.set_xlabel("Time", fontsize=9)
+                ax.set_xlabel("Time", fontsize=10)
 
             # Set consistent y-axis limits
             ax.set_ylim(0, y_max)
@@ -309,6 +388,10 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
 
             # Set consistent x-axis ticks
             ax.set_xticks(x_ticks)
+            # Set x-axis limits to be exactly the same as in sum_martingales plot
+            ax.set_xlim(x_limits)
+            # Make sure we use the same tick labels
+            ax.set_xticklabels([str(int(tick)) for tick in ax.get_xticks()])
 
             # Add legend on first plot only
             if i == 0:
@@ -317,14 +400,14 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
 
                     legend_elements = [
                         Patch(
-                            facecolor="lightblue",
-                            edgecolor="blue",
+                            facecolor="#ADD8E6",
+                            edgecolor="#0000CD",
                             alpha=0.7,
                             label="Traditional",
                         ),
                         Patch(
-                            facecolor="bisque",
-                            edgecolor="orange",
+                            facecolor="#FFD580",
+                            edgecolor="#FF8C00",
                             alpha=0.7,
                             label="Horizon",
                         ),
@@ -337,9 +420,14 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
     for i in range(n_features, len(axes)):
         axes[i].set_visible(False)
 
+    # Before saving, enforce consistent x-axis limits across all subplots once more
+    for ax in axes:
+        if ax.get_visible():
+            ax.set_xlim(x_limits)
+
     # Adjust spacing for better tick label visibility
     plt.tight_layout()
-    fig.subplots_adjust(bottom=0.15)
+    fig.subplots_adjust(bottom=0.15, top=0.95)
 
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -347,7 +435,12 @@ def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=N
 
 
 def plot_sum_martingales(
-    df, output_path, change_points=None, threshold=50.0, trial_dfs=None
+    df,
+    output_path,
+    change_points=None,
+    threshold=50.0,
+    trial_dfs=None,
+    metadata_df=None,
 ):
     """Create a comparison plot of sum martingales.
 
@@ -357,6 +450,7 @@ def plot_sum_martingales(
         change_points: List of change points to mark on plots
         threshold: Detection threshold value
         trial_dfs: List of DataFrames for individual trials (for box plots)
+        metadata_df: DataFrame with change point metadata for delay annotations
     """
     # Find column names for sum martingales
     trad_sum_col = next(
@@ -389,13 +483,21 @@ def plot_sum_martingales(
 
     # Clean up x-axis ticks - use fewer ticks to reduce clutter
     x_min, x_max = min(x), max(x)
-    tick_spacing = max(20, (x_max - x_min) // 10)  # No more than ~10 ticks
-    x_ticks = np.arange(
-        tick_spacing * (x_min // tick_spacing), x_max + tick_spacing, tick_spacing
-    )
+
+    # Use same fixed tick marks as in individual plot
+    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+
+    # Set proper x-axis limits to include the last tick mark at 200 with small margin
+    x_limits = (x_min, 205)
 
     # Check if we have trial data for box plots
     has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
+
+    # If we have change points, add subtle background highlighting
+    if change_points:
+        for cp in change_points:
+            # Add light shading after change point to highlight detection region
+            ax.axvspan(cp, min(cp + 10, x_max), color="#f5f5f5", zorder=0)
 
     if has_trial_data:
         # Sample points for box plots (plotting at every timestep would be too crowded)
@@ -448,7 +550,7 @@ def plot_sum_martingales(
                 hor_data.append(hor_values)
                 hor_positions.append(time_point)
 
-        # Create box plots
+        # Create box plots with improved styling
         box_width = min(3.0, 60 / len(sample_points))
 
         if trad_data:
@@ -457,9 +559,9 @@ def plot_sum_martingales(
                 positions=trad_positions,
                 widths=box_width,
                 patch_artist=True,
-                boxprops=dict(facecolor="lightblue", color="blue", alpha=0.7),
-                whiskerprops=dict(color="blue", linewidth=1.0),
-                medianprops=dict(color="darkblue", linewidth=1.5),
+                boxprops=dict(facecolor="#ADD8E6", color="#0000CD", alpha=0.7),
+                whiskerprops=dict(color="#0000CD", linewidth=1.0),
+                medianprops=dict(color="#00008B", linewidth=1.5),
                 showfliers=False,
                 zorder=3,
             )
@@ -470,9 +572,9 @@ def plot_sum_martingales(
                 positions=hor_positions,
                 widths=box_width,
                 patch_artist=True,
-                boxprops=dict(facecolor="bisque", color="orange", alpha=0.7),
-                whiskerprops=dict(color="orange", linewidth=1.0),
-                medianprops=dict(color="darkorange", linewidth=1.5),
+                boxprops=dict(facecolor="#FFD580", color="#FF8C00", alpha=0.7),
+                whiskerprops=dict(color="#FF8C00", linewidth=1.0),
+                medianprops=dict(color="#FF4500", linewidth=1.5),
                 showfliers=False,
                 zorder=2,
             )
@@ -481,7 +583,7 @@ def plot_sum_martingales(
         ax.plot(
             x,
             df[trad_sum_col].values,
-            "b-",
+            "#0000CD",
             linewidth=1.0,
             alpha=0.5,
             zorder=1,
@@ -491,20 +593,20 @@ def plot_sum_martingales(
             ax.plot(
                 x,
                 df[hor_sum_col].values,
-                "orange",
+                "#FF8C00",
                 linewidth=1.0,
                 alpha=0.5,
                 zorder=1,
             )
 
-        # Add legend
+        # Add legend with improved appearance
         from matplotlib.patches import Patch
 
         legend_elements = [
             Patch(
-                facecolor="lightblue", edgecolor="blue", alpha=0.7, label="Traditional"
+                facecolor="#ADD8E6", edgecolor="#0000CD", alpha=0.7, label="Traditional"
             ),
-            Patch(facecolor="bisque", edgecolor="orange", alpha=0.7, label="Horizon"),
+            Patch(facecolor="#FFD580", edgecolor="#FF8C00", alpha=0.7, label="Horizon"),
             Patch(facecolor="red", edgecolor="red", alpha=0.5, label="Threshold"),
         ]
         ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
@@ -514,7 +616,7 @@ def plot_sum_martingales(
         ax.plot(
             x,
             df[trad_sum_col].values,
-            "b-",
+            "#0000CD",
             linewidth=2.0,
             label="Traditional Sum",
             zorder=5,
@@ -524,7 +626,7 @@ def plot_sum_martingales(
             ax.plot(
                 x,
                 df[hor_sum_col].values,
-                "orange",
+                "#FF8C00",
                 linewidth=2.0,
                 label="Horizon Sum",
                 zorder=3,
@@ -536,35 +638,105 @@ def plot_sum_martingales(
     # Add threshold line
     ax.axhline(
         y=threshold,
-        color="r",
+        color="red",
         linestyle="--",
         label="Threshold",
         alpha=0.8,
         linewidth=1.5,
     )
 
-    # Mark change points if provided
+    # Mark change points and add detection delay annotations if available
     if change_points:
-        for cp in change_points:
+        for i, cp in enumerate(change_points):
+            # Add vertical line for change point
             ax.axvline(
                 x=cp,
                 color="gray",
                 linestyle="--",
                 alpha=0.8,
                 linewidth=1.5,
-                label="Change Point" if cp == change_points[0] else "",
+                label="Change Point" if i == 0 else "",
             )
+
+            # Add detection delay annotations if metadata is available
+            if metadata_df is not None and i < len(metadata_df):
+                try:
+                    trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
+                    hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
+
+                    # Find detection points (where lines cross threshold)
+                    trad_detection = cp + trad_delay
+                    hor_detection = cp + hor_delay
+
+                    # Mark detection points
+                    ax.scatter(
+                        [trad_detection],
+                        [threshold],
+                        color="#0000CD",
+                        s=80,
+                        zorder=10,
+                        marker="o",
+                    )
+                    ax.scatter(
+                        [hor_detection],
+                        [threshold],
+                        color="#FF8C00",
+                        s=80,
+                        zorder=10,
+                        marker="o",
+                    )
+
+                    # Add delay annotations
+                    ax.annotate(
+                        f"Trad: {trad_delay:.1f}",
+                        xy=(trad_detection, threshold),
+                        xytext=(trad_detection + 2, threshold * 1.1),
+                        color="#00008B",
+                        fontweight="bold",
+                        fontsize=9,
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                    )
+
+                    ax.annotate(
+                        f"Horizon: {hor_delay:.1f}",
+                        xy=(hor_detection, threshold),
+                        xytext=(hor_detection - 2, threshold * 0.9),
+                        color="#FF4500",
+                        fontweight="bold",
+                        fontsize=9,
+                        ha="right",
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                    )
+
+                    # Add delay reduction info between arrows
+                    reduction = metadata_df.iloc[i].get(
+                        "delay_reduction", 1 - hor_delay / trad_delay
+                    )
+                    mid_point = (trad_detection + hor_detection) / 2
+                    ax.annotate(
+                        f"{reduction:.1%} faster",
+                        xy=(mid_point, threshold),
+                        xytext=(mid_point, threshold * 1.3),
+                        color="#006400",
+                        fontweight="bold",
+                        fontsize=9,
+                        ha="center",
+                        bbox=dict(boxstyle="round,pad=0.3", fc="#E8F8E8", alpha=0.9),
+                    )
+                except Exception as e:
+                    print(f"Error adding delay annotations: {e}")
 
     # Set clean x-ticks
     ax.set_xticks(x_ticks)
     ax.set_xticklabels([str(int(tick)) for tick in x_ticks])
+    ax.set_xlim(x_limits)
 
     # If tick labels still overlap, rotate them
     plt.setp(ax.get_xticklabels(), rotation=0)
 
-    ax.set_xlabel("Timestep", fontsize=12)
-    ax.set_ylabel("Martingale Value", fontsize=12)
-    ax.set_title("Martingale Values Over Time", fontsize=14)
+    # Set axis labels
+    ax.set_xlabel("Timestep", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Martingale Value", fontsize=12, fontweight="bold")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -601,8 +773,9 @@ def plot_martingales(
 
     # Load trial data if box plots are requested
     trial_dfs = None
+    metadata_df = None
     if use_boxplots:
-        trial_dfs, trial_change_points, _ = load_trial_data(file_path)
+        trial_dfs, trial_change_points, metadata_df = load_trial_data(file_path)
         # If we found change points in trials but not in the aggregate sheet
         if not change_points and trial_change_points:
             change_points = trial_change_points
@@ -613,6 +786,7 @@ def plot_martingales(
         output_path=os.path.join(output_dir, "individual_martingales.png"),
         change_points=change_points,
         trial_dfs=trial_dfs if use_boxplots else None,
+        metadata_df=metadata_df,
     )
 
     # Plot sum martingales
@@ -622,6 +796,7 @@ def plot_martingales(
         change_points=change_points,
         threshold=threshold,
         trial_dfs=trial_dfs if use_boxplots else None,
+        metadata_df=metadata_df,
     )
 
 
