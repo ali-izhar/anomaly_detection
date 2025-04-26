@@ -4,20 +4,16 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
-import sys
 import numpy as np
 
-# Add the path to access changepoint module
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from changepoint.threshold import CustomThresholdModel
 
-
-def setup_research_plot_style():
+def setup_plot_style():
+    """Set up consistent plotting style for research visualizations."""
     plt.style.use("seaborn-v0_8-paper")
     rcParams.update(
         {
             "font.family": "serif",
-            "font.serif": ["Computer Modern Roman", "Times New Roman", "Palatino"],
+            "font.serif": ["Computer Modern Roman", "Times New Roman"],
             "font.size": 11,
             "axes.labelsize": 12,
             "axes.titlesize": 14,
@@ -29,253 +25,106 @@ def setup_research_plot_style():
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
-            "savefig.pad_inches": 0.05,
             "axes.grid": True,
             "grid.alpha": 0.3,
             "axes.axisbelow": True,
-            "axes.linewidth": 0.8,
-            "axes.edgecolor": "#333333",
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
-            "xtick.direction": "out",
-            "ytick.direction": "out",
             "lines.linewidth": 2,
-            "lines.markersize": 5,
-            "legend.frameon": True,
-            "legend.framealpha": 0.8,
-            "legend.edgecolor": "#CCCCCC",
         }
     )
 
 
-# Features from algorithm.yaml (with display-friendly names)
+# Feature display names mapping
 FEATURE_INFO = {
-    "mean_degree": {"name": "Degree", "feature_id": "0"},
-    "density": {"name": "Density", "feature_id": "1"},
-    "mean_clustering": {"name": "Clustering", "feature_id": "2"},
-    "mean_betweenness": {"name": "Betweenness", "feature_id": "3"},
-    "mean_eigenvector": {"name": "Eigenvector", "feature_id": "4"},
-    "mean_closeness": {"name": "Closeness", "feature_id": "5"},
-    "max_singular_value": {"name": "Spectral", "feature_id": "6"},
-    "min_nonzero_laplacian": {"name": "Laplacian", "feature_id": "7"},
+    "0": "Degree",
+    "1": "Density",
+    "2": "Clustering",
+    "3": "Betweenness",
+    "4": "Eigenvector",
+    "5": "Closeness",
+    "6": "Spectral",
+    "7": "Laplacian",
 }
 
-FEATURE_ID_TO_NAME = {v["feature_id"]: v["name"] for k, v in FEATURE_INFO.items()}
 
-
-def plot_martingales_from_csv(
-    csv_path,
-    sheet_name="Aggregate",
-    output_dir="results",
-    threshold=60.0,
-    plot_shap=False,
-):
-    """
-    Plot martingale data from a CSV file.
-
-    Args:
-        csv_path: Path to the CSV file containing martingale data
-        sheet_name: Name of the sheet in the CSV file
-        output_dir: Directory to save output plots
-        threshold: Detection threshold value
-        plot_shap: Whether to create SHAP analysis plots
-    """
-    setup_research_plot_style()
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Load data
-    df, true_change_points, metadata_df = load_data(csv_path, sheet_name)
-    if df is None:
-        return
-
-    print(f"Using change points: {true_change_points}")
-
-    # Create feature plots in a 2x2 grid for selected features
-    _plot_feature_grid(
-        df=df,
-        output_path=os.path.join(output_dir, "feature_comparison.png"),
-        true_change_points=true_change_points,
-        threshold=threshold,
-    )
-
-    # Create comparison plot between traditional and horizon martingales
-    _plot_comparison(
-        df=df,
-        output_path=os.path.join(output_dir, "martingale_comparison.png"),
-        true_change_points=true_change_points,
-        threshold=threshold,
-        metadata_df=metadata_df if "metadata_df" in locals() else None,
-    )
-
-    # Add SHAP analysis plots if requested
-    if plot_shap:
-        print("Generating SHAP analysis plots...")
-        run_shap_analysis(
-            df=df,
-            output_dir=output_dir,
-            true_change_points=true_change_points,
-            threshold=threshold,
-        )
-
-
-def load_data(csv_path, sheet_name="Aggregate"):
-    """
-    Load martingale data from a CSV or Excel file.
-
-    Args:
-        csv_path: Path to the CSV or Excel file
-        sheet_name: Sheet name for Excel files
-
-    Returns:
-        Tuple of (DataFrame, change_points, metadata_df)
-        If loading fails, returns (None, [], None)
-    """
+def load_data(file_path, sheet_name="Aggregate"):
+    """Load martingale data from an Excel file. Return
+    a dataframe with the martingale data and a list of change points."""
     try:
-        # Check file extension
-        file_ext = os.path.splitext(csv_path)[1].lower()
-        if file_ext == ".xlsx" or file_ext == ".xls":
-            # Read Excel file
-            df = pd.read_excel(csv_path, sheet_name=sheet_name)
-            print(f"Successfully read Excel file: {csv_path}, sheet: {sheet_name}")
-
-            # Try to read ChangePointMetadata sheet if it exists
-            try:
-                metadata_df = pd.read_excel(csv_path, sheet_name="ChangePointMetadata")
-                true_change_points = metadata_df["change_point"].values.tolist()
-                print(f"Successfully read change points from ChangePointMetadata sheet")
-
-                # If the metadata has delay information, print it
-                if (
-                    "traditional_avg_delay" in metadata_df.columns
-                    and "horizon_avg_delay" in metadata_df.columns
-                ):
-                    for i, cp in enumerate(true_change_points):
-                        trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
-                        hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
-                        reduction = metadata_df.iloc[i].get("delay_reduction", 0)
-                        print(
-                            f"Change point {cp}: Trad delay={trad_delay}, Horizon delay={hor_delay}, Reduction={reduction:.2%}"
-                        )
-            except Exception as e:
-                print(f"Warning: Could not read ChangePointMetadata: {str(e)}")
-                # Fall back to extracting change points from main sheet
-                true_change_points = []
-                metadata_df = None
-                if "true_change_point" in df.columns:
-                    true_change_points = df.loc[
-                        ~df["true_change_point"].isna(), "timestep"
-                    ].values.astype(int)
-        else:
-            # Read CSV file
-            df = pd.read_csv(csv_path)
-            print(f"Successfully read CSV file: {csv_path}")
-            # For CSV files, extract from main sheet
-            true_change_points = []
-            metadata_df = None
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        print(f"Successfully read sheet: {sheet_name} from {file_path}")
+        try:
+            metadata_df = pd.read_excel(file_path, sheet_name="ChangePointMetadata")
+            change_points = metadata_df["change_point"].values.tolist()
+            print(f"Found {len(change_points)} change points in metadata")
+        except Exception:
+            change_points = []
             if "true_change_point" in df.columns:
-                true_change_points = df.loc[
+                change_points = df.loc[
                     ~df["true_change_point"].isna(), "timestep"
-                ].values.astype(int)
+                ].values.tolist()
+                print(f"Found {len(change_points)} change points in main sheet")
 
-        return df, true_change_points, metadata_df
+        return df, change_points
 
     except Exception as e:
         print(f"Error reading file: {str(e)}")
-        return None, [], None
+        return None, []
 
 
-def run_shap_analysis(
-    df,
-    output_dir="results/shap_analysis",
-    true_change_points=None,
-    threshold=60.0,
-):
-    """
-    Run SHAP analysis on martingale data using the CustomThresholdModel.
-
-    This function delegates the actual SHAP analysis to the threshold.py functionality.
-    It's a simple wrapper that prepares the data and calls the appropriate methods.
-
-    Args:
-        df: DataFrame containing martingale data
-        output_dir: Directory to save output plots
-        true_change_points: List of true change points to mark on plots
-        threshold: Detection threshold value
-    """
-    from changepoint.threshold import CustomThresholdModel
-
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Extract feature columns and prepare data
-    feature_cols, feature_names, sum_col, df_clean, timesteps = prepare_shap_data(df)
-
-    if feature_cols is None:
-        return  # Data preparation failed
-
-    # Convert true_change_points to list if it's a numpy array
-    if isinstance(true_change_points, np.ndarray):
-        true_change_points = true_change_points.tolist()
-
-    # Create threshold model
-    model = CustomThresholdModel(threshold=threshold)
-
-    # Run SHAP analysis using the threshold model
-    try:
-        print("Running SHAP analysis...")
-
-        # Use visualize_shap_over_time for the SHAP plot
-        contributions_df = model.visualize_shap_over_time(
-            df=df_clean,
-            feature_cols=feature_cols,
-            sum_col=sum_col,
-            change_points=true_change_points,
-            timesteps=timesteps,
-            output_path=os.path.join(output_dir, "shap_over_time.png"),
-            threshold=threshold,
-            feature_names=feature_names,
-        )
-
-        # Save contributions to CSV
-        if not contributions_df.empty:
-            contributions_df.to_csv(
-                os.path.join(output_dir, "feature_contributions.csv"), index=False
-            )
-            print(
-                f"Saved feature contributions to {os.path.join(output_dir, 'feature_contributions.csv')}"
-            )
-
-        print(f"SHAP analysis complete. Results saved to {output_dir}")
-
-        # Find and print feature contributions (this should ideally be in threshold.py)
-        print_feature_contributions(
-            model=model,
-            df=df_clean,
-            feature_cols=feature_cols,
-            feature_names=feature_names,
-            sum_col=sum_col,
-            threshold=threshold,
-            timesteps=timesteps,
-            true_change_points=true_change_points,
-        )
-
-    except Exception as e:
-        print(f"Error during SHAP analysis: {str(e)}")
-        print("Simplified SHAP analysis may be incomplete.")
-
-
-def prepare_shap_data(df):
-    """
-    Prepare data for SHAP analysis by extracting columns and handling NaN values.
-
-    Args:
-        df: DataFrame containing martingale data
+def load_trial_data(file_path):
+    """Load data from all trial sheets and metadata.
 
     Returns:
-        Tuple of (feature_cols, feature_names, sum_col, cleaned_df, timesteps)
-        If preparation fails, returns (None, None, None, None, None)
+        trial_dfs: List of dataframes for each trial
+        change_points: List of change points
+        metadata_df: DataFrame with change point metadata
     """
-    # Find feature columns for individual martingales
+    try:
+        # Read the Excel file
+        excel = pd.ExcelFile(file_path)
+
+        # Identify trial sheets
+        trial_sheets = [
+            sheet for sheet in excel.sheet_names if sheet.startswith("Trial")
+        ]
+        print(f"Found {len(trial_sheets)} trial sheets: {trial_sheets}")
+
+        # Load change point metadata if available
+        try:
+            metadata_df = pd.read_excel(file_path, sheet_name="ChangePointMetadata")
+            change_points = metadata_df["change_point"].values.tolist()
+            print(f"Found {len(change_points)} change points in metadata")
+        except Exception:
+            metadata_df = None
+            change_points = []
+
+        # Load each trial sheet
+        trial_dfs = []
+        for sheet in trial_sheets:
+            df = pd.read_excel(file_path, sheet_name=sheet)
+            trial_dfs.append(df)
+            # If we don't have change points yet, try to get them from this sheet
+            if not change_points and "true_change_point" in df.columns:
+                change_points = df.loc[
+                    ~df["true_change_point"].isna(), "timestep"
+                ].values.tolist()
+
+        return trial_dfs, change_points, metadata_df
+
+    except Exception as e:
+        print(f"Error loading trial data: {str(e)}")
+        return [], [], None
+
+
+def plot_individual_martingales(df, output_path, change_points=None, trial_dfs=None):
+    """Create a grid of plots for individual feature martingales.
+
+    Args:
+        df: DataFrame containing martingale data
+        output_path: Path to save the output image
+        change_points: List of change points to mark on plots
+        trial_dfs: List of DataFrames for individual trials (for box plots)
+    """
     feature_cols = [
         col
         for col in df.columns
@@ -283,935 +132,525 @@ def prepare_shap_data(df):
         and col.endswith("_mean")
     ]
 
-    # Sort feature columns by feature number
-    feature_cols.sort(key=lambda x: int(x.split("feature")[1].split("_")[0]))
-
     if not feature_cols:
-        print("No individual feature martingale columns found in data")
-        return None, None, None, None, None
-
-    # Get feature names based on feature IDs
-    feature_names = []
-    for col in feature_cols:
-        feature_id = col.split("feature")[1].split("_")[0]
-        feature_names.append(
-            FEATURE_ID_TO_NAME.get(feature_id, f"Feature {feature_id}")
-        )
-
-    # Sum column for traditional martingales
-    sum_col = "traditional_sum_martingales_mean"
-    if sum_col not in df.columns:
-        print(f"Sum martingale column '{sum_col}' not found in data")
-        return None, None, None, None, None
-
-    # Create timesteps array
-    timesteps = (
-        df["timestep"].values if "timestep" in df.columns else np.arange(len(df))
-    )
-
-    # Check for NaN values and handle them
-    print("Checking for NaN values in data...")
-    has_nans = False
-    for col in feature_cols:
-        nan_count = df[col].isna().sum()
-        if nan_count > 0:
-            has_nans = True
-            print(f"Found {nan_count} NaN values in {col}")
-
-    if has_nans:
-        print("Filling NaN values with zeros to avoid LinearRegression errors")
-        # Create a copy of the DataFrame with NaN values filled
-        df_clean = df.copy()
-        for col in feature_cols:
-            df_clean[col] = df_clean[col].fillna(0)
-
-        # Also check and fill NaNs in the sum column
-        if df_clean[sum_col].isna().sum() > 0:
-            print(f"Filling NaN values in {sum_col}")
-            df_clean[sum_col] = df_clean[sum_col].fillna(0)
-    else:
-        df_clean = df
-
-    return feature_cols, feature_names, sum_col, df_clean, timesteps
-
-
-def print_feature_contributions(
-    model,
-    df,
-    feature_cols,
-    feature_names,
-    sum_col,
-    threshold,
-    timesteps,
-    true_change_points,
-):
-    """
-    Print feature contributions for detection points.
-
-    Note: This function should ideally be part of CustomThresholdModel in threshold.py.
-
-    Args:
-        model: CustomThresholdModel instance
-        df: DataFrame containing martingale data
-        feature_cols: List of feature column names
-        feature_names: List of feature display names
-        sum_col: Column name for sum martingale
-        threshold: Detection threshold value
-        timesteps: Array of timestep values
-        true_change_points: List of true change points
-    """
-    # Find detection points for threshold crossing
-    detection_indices = []
-    for i in range(1, len(df)):
-        if df[sum_col].iloc[i - 1] <= threshold and df[sum_col].iloc[i] > threshold:
-            detection_indices.append(i)
-
-    # If no threshold crossings, find peaks near change points
-    if len(detection_indices) == 0 and true_change_points:
-        for cp in true_change_points:
-            # Find closest index to change point
-            cp_idx = np.argmin(np.abs(timesteps - cp))
-            window = 10
-            window_start = max(0, cp_idx)
-            window_end = min(len(df), cp_idx + window)
-
-            # Find peak in window
-            window_values = df[sum_col].iloc[window_start:window_end]
-            if not window_values.empty:
-                max_idx = window_values.idxmax()
-                detection_indices.append(max_idx)
-
-    # Print feature contributions table for each detection point
-    if detection_indices:
-        for idx, detection_idx in enumerate(detection_indices):
-            if 0 <= detection_idx < len(df):
-                detection_time = timesteps[detection_idx]
-                print(
-                    f"\nFeature contributions at detection point {idx+1} (timestep {detection_time}):"
-                )
-
-                # Calculate contributions
-                feature_values = df[feature_cols].iloc[detection_idx].values
-                total = sum(feature_values)
-                if total > 0:
-                    contributions = [
-                        (name, val, (val / total) * 100)
-                        for name, val in zip(feature_names, feature_values)
-                    ]
-                    contributions.sort(key=lambda x: x[2], reverse=True)
-
-                    # Print table
-                    print(
-                        f"{'Feature':<15} {'Martingale Value':<15} {'Contribution %':<15}"
-                    )
-                    print("-" * 50)
-                    for name, val, pct in contributions:
-                        print(f"{name:<15} {val:<15.6f} {pct:<15.2f}")
-
-
-def _plot_feature_grid(df, output_path, true_change_points=None, threshold=20.0):
-    """
-    Create a grid of all feature martingales comparing traditional vs horizon.
-
-    Args:
-        df: DataFrame containing the data
-        output_path: Path to save the plot
-        true_change_points: List of true change points to mark on the plot
-        threshold: Detection threshold
-    """
-    # Use all features
-    feature_ids = list(FEATURE_ID_TO_NAME.keys())
+        print("No individual feature martingale columns found")
+        return
 
     # Calculate grid dimensions
-    n_features = len(feature_ids)
-    n_cols = 4
-    n_rows = (n_features + n_cols - 1) // n_cols  # Ceiling division
+    n_features = len(feature_cols)
+    n_cols = min(4, n_features)
+    n_rows = (n_features + n_cols - 1) // n_cols
 
-    # Create figure with appropriate grid - reduced height per grid cell
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6), sharex=True)
-    axes = axes.flatten()
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 2.5 * n_rows), sharex=True)
+    axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
 
-    # Get x values (timestep)
     x = df["timestep"].values
 
-    # Find global maximum y-value across all features to set consistent y-axis limits
-    global_max = 0
-    for feature_id in feature_ids:
-        trad_mean_col = f"individual_traditional_martingales_feature{feature_id}_mean"
-        hor_mean_col = f"individual_horizon_martingales_feature{feature_id}_mean"
+    # Determine a clean set of x-ticks - use fewer ticks to reduce clutter
+    x_min, x_max = min(x), max(x)
+    tick_spacing = max(20, (x_max - x_min) // 8)  # No more than ~8 ticks
+    x_ticks = np.arange(
+        tick_spacing * (x_min // tick_spacing), x_max + tick_spacing, tick_spacing
+    )
 
-        if trad_mean_col in df.columns:
-            feature_max = df[trad_mean_col].max()
-            if feature_max > global_max:
-                global_max = feature_max
-
-        if hor_mean_col in df.columns:
-            feature_max = df[hor_mean_col].max()
-            if feature_max > global_max:
-                global_max = feature_max
+    # Find global maximum for consistent y-axis limits
+    y_max = 0
+    for col in feature_cols:
+        col_max = df[col].max()
+        if col_max > y_max:
+            y_max = col_max
 
     # Round up to nearest 40
-    y_max = ((global_max // 40) + 1) * 40
+    y_max = ((y_max // 40) + 1) * 40
+
+    # If we have trial data, prepare for box plots
+    has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
+
+    # Sample points for box plots (plotting at every timestep would be too crowded)
+    if has_trial_data:
+        # Find important points around change points and sample regularly elsewhere
+        sample_points = []
+        if change_points:
+            window = 5  # Points before and after change points
+            for cp in change_points:
+                for i in range(max(0, cp - window), min(len(x), cp + window + 1)):
+                    if i in x:
+                        sample_points.append(i)
+
+        # Add regular samples (about 10-15 points total)
+        if len(x) > 0:
+            step = max(1, len(x) // 10)
+            for i in range(0, len(x), step):
+                sample_points.append(x[i])
+
+        # Remove duplicates and sort
+        sample_points = sorted(set(sample_points))
 
     # Plot each feature
-    for i, feature_id in enumerate(feature_ids):
-        if i < len(axes):  # Ensure we don't exceed the number of subplots
+    for i, col in enumerate(feature_cols):
+        if i < len(axes):
             ax = axes[i]
-            feature_name = FEATURE_ID_TO_NAME.get(feature_id, f"Feature {feature_id}")
 
-            # Set up subtle grid lines
-            ax.grid(True, alpha=0.2, linestyle="-", linewidth=0.5)
+            # Extract feature ID and get name
+            feature_id = col.split("feature")[1].split("_")[0]
+            feature_name = FEATURE_INFO.get(feature_id, f"Feature {feature_id}")
 
-            # Column names
-            trad_mean_col = (
-                f"individual_traditional_martingales_feature{feature_id}_mean"
-            )
-            trad_std_col = f"individual_traditional_martingales_feature{feature_id}_std"
-            trad_upper_col = (
-                f"individual_traditional_martingales_feature{feature_id}_upper"
-            )
-            trad_lower_col = (
-                f"individual_traditional_martingales_feature{feature_id}_lower"
-            )
-
-            hor_mean_col = f"individual_horizon_martingales_feature{feature_id}_mean"
-            hor_std_col = f"individual_horizon_martingales_feature{feature_id}_std"
-            hor_upper_col = f"individual_horizon_martingales_feature{feature_id}_upper"
-            hor_lower_col = f"individual_horizon_martingales_feature{feature_id}_lower"
-
-            # Plot traditional martingale
-            if trad_mean_col in df.columns:
-                ax.plot(x, df[trad_mean_col].values, "b-", linewidth=1.5, label="Act.")
-
-                # Plot confidence bands
-                if trad_upper_col in df.columns and trad_lower_col in df.columns:
-                    ax.fill_between(
-                        x,
-                        df[trad_lower_col].values,
-                        df[trad_upper_col].values,
-                        color="b",
-                        alpha=0.2,
-                    )
-                elif trad_std_col in df.columns:
-                    ax.fill_between(
-                        x,
-                        df[trad_mean_col].values - df[trad_std_col].values,
-                        df[trad_mean_col].values + df[trad_std_col].values,
-                        color="b",
-                        alpha=0.2,
-                    )
-
-            # Plot horizon martingale
-            if hor_mean_col in df.columns:
-                ax.plot(
-                    x, df[hor_mean_col].values, "orange", linewidth=1.5, label="Pred."
+            if has_trial_data:
+                # Traditional martingales
+                trad_col_base = (
+                    f"individual_traditional_martingales_feature{feature_id}"
                 )
+                hor_col_base = f"individual_horizon_martingales_feature{feature_id}"
 
-                # Plot confidence bands
-                if hor_upper_col in df.columns and hor_lower_col in df.columns:
-                    ax.fill_between(
-                        x,
-                        df[hor_lower_col].values,
-                        df[hor_upper_col].values,
-                        color="orange",
-                        alpha=0.2,
+                # Create box plot data for each sample point
+                trad_data = []
+                trad_positions = []
+                hor_data = []
+                hor_positions = []
+
+                for time_point in sample_points:
+                    # Collect values across trials for this time point
+                    trad_values = []
+                    hor_values = []
+
+                    for trial_df in trial_dfs:
+                        if "timestep" in trial_df.columns:
+                            # Find exact or closest timestep
+                            if time_point in trial_df["timestep"].values:
+                                idx = trial_df.index[
+                                    trial_df["timestep"] == time_point
+                                ][0]
+                                if trad_col_base in trial_df.columns:
+                                    trad_values.append(trial_df.loc[idx, trad_col_base])
+                                if hor_col_base in trial_df.columns:
+                                    hor_values.append(trial_df.loc[idx, hor_col_base])
+
+                    if trad_values:
+                        trad_data.append(trad_values)
+                        trad_positions.append(time_point)
+                    if hor_values:
+                        hor_data.append(hor_values)
+                        hor_positions.append(time_point)
+
+                # Create box plots with narrower width for better visibility
+                box_width = min(3.0, 50 / len(sample_points))
+
+                if trad_data:
+                    trad_boxes = ax.boxplot(
+                        trad_data,
+                        positions=trad_positions,
+                        widths=box_width,
+                        patch_artist=True,
+                        boxprops=dict(facecolor="lightblue", color="blue", alpha=0.7),
+                        whiskerprops=dict(color="blue", linewidth=1.0),
+                        medianprops=dict(color="darkblue", linewidth=1.5),
+                        showfliers=False,
+                        zorder=3,
                     )
-                elif hor_std_col in df.columns:
-                    ax.fill_between(
-                        x,
-                        df[hor_mean_col].values - df[hor_std_col].values,
-                        df[hor_mean_col].values + df[hor_std_col].values,
-                        color="orange",
-                        alpha=0.2,
+
+                if hor_data:
+                    hor_boxes = ax.boxplot(
+                        hor_data,
+                        positions=hor_positions,
+                        widths=box_width,
+                        patch_artist=True,
+                        boxprops=dict(facecolor="bisque", color="orange", alpha=0.7),
+                        whiskerprops=dict(color="orange", linewidth=1.0),
+                        medianprops=dict(color="darkorange", linewidth=1.5),
+                        showfliers=False,
+                        zorder=2,
                     )
 
-            # Mark true change points - use light gray color
-            cp_added_to_legend = False
-            if true_change_points is not None and len(true_change_points) > 0:
-                for cp in true_change_points:
-                    if not cp_added_to_legend:
-                        ax.axvline(
-                            x=cp,
-                            color="gray",
-                            linestyle="--",
-                            alpha=0.8,
-                            linewidth=1.2,
-                            label="CP",
-                        )
-                        cp_added_to_legend = True
-                    else:
-                        ax.axvline(
-                            x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.2
-                        )
+                # Also plot the means from the aggregate data as a line
+                ax.plot(x, df[col].values, "b-", linewidth=1.0, alpha=0.5, zorder=1)
 
-            # Add title and grid
+                horizon_col = col.replace("traditional", "horizon")
+                if horizon_col in df.columns:
+                    ax.plot(
+                        x,
+                        df[horizon_col].values,
+                        "orange",
+                        linewidth=1.0,
+                        alpha=0.5,
+                        zorder=1,
+                    )
+            else:
+                # Regular line plot (original behavior)
+                ax.plot(x, df[col].values, "b-", linewidth=1.5, label="Traditional")
+
+                horizon_col = col.replace("traditional", "horizon")
+                if horizon_col in df.columns:
+                    ax.plot(
+                        x,
+                        df[horizon_col].values,
+                        "orange",
+                        linewidth=1.5,
+                        label="Horizon",
+                    )
+
+            # Mark change points if provided
+            if change_points:
+                for cp in change_points:
+                    ax.axvline(
+                        x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.2
+                    )
+
+            # Set title and labels
             ax.set_title(feature_name, fontsize=10)
-
-            # Set y-axis label on leftmost plots only
             if i % n_cols == 0:
-                ax.set_ylabel("Mart. Value", fontsize=9)
-
-            # Set x-axis label on bottom row plots only
-            if i >= n_features - n_cols or i >= len(axes) - n_cols:
+                ax.set_ylabel("Martingale Value", fontsize=9)
+            if i >= n_features - n_cols:
                 ax.set_xlabel("Time", fontsize=9)
+
+            # Set consistent y-axis limits
+            ax.set_ylim(0, y_max)
+            ax.set_yticks(range(0, int(y_max) + 1, 40))
+
+            # Set consistent x-axis ticks
+            ax.set_xticks(x_ticks)
 
             # Add legend on first plot only
             if i == 0:
-                ax.legend(loc="upper right", fontsize=7)
+                if has_trial_data:
+                    from matplotlib.patches import Patch
 
-            # Set consistent y-axis limits with ticks every 40 units
-            ax.set_ylim(-5, y_max)
-            ax.set_yticks(range(0, int(y_max) + 1, 40))
-            ax.tick_params(
-                axis="both", which="major", labelsize=8
-            )  # Smaller tick labels
+                    legend_elements = [
+                        Patch(
+                            facecolor="lightblue",
+                            edgecolor="blue",
+                            alpha=0.7,
+                            label="Traditional",
+                        ),
+                        Patch(
+                            facecolor="bisque",
+                            edgecolor="orange",
+                            alpha=0.7,
+                            label="Horizon",
+                        ),
+                    ]
+                    ax.legend(handles=legend_elements, loc="upper right", fontsize=8)
+                else:
+                    ax.legend(loc="upper right", fontsize=8)
 
-            # Use thin solid lines for y-axis grid
-            ax.yaxis.grid(True, linestyle="-", alpha=0.2, linewidth=0.5)
-
-    # Hide any unused subplots
+    # Hide unused subplots
     for i in range(n_features, len(axes)):
         axes[i].set_visible(False)
 
-    # Make the plot more compact with tighter spacing
+    # Adjust spacing for better tick label visibility
     plt.tight_layout()
-    plt.subplots_adjust(hspace=0.25, wspace=0.3)  # Further reduced vertical spacing
+    fig.subplots_adjust(bottom=0.15)
 
-    # Save the figure
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved feature grid plot to {output_path}")
+    print(f"Saved individual martingales plot to {output_path}")
 
 
-def _plot_comparison(
-    df,
-    output_path,
-    true_change_points=None,
-    threshold=20.0,
-    metadata_df=None,
-    use_boxplot=False,
-    trial_dfs=None,
+def plot_sum_martingales(
+    df, output_path, change_points=None, threshold=50.0, trial_dfs=None
 ):
-    """
-    Create a comparison plot between traditional and horizon martingales.
+    """Create a comparison plot of sum martingales.
 
     Args:
-        df: DataFrame containing the aggregated data (means across trials)
-        output_path: Path to save the plot
-        true_change_points: List of true change points to mark on the plot
-        threshold: Detection threshold
-        metadata_df: DataFrame containing change point metadata
-        use_boxplot: Whether to use box plots instead of line plots (requires trial_dfs)
-        trial_dfs: List of DataFrames from individual trials (required for box plots)
+        df: DataFrame containing martingale data
+        output_path: Path to save the output image
+        change_points: List of change points to mark on plots
+        threshold: Detection threshold value
+        trial_dfs: List of DataFrames for individual trials (for box plots)
     """
-    # Check if necessary columns exist
-    if not (
-        "traditional_sum_martingales_mean" in df.columns
-        and "horizon_sum_martingales_mean" in df.columns
-    ):
-        print("Missing required columns for comparison plot")
+    # Find column names for sum martingales
+    trad_sum_col = next(
+        (
+            col
+            for col in df.columns
+            if col
+            in ["traditional_sum_martingales_mean", "traditional_sum_martingales"]
+        ),
+        None,
+    )
+
+    hor_sum_col = next(
+        (
+            col
+            for col in df.columns
+            if col in ["horizon_sum_martingales_mean", "horizon_sum_martingales"]
+        ),
+        None,
+    )
+
+    if not trad_sum_col:
+        print("Traditional sum martingale column not found")
         return
 
-    # Create figure for combined plot - more compact
+    # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Set up subtle grid lines
-    ax.grid(True, alpha=0.2, linestyle="-", linewidth=0.5)
-
-    # Get x values (timestep)
     x = df["timestep"].values
 
-    # Determine data range for x-axis limits
-    x_min = min(x)
-    x_max = max(x)
+    # Clean up x-axis ticks - use fewer ticks to reduce clutter
+    x_min, x_max = min(x), max(x)
+    tick_spacing = max(20, (x_max - x_min) // 10)  # No more than ~10 ticks
+    x_ticks = np.arange(
+        tick_spacing * (x_min // tick_spacing), x_max + tick_spacing, tick_spacing
+    )
 
-    # If using box plots and trial data is provided
-    if use_boxplot and trial_dfs is not None and len(trial_dfs) > 0:
-        # Prepare data for box plots
-        # We need to collect martingale values at each timestep across all trials
-        traditional_data = []
-        horizon_data = []
-        timesteps = []
+    # Check if we have trial data for box plots
+    has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
 
-        # Select a subset of timesteps to make the plot readable
-        # Either select every nth timestep or focus on areas around change points
-        if true_change_points:
-            # Focus on regions around change points
-            sample_timesteps = []
-            for cp in true_change_points:
-                # Add timesteps in a window around each change point
-                window = 10  # Adjust as needed
-                sample_timesteps.extend(
-                    range(max(0, cp - window), min(int(x_max), cp + window + 1))
-                )
-            # Add some regular samples in between for context
-            step = max(1, int(len(x) / 20))  # At most 20 points outside CP regions
-            for t in range(0, len(x), step):
-                if t not in sample_timesteps:
-                    sample_timesteps.append(t)
-            sample_timesteps.sort()
-        else:
-            # Regular sampling throughout the time series
-            step = max(1, int(len(x) / 40))  # At most 40 box plots total
-            sample_timesteps = list(range(0, len(x), step))
+    if has_trial_data:
+        # Sample points for box plots (plotting at every timestep would be too crowded)
+        sample_points = []
+        if change_points:
+            window = 5  # Points before and after change points
+            for cp in change_points:
+                for i in range(max(0, cp - window), min(max(x) + 1, cp + window + 1)):
+                    if i in x:
+                        sample_points.append(i)
 
-        # Collect data for each selected timestep
-        for t_idx in sample_timesteps:
-            if t_idx < len(x):
-                t = x[t_idx]
-                timesteps.append(t)
+        # Add regular samples (about 10-15 points total)
+        if len(x) > 0:
+            step = max(1, len(x) // 15)
+            regular_points = list(range(int(min(x)), int(max(x)) + 1, step))
+            sample_points.extend(regular_points)
 
-                # Collect values across trials for this timestep
-                trad_values = []
-                hor_values = []
+        # Remove duplicates and sort
+        sample_points = sorted(set(sample_points))
 
-                for trial_df in trial_dfs:
-                    # Find the closest timestep in this trial's data
-                    if "timestep" in trial_df.columns:
-                        closest_idx = np.argmin(np.abs(trial_df["timestep"].values - t))
-                        if "traditional_sum_martingales_mean" in trial_df.columns:
+        # Create box plot data for each sample point
+        trad_data = []
+        trad_positions = []
+        hor_data = []
+        hor_positions = []
+
+        for time_point in sample_points:
+            # Collect values across trials for this time point
+            trad_values = []
+            hor_values = []
+
+            for trial_df in trial_dfs:
+                if "timestep" in trial_df.columns:
+                    # Find rows with this timestep
+                    matches = trial_df[trial_df["timestep"] == time_point]
+                    if not matches.empty:
+                        if "traditional_sum_martingales" in trial_df.columns:
                             trad_values.append(
-                                trial_df["traditional_sum_martingales_mean"].iloc[
-                                    closest_idx
-                                ]
+                                matches["traditional_sum_martingales"].values[0]
                             )
-                        if "horizon_sum_martingales_mean" in trial_df.columns:
+                        if "horizon_sum_martingales" in trial_df.columns:
                             hor_values.append(
-                                trial_df["horizon_sum_martingales_mean"].iloc[
-                                    closest_idx
-                                ]
+                                matches["horizon_sum_martingales"].values[0]
                             )
 
-                traditional_data.append(trad_values)
-                horizon_data.append(hor_values)
+            if trad_values:
+                trad_data.append(trad_values)
+                trad_positions.append(time_point)
+            if hor_values:
+                hor_data.append(hor_values)
+                hor_positions.append(time_point)
 
         # Create box plots
-        # Offset the boxes slightly to avoid overlap
-        trad_positions = np.array(timesteps) - 0.3
-        hor_positions = np.array(timesteps) + 0.3
+        box_width = min(3.0, 60 / len(sample_points))
 
-        # Traditional sum martingales box plot
-        trad_boxes = ax.boxplot(
-            traditional_data,
-            positions=trad_positions,
-            widths=0.5,
-            patch_artist=True,
-            boxprops=dict(facecolor="lightblue", color="blue"),
-            whiskerprops=dict(color="blue"),
-            medianprops=dict(color="blue", linewidth=1.5),
-            showfliers=False,
-            zorder=5,
-        )
-
-        # Horizon sum martingales box plot
-        hor_boxes = ax.boxplot(
-            horizon_data,
-            positions=hor_positions,
-            widths=0.5,
-            patch_artist=True,
-            boxprops=dict(facecolor="bisque", color="orange"),
-            whiskerprops=dict(color="orange"),
-            medianprops=dict(color="orange", linewidth=1.5),
-            showfliers=False,
-            zorder=3,
-        )
-
-        # Add custom legend for box plots
-        from matplotlib.patches import Patch
-
-        legend_elements = [
-            Patch(facecolor="lightblue", edgecolor="blue", label="Trad. Sum"),
-            Patch(facecolor="bisque", edgecolor="orange", label="Horizon Sum"),
-        ]
-
-        # Connect median points with lines for better visualization
-        trad_medians = [box.get_ydata()[0] for box in trad_boxes["medians"]]
-        hor_medians = [box.get_ydata()[0] for box in hor_boxes["medians"]]
-
-        ax.plot(trad_positions, trad_medians, "b-", alpha=0.7, linewidth=1.0, zorder=6)
-        ax.plot(
-            hor_positions, hor_medians, "orange", alpha=0.7, linewidth=1.0, zorder=4
-        )
-
-    else:
-        # Traditional line plot approach
-        # Plot traditional sum martingales
-        ax.plot(
-            x,
-            df["traditional_sum_martingales_mean"].values,
-            "b-",
-            linewidth=2.0,
-            label="Trad. Sum",
-            zorder=5,
-        )
-
-        # Add confidence bands for traditional sum
-        if all(
-            col in df.columns
-            for col in [
-                "traditional_sum_martingales_upper",
-                "traditional_sum_martingales_lower",
-            ]
-        ):
-            ax.fill_between(
-                x,
-                df["traditional_sum_martingales_lower"].values,
-                df["traditional_sum_martingales_upper"].values,
-                color="b",
-                alpha=0.15,
-                zorder=4,
-            )
-        elif "traditional_sum_martingales_std" in df.columns:
-            ax.fill_between(
-                x,
-                df["traditional_sum_martingales_mean"].values
-                - df["traditional_sum_martingales_std"].values,
-                df["traditional_sum_martingales_mean"].values
-                + df["traditional_sum_martingales_std"].values,
-                color="b",
-                alpha=0.15,
-                zorder=4,
-            )
-
-        # Plot horizon sum martingales
-        ax.plot(
-            x,
-            df["horizon_sum_martingales_mean"].values,
-            "orange",
-            linewidth=2.0,
-            label="Horizon Sum",
-            zorder=3,
-        )
-
-        # Add confidence bands for horizon sum
-        if all(
-            col in df.columns
-            for col in [
-                "horizon_sum_martingales_upper",
-                "horizon_sum_martingales_lower",
-            ]
-        ):
-            ax.fill_between(
-                x,
-                df["horizon_sum_martingales_lower"].values,
-                df["horizon_sum_martingales_upper"].values,
-                color="orange",
-                alpha=0.15,
-                zorder=2,
-            )
-        elif "horizon_sum_martingales_std" in df.columns:
-            ax.fill_between(
-                x,
-                df["horizon_sum_martingales_mean"].values
-                - df["horizon_sum_martingales_std"].values,
-                df["horizon_sum_martingales_mean"].values
-                + df["horizon_sum_martingales_std"].values,
-                color="orange",
-                alpha=0.15,
-                zorder=2,
-            )
-
-        # Plot traditional avg martingales
-        if "traditional_avg_martingales_mean" in df.columns:
-            ax.plot(
-                x,
-                df["traditional_avg_martingales_mean"].values,
-                "g--",
-                linewidth=1.5,
-                label="Trad. Avg",
-                alpha=0.7,
-                zorder=5,
-            )
-
-        # Plot horizon avg martingales
-        if "horizon_avg_martingales_mean" in df.columns:
-            ax.plot(
-                x,
-                df["horizon_avg_martingales_mean"].values,
-                "purple",
-                linestyle="--",
-                linewidth=1.5,
-                label="Horizon Avg",
-                alpha=0.7,
+        if trad_data:
+            trad_boxes = ax.boxplot(
+                trad_data,
+                positions=trad_positions,
+                widths=box_width,
+                patch_artist=True,
+                boxprops=dict(facecolor="lightblue", color="blue", alpha=0.7),
+                whiskerprops=dict(color="blue", linewidth=1.0),
+                medianprops=dict(color="darkblue", linewidth=1.5),
+                showfliers=False,
                 zorder=3,
             )
 
-        # Set up legend elements for line plots
-        legend_elements = None  # Use default legend
+        if hor_data:
+            hor_boxes = ax.boxplot(
+                hor_data,
+                positions=hor_positions,
+                widths=box_width,
+                patch_artist=True,
+                boxprops=dict(facecolor="bisque", color="orange", alpha=0.7),
+                whiskerprops=dict(color="orange", linewidth=1.0),
+                medianprops=dict(color="darkorange", linewidth=1.5),
+                showfliers=False,
+                zorder=2,
+            )
 
-    # Add threshold line - keep as red
+        # Add thin lines for mean values from aggregate data
+        ax.plot(
+            x,
+            df[trad_sum_col].values,
+            "b-",
+            linewidth=1.0,
+            alpha=0.5,
+            zorder=1,
+        )
+
+        if hor_sum_col:
+            ax.plot(
+                x,
+                df[hor_sum_col].values,
+                "orange",
+                linewidth=1.0,
+                alpha=0.5,
+                zorder=1,
+            )
+
+        # Add legend
+        from matplotlib.patches import Patch
+
+        legend_elements = [
+            Patch(
+                facecolor="lightblue", edgecolor="blue", alpha=0.7, label="Traditional"
+            ),
+            Patch(facecolor="bisque", edgecolor="orange", alpha=0.7, label="Horizon"),
+            Patch(facecolor="red", edgecolor="red", alpha=0.5, label="Threshold"),
+        ]
+        ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
+
+    else:
+        # Standard line plots (original behavior)
+        ax.plot(
+            x,
+            df[trad_sum_col].values,
+            "b-",
+            linewidth=2.0,
+            label="Traditional Sum",
+            zorder=5,
+        )
+
+        if hor_sum_col:
+            ax.plot(
+                x,
+                df[hor_sum_col].values,
+                "orange",
+                linewidth=2.0,
+                label="Horizon Sum",
+                zorder=3,
+            )
+
+        # Add legend
+        ax.legend(loc="upper right", fontsize=10)
+
+    # Add threshold line
     ax.axhline(
         y=threshold,
         color="r",
         linestyle="--",
         label="Threshold",
-        alpha=0.7,
+        alpha=0.8,
         linewidth=1.5,
-        zorder=1,
     )
 
-    # Setup x-ticks with intervals of 50
-    x_ticks = list(range(0, int(x_max) + 51, 50))
+    # Mark change points if provided
+    if change_points:
+        for cp in change_points:
+            ax.axvline(
+                x=cp,
+                color="gray",
+                linestyle="--",
+                alpha=0.8,
+                linewidth=1.5,
+                label="Change Point" if cp == change_points[0] else "",
+            )
 
-    # Mark true change points and add annotations for delays - use light gray for consistency
-    cp_added_to_legend = False
-
-    if true_change_points is not None and len(true_change_points) > 0:
-        for i, cp in enumerate(true_change_points):
-            # Add vertical line for change point
-            if not cp_added_to_legend:
-                ax.axvline(
-                    x=cp,
-                    color="gray",
-                    linestyle="--",
-                    alpha=0.8,
-                    linewidth=1.5,
-                    label="CP",
-                )
-                cp_added_to_legend = True
-            else:
-                ax.axvline(
-                    x=cp,
-                    color="gray",
-                    linestyle="--",
-                    alpha=0.8,
-                    linewidth=1.5,
-                )
-
-            # Add CP value to x-ticks if not already close to an existing tick
-            # Only add if it's not within 10 units of an existing tick
-            if not any(abs(cp - tick) < 10 for tick in x_ticks):
-                x_ticks.append(cp)
-
-            # Get peak values near change point
-            if (
-                metadata_df is not None
-                and "traditional_avg_delay" in metadata_df.columns
-            ):
-                try:
-                    trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
-                    hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
-
-                    # Find peak values for annotation
-                    detection_point_trad = cp + int(trad_delay)
-                    detection_point_hor = cp + int(hor_delay)
-
-                    # Safely find detection points within dataframe bounds
-                    if 0 <= detection_point_trad < len(df):
-                        # Find peak in the vicinity of detection point for better annotation
-                        window = 5  # Look 5 steps before and after detection point
-                        start_idx = max(0, detection_point_trad - window)
-                        end_idx = min(len(df) - 1, detection_point_trad + window)
-
-                        # Get the slice of data around detection point
-                        slice_df = df.iloc[start_idx : end_idx + 1]
-                        trad_values = slice_df["traditional_sum_martingales_mean"]
-
-                        # Find the peak value and its index
-                        peak_value = trad_values.max()
-                        peak_idx = slice_df["traditional_sum_martingales_mean"].idxmax()
-
-                        # Format delay to 2 decimal places
-                        trad_delay_str = f"{trad_delay:.2f}"
-
-                        # Add detection delay annotation with horizontal arrow
-                        # Position text to the right of the peak
-                        ax.annotate(
-                            f"delay:{trad_delay_str}",
-                            xy=(df.loc[peak_idx, "timestep"], peak_value),
-                            xytext=(
-                                df.loc[peak_idx, "timestep"] + 15,
-                                peak_value - 10,
-                            ),  # Offset horizontally
-                            textcoords="data",
-                            arrowprops=dict(
-                                arrowstyle="->",
-                                color="blue",
-                                connectionstyle="arc3,rad=0.2",  # Curved arrow
-                                shrinkA=5,
-                                shrinkB=5,
-                            ),
-                            color="blue",
-                            fontsize=12,
-                            fontweight="bold",
-                            ha="left",
-                            va="center",
-                            zorder=10,
-                        )
-
-                    if 0 <= detection_point_hor < len(df):
-                        # Find peak for horizon in the vicinity of detection point
-                        window = 5
-                        start_idx = max(0, detection_point_hor - window)
-                        end_idx = min(len(df) - 1, detection_point_hor + window)
-
-                        # Get the slice of data around detection point
-                        slice_df = df.iloc[start_idx : end_idx + 1]
-                        hor_values = slice_df["horizon_sum_martingales_mean"]
-
-                        # Find the peak value and its index
-                        peak_value = hor_values.max()
-                        peak_idx = slice_df["horizon_sum_martingales_mean"].idxmax()
-
-                        # Format delay to 2 decimal places
-                        hor_delay_str = f"{hor_delay:.2f}"
-
-                        # Add detection delay annotation with horizontal arrow
-                        # Position text to the left of the peak to avoid overlap
-                        ax.annotate(
-                            f"delay:{hor_delay_str}",
-                            xy=(df.loc[peak_idx, "timestep"], peak_value),
-                            xytext=(
-                                df.loc[peak_idx, "timestep"] - 15,
-                                peak_value + 10,
-                            ),  # Offset horizontally
-                            textcoords="data",
-                            arrowprops=dict(
-                                arrowstyle="->",
-                                color="orange",
-                                connectionstyle="arc3,rad=-0.2",  # Curved arrow in opposite direction
-                                shrinkA=5,
-                                shrinkB=5,
-                            ),
-                            color="orange",
-                            fontsize=12,
-                            fontweight="bold",
-                            ha="right",
-                            va="center",
-                            zorder=10,
-                        )
-                except Exception as e:
-                    print(f"Error adding delay annotations: {str(e)}")
-
-    # Sort the x_ticks to ensure they're in ascending order
-    x_ticks.sort()
-
-    # Set x-axis ticks
+    # Set clean x-ticks
     ax.set_xticks(x_ticks)
+    ax.set_xticklabels([str(int(tick)) for tick in x_ticks])
 
-    # Set x-axis limits to actual data range with small padding
-    padding = (x_max - x_min) * 0.05  # 5% padding on each side
-    ax.set_xlim(x_min - padding, x_max + padding)
+    # If tick labels still overlap, rotate them
+    plt.setp(ax.get_xticklabels(), rotation=0)
 
-    # Set axis labels and title
-    ax.set_xlabel("Time", fontsize=14)
-    ax.set_ylabel("Martingale Value", fontsize=14)
+    ax.set_xlabel("Timestep", fontsize=12)
+    ax.set_ylabel("Martingale Value", fontsize=12)
+    ax.set_title("Martingale Values Over Time", fontsize=14)
 
-    # Add legend with custom elements if specified
-    if legend_elements:
-        ax.legend(
-            handles=legend_elements,
-            loc="upper right",
-            ncol=2,
-            fontsize=12,
-            framealpha=0.8,
-        )
-    else:
-        ax.legend(
-            loc="upper right",
-            ncol=2,
-            fontsize=12,
-            framealpha=0.8,
-        )
-
-    # Make the plot more compact
     plt.tight_layout()
-
-    # Save the figure
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved comparison plot to {output_path}")
+    print(f"Saved sum martingales plot to {output_path}")
 
 
-def plot_martingale_box_comparison(
-    excel_path,
+def plot_martingales(
+    file_path,
+    sheet_name="Aggregate",
     output_dir="results",
-    trial_sheets=None,
     threshold=50.0,
+    use_boxplots=True,
 ):
-    """
-    Create box plot comparison from multiple trial sheets in an Excel file.
+    """Main function to plot martingale data from an Excel file.
 
     Args:
-        excel_path: Path to Excel file containing multiple trial sheets
+        file_path: Path to the Excel file
+        sheet_name: Name of the sheet to read
         output_dir: Directory to save output plots
-        trial_sheets: List of sheet names for trials (if None, will look for 'Trial1', 'Trial2', etc.)
         threshold: Detection threshold value
+        use_boxplots: Whether to use box plots for showing distributions
     """
-    setup_research_plot_style()
+    # Setup plot style
+    setup_plot_style()
+
+    # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Verify it's an Excel file
-    file_ext = os.path.splitext(excel_path)[1].lower()
-    if file_ext not in [".xlsx", ".xls"]:
-        print(f"Error: {excel_path} is not an Excel file")
+    # Load data
+    df, change_points = load_data(file_path, sheet_name)
+    if df is None:
         return
 
-    # Get all sheets in the Excel file
-    try:
-        excel = pd.ExcelFile(excel_path)
-        all_sheets = excel.sheet_names
-        print(f"Found sheets in Excel file: {all_sheets}")
+    # Load trial data if box plots are requested
+    trial_dfs = None
+    if use_boxplots:
+        trial_dfs, trial_change_points, _ = load_trial_data(file_path)
+        # If we found change points in trials but not in the aggregate sheet
+        if not change_points and trial_change_points:
+            change_points = trial_change_points
 
-        # If trial_sheets not specified, look for 'Trial1', 'Trial2', etc.
-        if trial_sheets is None:
-            trial_sheets = [sheet for sheet in all_sheets if sheet.startswith("Trial")]
-
-        if not trial_sheets:
-            print("No trial sheets found in Excel file")
-            return
-
-        print(f"Using trial sheets: {trial_sheets}")
-    except Exception as e:
-        print(f"Error reading Excel file: {str(e)}")
-        return
-
-    # Load data from all trial sheets
-    trial_dfs = []
-    true_change_points = None
-    metadata_df = None
-
-    # Try to load metadata first if it exists
-    try:
-        if "ChangePointMetadata" in all_sheets:
-            metadata_df = pd.read_excel(excel_path, sheet_name="ChangePointMetadata")
-            true_change_points = metadata_df["change_point"].values.tolist()
-            print(f"Successfully read change points from ChangePointMetadata sheet")
-
-            # Print delay information if available
-            if (
-                "traditional_avg_delay" in metadata_df.columns
-                and "horizon_avg_delay" in metadata_df.columns
-            ):
-                for i, cp in enumerate(true_change_points):
-                    trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
-                    hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
-                    reduction = metadata_df.iloc[i].get("delay_reduction", 0)
-                    print(
-                        f"Change point {cp}: Trad delay={trad_delay}, Horizon delay={hor_delay}, Reduction={reduction:.2%}"
-                    )
-    except Exception as e:
-        print(f"Warning: Could not read ChangePointMetadata: {str(e)}")
-
-    # Load trial data from sheets
-    for sheet_name in trial_sheets:
-        try:
-            df = pd.read_excel(excel_path, sheet_name=sheet_name)
-            print(f"Successfully read trial data from sheet: {sheet_name}")
-
-            # Add sheet name as a column for reference
-            df["trial_name"] = sheet_name
-
-            # If we don't have change points yet, try to get them from this sheet
-            if true_change_points is None and "true_change_point" in df.columns:
-                true_change_points = df.loc[
-                    ~df["true_change_point"].isna(), "timestep"
-                ].values.tolist()
-                print(
-                    f"Extracted change points from {sheet_name}: {true_change_points}"
-                )
-
-            trial_dfs.append(df)
-        except Exception as e:
-            print(f"Error reading sheet {sheet_name}: {str(e)}")
-
-    if not trial_dfs:
-        print("No valid trial data loaded")
-        return
-
-    # Create an aggregate DataFrame (average across trials)
-    # This assumes all trials have the same timesteps
-    agg_df = trial_dfs[0].copy()
-
-    # Compute means across trials for each column
-    for col in agg_df.columns:
-        if col != "timestep" and col != "trial_name":
-            # Initialize with zeros
-            agg_df[col] = 0
-
-            # Sum values from all trials
-            valid_trials = 0
-            for df in trial_dfs:
-                if col in df.columns:
-                    agg_df[col] += df[col]
-                    valid_trials += 1
-
-            # Compute average
-            if valid_trials > 0:
-                agg_df[col] = agg_df[col] / valid_trials
-
-    # Create box plot
-    _plot_comparison(
-        df=agg_df,
-        output_path=os.path.join(output_dir, "martingale_comparison_boxplot.png"),
-        true_change_points=true_change_points,
-        threshold=threshold,
-        metadata_df=metadata_df,
-        use_boxplot=True,
-        trial_dfs=trial_dfs,
+    # Plot individual martingales
+    plot_individual_martingales(
+        df=df,
+        output_path=os.path.join(output_dir, "individual_martingales.png"),
+        change_points=change_points,
+        trial_dfs=trial_dfs if use_boxplots else None,
     )
 
-    # Also create standard line plot for comparison
-    _plot_comparison(
-        df=agg_df,
-        output_path=os.path.join(output_dir, "martingale_comparison.png"),
-        true_change_points=true_change_points,
+    # Plot sum martingales
+    plot_sum_martingales(
+        df=df,
+        output_path=os.path.join(output_dir, "sum_martingales.png"),
+        change_points=change_points,
         threshold=threshold,
-        metadata_df=metadata_df,
-        use_boxplot=False,
+        trial_dfs=trial_dfs if use_boxplots else None,
     )
 
 
 if __name__ == "__main__":
     import argparse
-    import numpy as np
 
-    parser = argparse.ArgumentParser(description="Plot martingale data from CSV file")
+    parser = argparse.ArgumentParser(description="Plot martingale data from Excel file")
     parser.add_argument(
-        "--csv_path", type=str, required=True, help="Path to CSV or Excel file"
+        "--file_path", "-f", type=str, required=True, help="Path to Excel file"
     )
     parser.add_argument(
-        "--sheet_name", type=str, default="Aggregate", help="Sheet name for Excel files"
+        "--sheet_name", "-s", type=str, default="Aggregate", help="Sheet name"
     )
     parser.add_argument(
-        "--output_dir", type=str, default="results", help="Output directory"
+        "--output_dir", "-o", type=str, default="results", help="Output directory"
     )
     parser.add_argument(
-        "--threshold", type=float, default=50.0, help="Detection threshold"
+        "--threshold", "-t", type=float, default=50.0, help="Detection threshold"
     )
     parser.add_argument(
-        "--plot_shap",
-        action="store_true",
-        help="Generate SHAP analysis plots",
-    )
-    parser.add_argument(
-        "--box_plot",
-        action="store_true",
-        help="Generate box plots from multiple trial sheets in the Excel file",
-    )
-    parser.add_argument(
-        "--trial_sheets",
-        nargs="*",
-        help="Sheet names for trials (defaults to Trial1, Trial2, etc.)",
+        "--no_boxplots", action="store_true", help="Disable box plots for distributions"
     )
 
     args = parser.parse_args()
 
-    if args.box_plot:
-        print(
-            f"Creating box plot comparison from Excel file with multiple trial sheets"
-        )
-        plot_martingale_box_comparison(
-            excel_path=args.csv_path,
-            output_dir=args.output_dir,
-            trial_sheets=args.trial_sheets,
-            threshold=args.threshold,
-        )
-    else:
-        plot_martingales_from_csv(
-            csv_path=args.csv_path,
-            sheet_name=args.sheet_name,
-            output_dir=args.output_dir,
-            threshold=args.threshold,
-            plot_shap=args.plot_shap,
-        )
+    plot_martingales(
+        file_path=args.file_path,
+        sheet_name=args.sheet_name,
+        output_dir=args.output_dir,
+        threshold=args.threshold,
+        use_boxplots=not args.no_boxplots,
+    )
