@@ -21,16 +21,16 @@ def setup_plot_style():
             "xtick.labelsize": 10,
             "ytick.labelsize": 10,
             "legend.fontsize": 10,
-            "figure.figsize": (10, 6),  # Slightly wider for better visualization
+            "figure.figsize": (10, 6),
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
             "axes.grid": True,
-            "grid.alpha": 0.2,  # More subtle grid
+            "grid.alpha": 0.2,
             "axes.axisbelow": True,
             "lines.linewidth": 2,
-            "axes.spines.top": False,  # Remove top spine for cleaner look
-            "axes.spines.right": False,  # Remove right spine for cleaner look
+            "axes.spines.top": False,
+            "axes.spines.right": False,
         }
     )
 
@@ -378,15 +378,10 @@ def plot_individual_martingales(
             if i >= n_features - n_cols:
                 ax.set_xlabel("Time", fontsize=10)
 
-            # Set consistent y-axis limits
             ax.set_ylim(0, y_max)
             ax.set_yticks(range(0, int(y_max) + 1, 50))
-
-            # Set consistent x-axis ticks
             ax.set_xticks(x_ticks)
-            # Set x-axis limits to be exactly the same as in sum_martingales plot
             ax.set_xlim(x_limits)
-            # Make sure we use the same tick labels
             ax.set_xticklabels([str(int(tick)) for tick in ax.get_xticks()])
 
             # Add legend on first plot only
@@ -416,12 +411,10 @@ def plot_individual_martingales(
     for i in range(n_features, len(axes)):
         axes[i].set_visible(False)
 
-    # Before saving, enforce consistent x-axis limits across all subplots once more
     for ax in axes:
         if ax.get_visible():
             ax.set_xlim(x_limits)
 
-    # Adjust spacing for better tick label visibility
     plt.tight_layout()
     fig.subplots_adjust(bottom=0.15, top=0.95)
 
@@ -746,25 +739,16 @@ def plot_sum_martingales(
                 except Exception as e:
                     print(f"Error adding delay annotations: {e}")
 
-    # Set clean x-ticks
     ax.set_xticks(x_ticks)
-
-    # Custom tick labels - make "10" green
     tick_labels = [str(int(tick)) for tick in x_ticks]
     ax.set_xticklabels(tick_labels)
-
-    # Color the "10" label green
     for tick in ax.get_xticklabels():
         if tick.get_text() == "10":
             tick.set_color("green")
             tick.set_weight("bold")
 
     ax.set_xlim(x_limits)
-
-    # If tick labels still overlap, rotate them
     plt.setp(ax.get_xticklabels(), rotation=0)
-
-    # Set axis labels
     ax.set_xlabel("Time", fontsize=12, fontweight="bold")
     ax.set_ylabel("Martingale Value", fontsize=12, fontweight="bold")
 
@@ -790,13 +774,9 @@ def plot_martingales(
         threshold: Detection threshold value
         use_boxplots: Whether to use box plots for showing distributions
     """
-    # Setup plot style
     setup_plot_style()
-
-    # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load data
     df, change_points = load_data(file_path, sheet_name)
     if df is None:
         return
