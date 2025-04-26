@@ -1,7 +1,8 @@
+# src/utils/aggregate_csv.py
+
 import pandas as pd
 import argparse
 import os
-import numpy as np
 
 
 def aggregate_excel_files(file1, file2, output_file):

@@ -4,6 +4,12 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+import sys
+import numpy as np
+
+# Add the path to access changepoint module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from changepoint.threshold import CustomThresholdModel
 
 
 def setup_research_plot_style():
@@ -62,6 +68,7 @@ def plot_martingales_from_csv(
     sheet_name="Aggregate",
     output_dir="results",
     threshold=60.0,
+    plot_shap=False,
 ):
     """
     Plot martingale data from a CSV file.
@@ -71,6 +78,7 @@ def plot_martingales_from_csv(
         sheet_name: Name of the sheet in the CSV file
         output_dir: Directory to save output plots
         threshold: Detection threshold value
+        plot_shap: Whether to create SHAP analysis plots
     """
     setup_research_plot_style()
     os.makedirs(output_dir, exist_ok=True)
@@ -86,7 +94,7 @@ def plot_martingales_from_csv(
             # Try to read ChangePointMetadata sheet if it exists
             try:
                 metadata_df = pd.read_excel(csv_path, sheet_name="ChangePointMetadata")
-                true_change_points = metadata_df["change_point"].values.astype(int)
+                true_change_points = metadata_df["change_point"].values.tolist()
                 print(f"Successfully read change points from ChangePointMetadata sheet")
 
                 # If the metadata has delay information, print it
@@ -141,6 +149,243 @@ def plot_martingales_from_csv(
         threshold=threshold,
         metadata_df=metadata_df if "metadata_df" in locals() else None,
     )
+
+    # Add SHAP analysis plots if requested
+    if plot_shap:
+        print("Generating SHAP analysis plots...")
+        plot_shap_analysis(
+            df=df,
+            output_dir=output_dir,
+            true_change_points=true_change_points,
+            threshold=threshold,
+        )
+
+
+def run_safe_shap_analysis(
+    model,
+    df,
+    feature_cols,
+    sum_col,
+    change_points,
+    threshold,
+    timesteps,
+    output_dir,
+    feature_names,
+):
+    """Run SHAP analysis with error handling for edge cases.
+
+    This wrapper safely handles the SHAP analysis to avoid index errors.
+    Based on shap_plot.py implementation.
+    """
+    try:
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+
+        # First create the time-based visualization which is more reliable
+        print("Generating time-based SHAP visualization...")
+        contributions_df = model.visualize_shap_over_time(
+            df=df,
+            feature_cols=feature_cols,
+            sum_col=sum_col,
+            change_points=change_points,
+            timesteps=timesteps,
+            output_path=os.path.join(output_dir, "shap_over_time.png"),
+            threshold=threshold,
+            feature_names=feature_names,
+        )
+
+        # Find detection points
+        detection_indices = []
+        for i in range(1, len(df)):
+            if df[sum_col].iloc[i - 1] <= threshold and df[sum_col].iloc[i] > threshold:
+                detection_indices.append(i)
+
+        # If no detection points with threshold, find peaks near change points
+        if len(detection_indices) == 0 and change_points:
+            for cp in change_points:
+                cp_idx = np.argmin(np.abs(timesteps - cp))
+                window_start = max(0, cp_idx)
+                window_end = min(len(df), cp_idx + 10)
+                window_values = df[sum_col].iloc[window_start:window_end]
+                if not window_values.empty:
+                    max_idx = window_values.idxmax()
+                    detection_indices.append(max_idx)
+
+        # Save contributions to CSV if we have them
+        if not contributions_df.empty:
+            contributions_df.to_csv(
+                os.path.join(output_dir, "feature_contributions.csv"), index=False
+            )
+
+        # Print analysis summary
+        for idx, detection_index in enumerate(detection_indices):
+            detection_time = timesteps[detection_index]
+            print(
+                f"\nFeature contributions at detection point {idx+1} (timestep {detection_time}):"
+            )
+
+            # Calculate contributions
+            feature_values = df[feature_cols].iloc[detection_index].values
+            total = sum(feature_values)
+            if total > 0:
+                contributions = [
+                    (name, val, (val / total) * 100)
+                    for name, val in zip(feature_names, feature_values)
+                ]
+                contributions.sort(key=lambda x: x[2], reverse=True)
+
+                # Print table
+                print(
+                    f"{'Feature':<15} {'Martingale Value':<15} {'Contribution %':<15}"
+                )
+                print("-" * 50)
+                for name, val, pct in contributions:
+                    print(f"{name:<15} {val:<15.6f} {pct:<15.2f}")
+
+        return contributions_df, True
+
+    except Exception as e:
+        print(f"Error during SHAP analysis: {str(e)}")
+        print("Falling back to simplified analysis...")
+
+        # Fallback to a simplified analysis
+        sum_martingale = df[sum_col]
+
+        # Find peaks around change points
+        if change_points:
+            print("\nFeature contributions at change points:")
+            for cp in change_points:
+                cp_idx = np.argmin(np.abs(timesteps - cp))
+                window = 10
+                window_start = max(0, cp_idx)
+                window_end = min(len(df), cp_idx + window)
+
+                # Find peak in window
+                window_values = sum_martingale.iloc[window_start:window_end]
+                if not window_values.empty:
+                    peak_idx = window_values.idxmax()
+                    peak_time = timesteps[peak_idx]
+                    print(f"\nPeak at timestep {peak_time} (near change point {cp}):")
+
+                    # Calculate contributions
+                    feature_values = df[feature_cols].iloc[peak_idx].values
+                    total = sum(feature_values)
+                    if total > 0:
+                        contributions = [
+                            (name, val, (val / total) * 100)
+                            for name, val in zip(feature_names, feature_values)
+                        ]
+                        contributions.sort(key=lambda x: x[2], reverse=True)
+
+                        # Print table
+                        print(
+                            f"{'Feature':<15} {'Martingale Value':<15} {'Contribution %':<15}"
+                        )
+                        print("-" * 50)
+                        for name, val, pct in contributions:
+                            print(f"{name:<15} {val:<15.6f} {pct:<15.2f}")
+
+        return pd.DataFrame(), False
+
+
+def plot_shap_analysis(
+    df,
+    output_dir="results/shap_analysis",
+    true_change_points=None,
+    threshold=60.0,
+):
+    """
+    Create SHAP analysis plots for martingale data.
+
+    Args:
+        df: DataFrame containing martingale data
+        output_dir: Directory to save output plots
+        true_change_points: List of true change points to mark on plots
+        threshold: Detection threshold value
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Find feature columns for individual martingales
+    feature_cols = [
+        col
+        for col in df.columns
+        if col.startswith("individual_traditional_martingales_feature")
+        and col.endswith("_mean")
+    ]
+
+    # Sort feature columns by feature number
+    feature_cols.sort(key=lambda x: int(x.split("feature")[1].split("_")[0]))
+
+    if not feature_cols:
+        print("No individual feature martingale columns found in data")
+        return
+
+    # Get feature names based on feature IDs
+    feature_names = []
+    for col in feature_cols:
+        feature_id = col.split("feature")[1].split("_")[0]
+        feature_names.append(
+            FEATURE_ID_TO_NAME.get(feature_id, f"Feature {feature_id}")
+        )
+
+    # Sum column for traditional martingales
+    sum_col = "traditional_sum_martingales_mean"
+    if sum_col not in df.columns:
+        print(f"Sum martingale column '{sum_col}' not found in data")
+        return
+
+    # Create timesteps array
+    timesteps = (
+        df["timestep"].values if "timestep" in df.columns else np.arange(len(df))
+    )
+
+    # Check for NaN values and handle them
+    print("Checking for NaN values in data...")
+    has_nans = False
+    for col in feature_cols:
+        nan_count = df[col].isna().sum()
+        if nan_count > 0:
+            has_nans = True
+            print(f"Found {nan_count} NaN values in {col}")
+
+    if has_nans:
+        print("Filling NaN values with zeros to avoid LinearRegression errors")
+        # Create a copy of the DataFrame with NaN values filled
+        df_clean = df.copy()
+        for col in feature_cols:
+            df_clean[col] = df_clean[col].fillna(0)
+
+        # Also check and fill NaNs in the sum column
+        if df_clean[sum_col].isna().sum() > 0:
+            print(f"Filling NaN values in {sum_col}")
+            df_clean[sum_col] = df_clean[sum_col].fillna(0)
+    else:
+        df_clean = df
+
+    # Create threshold model
+    model = CustomThresholdModel(threshold=threshold)
+
+    # Convert true_change_points to list if it's a numpy array
+    if isinstance(true_change_points, np.ndarray):
+        true_change_points = true_change_points.tolist()
+
+    # Run SHAP analysis with safe wrapper
+    contributions_df, success = run_safe_shap_analysis(
+        model=model,
+        df=df_clean,
+        feature_cols=feature_cols,
+        sum_col=sum_col,
+        change_points=true_change_points,
+        threshold=threshold,
+        timesteps=timesteps,
+        output_dir=output_dir,
+        feature_names=feature_names,
+    )
+
+    if success:
+        print(f"SHAP analysis complete. Results saved to {output_dir}")
+    else:
+        print(f"Simplified SHAP analysis complete. Some visualizations may be missing.")
 
 
 def _plot_feature_grid(df, output_path, true_change_points=None, threshold=20.0):
@@ -638,7 +883,10 @@ if __name__ == "__main__":
         "--output_dir", type=str, default="results", help="Output directory"
     )
     parser.add_argument(
-        "--threshold", type=float, default=20.0, help="Detection threshold"
+        "--threshold", type=float, default=50.0, help="Detection threshold"
+    )
+    parser.add_argument(
+        "--plot_shap", action="store_true", help="Generate SHAP analysis plots"
     )
 
     args = parser.parse_args()
@@ -648,4 +896,5 @@ if __name__ == "__main__":
         sheet_name=args.sheet_name,
         output_dir=args.output_dir,
         threshold=args.threshold,
+        plot_shap=args.plot_shap,
     )

@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# src/plot_comparisons.py
+# src/utils/plot_dist_bettings.py
 
 """
 Script to create comparative plots for different combinations of
