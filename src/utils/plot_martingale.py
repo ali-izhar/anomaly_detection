@@ -82,10 +82,7 @@ def load_trial_data(file_path):
         metadata_df: DataFrame with change point metadata
     """
     try:
-        # Read the Excel file
         excel = pd.ExcelFile(file_path)
-
-        # Identify trial sheets
         trial_sheets = [
             sheet for sheet in excel.sheet_names if sheet.startswith("Trial")
         ]
@@ -97,7 +94,6 @@ def load_trial_data(file_path):
             change_points = metadata_df["change_point"].values.tolist()
             print(f"Found {len(change_points)} change points in metadata")
 
-            # Print delay information if available
             if all(
                 col in metadata_df.columns
                 for col in ["horizon_avg_delay", "traditional_avg_delay"]
@@ -171,10 +167,10 @@ def plot_individual_martingales(
     # Determine full data range for consistent x-axis limits
     x_min, x_max = min(x), max(x)
 
-    # Use 40 instead of 20 as the tick spacing
-    tick_spacing = max(40, (x_max - x_min) // 5)
+    # # Use 40 instead of 20 as the tick spacing
+    # tick_spacing = max(40, (x_max - x_min) // 5)
 
-    # Generate ticks from 0 to 200 by 40s
+    # Generate ticks from 0 to 200 by 40s, including 10 for prediction start
     x_ticks = np.array([0, 40, 80, 120, 160, 200])
 
     # Explicitly set the x-axis limits to show just a little beyond 200
@@ -187,8 +183,8 @@ def plot_individual_martingales(
         if col_max > y_max:
             y_max = col_max
 
-    # Round up to nearest 40
-    y_max = ((y_max // 40) + 1) * 40
+    # Round up to nearest 50
+    y_max = ((y_max // 50) + 1) * 50
 
     # Find max feature martingale values at change points to determine importance
     feature_importance = {}
@@ -384,7 +380,7 @@ def plot_individual_martingales(
 
             # Set consistent y-axis limits
             ax.set_ylim(0, y_max)
-            ax.set_yticks(range(0, int(y_max) + 1, 40))
+            ax.set_yticks(range(0, int(y_max) + 1, 50))
 
             # Set consistent x-axis ticks
             ax.set_xticks(x_ticks)
@@ -484,8 +480,8 @@ def plot_sum_martingales(
     # Clean up x-axis ticks - use fewer ticks to reduce clutter
     x_min, x_max = min(x), max(x)
 
-    # Use same fixed tick marks as in individual plot
-    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+    # Use same fixed tick marks as in individual plot, but add 10 for prediction start
+    x_ticks = np.array([0, 10, 40, 80, 120, 160, 200])
 
     # Set proper x-axis limits to include the last tick mark at 200 with small margin
     x_limits = (x_min, 205)
@@ -498,6 +494,29 @@ def plot_sum_martingales(
         for cp in change_points:
             # Add light shading after change point to highlight detection region
             ax.axvspan(cp, min(cp + 10, x_max), color="#f5f5f5", zorder=0)
+
+    # Add prediction start line at t=10
+    ax.axvline(
+        x=10,
+        color="green",
+        linestyle="--",
+        alpha=0.7,
+        linewidth=0.5,
+        zorder=0,
+    )
+
+    # Add annotation for prediction start directly at the line
+    ax.annotate(
+        "Prediction\nstarts",
+        xy=(10, 20),  # Position at t=10, y=20
+        xytext=(10, 20),  # Text directly at the point
+        color="green",
+        fontweight="bold",
+        fontsize=9,
+        ha="center",
+        va="bottom",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8, ec="green"),
+    )
 
     if has_trial_data:
         # Sample points for box plots (plotting at every timestep would be too crowded)
@@ -608,6 +627,7 @@ def plot_sum_martingales(
             ),
             Patch(facecolor="#FFD580", edgecolor="#FF8C00", alpha=0.7, label="Horizon"),
             Patch(facecolor="red", edgecolor="red", alpha=0.5, label="Threshold"),
+            Patch(facecolor="gray", edgecolor="gray", alpha=0.5, label="Change Points"),
         ]
         ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
 
@@ -688,7 +708,7 @@ def plot_sum_martingales(
 
                     # Add delay annotations
                     ax.annotate(
-                        f"Trad: {trad_delay:.1f}",
+                        f"Traditional: {trad_delay:.1f}",
                         xy=(trad_detection, threshold),
                         xytext=(trad_detection + 2, threshold * 1.1),
                         color="#00008B",
@@ -728,14 +748,24 @@ def plot_sum_martingales(
 
     # Set clean x-ticks
     ax.set_xticks(x_ticks)
-    ax.set_xticklabels([str(int(tick)) for tick in x_ticks])
+
+    # Custom tick labels - make "10" green
+    tick_labels = [str(int(tick)) for tick in x_ticks]
+    ax.set_xticklabels(tick_labels)
+
+    # Color the "10" label green
+    for tick in ax.get_xticklabels():
+        if tick.get_text() == "10":
+            tick.set_color("green")
+            tick.set_weight("bold")
+
     ax.set_xlim(x_limits)
 
     # If tick labels still overlap, rotate them
     plt.setp(ax.get_xticklabels(), rotation=0)
 
     # Set axis labels
-    ax.set_xlabel("Timestep", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Time", fontsize=12, fontweight="bold")
     ax.set_ylabel("Martingale Value", fontsize=12, fontweight="bold")
 
     plt.tight_layout()
