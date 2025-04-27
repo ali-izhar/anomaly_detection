@@ -30,14 +30,14 @@ def setup_plot_style():
         {
             "font.family": "serif",
             "font.serif": ["Computer Modern Roman", "Times New Roman"],
-            "font.size": 11,
-            "axes.labelsize": 12,
-            "axes.titlesize": 14,
-            "figure.titlesize": 14,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 10,
-            "figure.figsize": (10, 6),
+            "font.size": 13,
+            "axes.labelsize": 14,
+            "axes.titlesize": 16,
+            "figure.titlesize": 16,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 12,
+            "figure.figsize": (12, 7),
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
@@ -378,15 +378,25 @@ def plot_shap_waterfall(shap_values, X, feature_names, output_path, sample_idx=N
 
 
 def plot_shap_over_time(
-    shap_values, df, feature_cols, sum_col, change_points, threshold, output_path
+    shap_values_trad,
+    shap_values_horizon,
+    df,
+    feature_cols,
+    trad_sum_col,
+    horizon_sum_col,
+    change_points,
+    threshold,
+    output_path,
 ):
-    """Create visualization of SHAP values over time with annotated change points.
+    """Create visualization of SHAP values over time with annotated change points for both traditional and horizon martingales.
 
     Args:
-        shap_values: SHAP values from compute_shap_values
+        shap_values_trad: SHAP values for traditional martingales
+        shap_values_horizon: SHAP values for horizon martingales
         df: DataFrame containing martingale data
         feature_cols: List of column names for individual feature martingales
-        sum_col: Column name for sum martingale
+        trad_sum_col: Column name for traditional sum martingale
+        horizon_sum_col: Column name for horizon sum martingale
         change_points: List of change points
         threshold: Detection threshold
         output_path: Path to save the plot
@@ -402,74 +412,119 @@ def plot_shap_over_time(
     # Create color palette
     colors = plt.cm.tab10(np.linspace(0, 1, len(feature_cols)))
 
-    # Create figure with two panels
+    # Create figure with 2x2 grid
     fig, axs = plt.subplots(
         2,
-        1,
-        figsize=(10, 10),
-        sharex=True,
-        gridspec_kw={"height_ratios": [1, 1], "hspace": 0.1},
+        2,
+        figsize=(16, 10),
+        sharex="col",
+        gridspec_kw={
+            "height_ratios": [1, 1],
+            "width_ratios": [1, 1],
+            "hspace": 0.1,
+            "wspace": 0.15,
+        },
     )
 
-    # Panel 1: SHAP Values
+    # Panel 1: Traditional SHAP Values (Top Left)
     for i, col in enumerate(feature_cols):
-        axs[0].plot(
+        axs[0, 0].plot(
             timesteps,
-            shap_values[:, i],
+            shap_values_trad[:, i],
             label=feature_names[i],
             color=colors[i],
             alpha=0.7,
             linewidth=1.2,
         )
 
-    # Mark change points
+    # Panel 2: Horizon SHAP Values (Top Right)
+    for i, col in enumerate(feature_cols):
+        axs[0, 1].plot(
+            timesteps,
+            shap_values_horizon[:, i],
+            label=feature_names[i],
+            color=colors[i],
+            alpha=0.7,
+            linewidth=1.2,
+        )
+
+    # Mark change points on both top panels
     if change_points:
         for cp in change_points:
-            axs[0].axvline(x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5)
+            axs[0, 0].axvline(
+                x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5
+            )
+            axs[0, 1].axvline(
+                x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5
+            )
 
-    # Note: Removed annotations for significant SHAP values as requested
+    # Set titles and labels for top panels
+    axs[0, 0].set_title("Traditional Feature Contributions (SHAP Values)", fontsize=16)
+    axs[0, 1].set_title("Horizon Feature Contributions (SHAP Values)", fontsize=16)
+    axs[0, 0].set_ylabel("SHAP Value", fontsize=14)
+    axs[0, 1].set_ylabel("SHAP Value", fontsize=14)
 
-    axs[0].set_title("Feature Contributions Over Time (SHAP Values)", fontsize=14)
-    axs[0].set_ylabel("SHAP Value", fontsize=12)
-    axs[0].legend(loc="upper right", fontsize=9)
-    axs[0].grid(True, alpha=0.3)
+    # Add legend to top right panel only
+    axs[0, 1].legend(loc="upper right", fontsize=11)
 
-    # Panel 2: Classifier Feature Contributions
-    # Calculate classifier feature contributions
-    classifier_contributions = np.zeros((len(df), len(feature_cols)))
-    detection_indices = []
+    # Add grids
+    axs[0, 0].grid(True, alpha=0.3)
+    axs[0, 1].grid(True, alpha=0.3)
 
-    # Find detection points (threshold crossings)
+    # Calculate feature contributions for both traditional and horizon martingales
+    trad_contributions = np.zeros((len(df), len(feature_cols)))
+    horizon_contributions = np.zeros((len(df), len(feature_cols)))
+
+    trad_detection_indices = []
+    horizon_detection_indices = []
+
+    # Find detection points (threshold crossings) for traditional
     for i in range(1, len(df)):
-        if df[sum_col].iloc[i - 1] <= threshold and df[sum_col].iloc[i] > threshold:
-            detection_indices.append(i)
+        if (
+            df[trad_sum_col].iloc[i - 1] <= threshold
+            and df[trad_sum_col].iloc[i] > threshold
+        ):
+            trad_detection_indices.append(i)
+
+    # Find detection points for horizon
+    for i in range(1, len(df)):
+        if (
+            df[horizon_sum_col].iloc[i - 1] <= threshold
+            and df[horizon_sum_col].iloc[i] > threshold
+        ):
+            horizon_detection_indices.append(i)
 
     # If no threshold crossings, find peaks after change points
-    if not detection_indices and change_points:
+    if not trad_detection_indices and change_points:
         for cp in change_points:
-            # Find closest index to change point
             cp_idx = np.argmin(np.abs(timesteps - cp))
-
-            # Define window after change point
             window_start = cp_idx
             window_end = min(len(df), cp_idx + 10)
 
-            # Find index of maximum sum martingale
             if window_start < window_end:
-                max_idx = df[sum_col].iloc[window_start:window_end].idxmax()
-                detection_indices.append(max_idx)
+                max_idx = df[trad_sum_col].iloc[window_start:window_end].idxmax()
+                trad_detection_indices.append(max_idx)
 
-    # Process all detection points if available
-    if detection_indices:
-        for detection_idx in detection_indices:
-            # Calculate contribution at detection point
+    if not horizon_detection_indices and change_points:
+        for cp in change_points:
+            cp_idx = np.argmin(np.abs(timesteps - cp))
+            window_start = cp_idx
+            window_end = min(len(df), cp_idx + 10)
+
+            if window_start < window_end:
+                max_idx = df[horizon_sum_col].iloc[window_start:window_end].idxmax()
+                horizon_detection_indices.append(max_idx)
+
+    # Process traditional detection points
+    if trad_detection_indices:
+        for detection_idx in trad_detection_indices:
             feature_values = df[feature_cols].iloc[detection_idx].values
             total = sum(feature_values)
 
             if total > 0:
                 # Contributions as percentages
                 for j, val in enumerate(feature_values):
-                    classifier_contributions[detection_idx, j] = val / total
+                    trad_contributions[detection_idx, j] = val / total
 
                 # Add decaying contributions around detection point
                 window = 2
@@ -483,79 +538,171 @@ def plot_shap_over_time(
                         val_sum = sum(vals)
                         if val_sum > 0:
                             for j, val in enumerate(vals):
-                                classifier_contributions[i, j] = (val / val_sum) * decay
+                                trad_contributions[i, j] = (val / val_sum) * decay
 
-    # Get contribution percentages for each feature at detection points
-    feature_percentages = {}
-    detection_timestamps = []
+    # Process horizon detection points
+    if horizon_detection_indices:
+        for detection_idx in horizon_detection_indices:
+            feature_values = df[feature_cols].iloc[detection_idx].values
+            total = sum(feature_values)
 
-    # Extract contribution percentages at each detection point
-    if detection_indices and len(detection_indices) > 0:
-        for i, idx in enumerate(detection_indices):
+            if total > 0:
+                # Contributions as percentages
+                for j, val in enumerate(feature_values):
+                    horizon_contributions[detection_idx, j] = val / total
+
+                # Add decaying contributions around detection point
+                window = 2
+                for i in range(
+                    max(0, detection_idx - window),
+                    min(len(df), detection_idx + window + 1),
+                ):
+                    if i != detection_idx:
+                        decay = 0.2 ** abs(i - detection_idx)
+                        vals = df[feature_cols].iloc[i].values
+                        val_sum = sum(vals)
+                        if val_sum > 0:
+                            for j, val in enumerate(vals):
+                                horizon_contributions[i, j] = (val / val_sum) * decay
+
+    # Create legend labels with percentages for traditional
+    trad_feature_percentages = {}
+    trad_detection_timestamps = []
+
+    if trad_detection_indices and len(trad_detection_indices) > 0:
+        for i, idx in enumerate(trad_detection_indices):
             if 0 <= idx < len(timesteps):
-                detection_timestamps.append(timesteps[idx])
+                trad_detection_timestamps.append(timesteps[idx])
                 for j, col in enumerate(feature_cols):
-                    if j not in feature_percentages:
-                        feature_percentages[j] = []
-                    feature_percentages[j].append(
-                        classifier_contributions[idx, j] * 100
+                    if j not in trad_feature_percentages:
+                        trad_feature_percentages[j] = []
+                    trad_feature_percentages[j].append(trad_contributions[idx, j] * 100)
+
+    # Create legend labels for horizon
+    horizon_feature_percentages = {}
+    horizon_detection_timestamps = []
+
+    if horizon_detection_indices and len(horizon_detection_indices) > 0:
+        for i, idx in enumerate(horizon_detection_indices):
+            if 0 <= idx < len(timesteps):
+                horizon_detection_timestamps.append(timesteps[idx])
+                for j, col in enumerate(feature_cols):
+                    if j not in horizon_feature_percentages:
+                        horizon_feature_percentages[j] = []
+                    horizon_feature_percentages[j].append(
+                        horizon_contributions[idx, j] * 100
                     )
 
-    # Create legend labels with percentages
-    legend_labels = []
+    # Format legend labels
+    trad_legend_labels = []
     for i, name in enumerate(feature_names):
-        if i in feature_percentages and len(feature_percentages[i]) > 0:
-            # Format percentages string based on number of detection points
-            if len(feature_percentages[i]) == 1:
-                pct_str = f"{feature_percentages[i][0]:.1f}%"
-            elif len(feature_percentages[i]) == 2:
-                pct_str = f"{feature_percentages[i][0]:.1f}%, {feature_percentages[i][1]:.1f}%"
+        if i in trad_feature_percentages and len(trad_feature_percentages[i]) > 0:
+            if len(trad_feature_percentages[i]) == 1:
+                pct_str = f"{trad_feature_percentages[i][0]:.1f}%"
+            elif len(trad_feature_percentages[i]) == 2:
+                pct_str = f"{trad_feature_percentages[i][0]:.1f}%, {trad_feature_percentages[i][1]:.1f}%"
             else:
-                pct_str = ", ".join([f"{pct:.1f}%" for pct in feature_percentages[i]])
+                pct_str = ", ".join(
+                    [f"{pct:.1f}%" for pct in trad_feature_percentages[i]]
+                )
 
-            legend_labels.append(f"{name} ({pct_str})")
+            trad_legend_labels.append(f"{name} ({pct_str})")
         else:
-            legend_labels.append(name)
+            trad_legend_labels.append(name)
 
-    # Plot classifier contributions
+    horizon_legend_labels = []
+    for i, name in enumerate(feature_names):
+        if i in horizon_feature_percentages and len(horizon_feature_percentages[i]) > 0:
+            if len(horizon_feature_percentages[i]) == 1:
+                pct_str = f"{horizon_feature_percentages[i][0]:.1f}%"
+            elif len(horizon_feature_percentages[i]) == 2:
+                pct_str = f"{horizon_feature_percentages[i][0]:.1f}%, {horizon_feature_percentages[i][1]:.1f}%"
+            else:
+                pct_str = ", ".join(
+                    [f"{pct:.1f}%" for pct in horizon_feature_percentages[i]]
+                )
+
+            horizon_legend_labels.append(f"{name} ({pct_str})")
+        else:
+            horizon_legend_labels.append(name)
+
+    # Plot traditional feature contributions (Bottom Left)
     for i, col in enumerate(feature_cols):
-        axs[1].plot(
+        axs[1, 0].plot(
             timesteps,
-            classifier_contributions[:, i],
-            label=legend_labels[i],
+            trad_contributions[:, i],
+            label=trad_legend_labels[i],
             color=colors[i],
             alpha=0.7,
             linewidth=1.2,
         )
 
-    # Mark change points and detection points
+    # Plot horizon feature contributions (Bottom Right)
+    for i, col in enumerate(feature_cols):
+        axs[1, 1].plot(
+            timesteps,
+            horizon_contributions[:, i],
+            label=horizon_legend_labels[i],
+            color=colors[i],
+            alpha=0.7,
+            linewidth=1.2,
+        )
+
+    # Mark change points on bottom panels
     if change_points:
         for cp in change_points:
-            axs[1].axvline(x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5)
+            axs[1, 0].axvline(
+                x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5
+            )
+            axs[1, 1].axvline(
+                x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.5
+            )
 
-    if detection_indices:
-        for idx in detection_indices:
-            if 0 <= idx < len(timesteps):
-                dp = timesteps[idx]
-                axs[1].axvline(
-                    x=dp, color="purple", linestyle=":", alpha=0.8, linewidth=1.5
-                )
+    # Mark detection points
+    for idx in trad_detection_indices:
+        if 0 <= idx < len(timesteps):
+            dp = timesteps[idx]
+            axs[1, 0].axvline(
+                x=dp, color="purple", linestyle=":", alpha=0.8, linewidth=1.5
+            )
 
-    axs[1].set_title("Feature Contributions at Detection Points", fontsize=14)
-    axs[1].set_xlabel("Timestep", fontsize=12)
-    axs[1].set_ylabel("Feature Contribution (0-1)", fontsize=12)
+    for idx in horizon_detection_indices:
+        if 0 <= idx < len(timesteps):
+            dp = timesteps[idx]
+            axs[1, 1].axvline(
+                x=dp, color="purple", linestyle=":", alpha=0.8, linewidth=1.5
+            )
 
-    # Create custom legend with more space
-    axs[1].legend(
+    # Set titles and labels for bottom panels
+    axs[1, 0].set_title("Traditional Feature Contributions", fontsize=16)
+    axs[1, 1].set_title("Horizon Feature Contributions", fontsize=16)
+    axs[1, 0].set_xlabel("Timestep", fontsize=14)
+    axs[1, 1].set_xlabel("Timestep", fontsize=14)
+    axs[1, 0].set_ylabel("Feature Contribution (0-1)", fontsize=14)
+    axs[1, 1].set_ylabel("Feature Contribution (0-1)", fontsize=14)
+
+    # Create custom legends with more space
+    axs[1, 0].legend(
         loc="upper right",
-        fontsize=8,
+        fontsize=10,
         framealpha=0.9,
         handlelength=1,
         handleheight=1.5,
         labelspacing=0.4,
     )
 
-    axs[1].grid(True, alpha=0.3)
+    axs[1, 1].legend(
+        loc="upper right",
+        fontsize=10,
+        framealpha=0.9,
+        handlelength=1,
+        handleheight=1.5,
+        labelspacing=0.4,
+    )
+
+    # Add grids to bottom panels
+    axs[1, 0].grid(True, alpha=0.3)
+    axs[1, 1].grid(True, alpha=0.3)
 
     # Set common x-axis limits
     x_min, x_max = min(timesteps), max(timesteps)
@@ -564,48 +711,63 @@ def plot_shap_over_time(
     # Set common x-ticks
     x_ticks = np.array([0, 40, 80, 120, 160, 200])
 
-    for ax in axs:
-        ax.set_xlim(x_limits)
-        ax.set_xticks(x_ticks)
-        ax.set_xticklabels([str(int(tick)) for tick in ax.get_xticks()])
+    for row in axs:
+        for ax in row:
+            ax.set_xlim(x_limits)
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels([str(int(tick)) for tick in ax.get_xticks()])
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved SHAP over time plot to {output_path}")
+    print(f"Saved SHAP comparison plot to {output_path}")
 
-    # Generate feature contribution report for detection points
-    all_contributions = []
-    if detection_indices:
-        for idx in detection_indices:
+    # Generate feature contribution reports
+    trad_contributions_list = []
+    horizon_contributions_list = []
+
+    # Traditional contributions
+    if trad_detection_indices:
+        for idx in trad_detection_indices:
             if 0 <= idx < len(df):
                 detection_time = timesteps[idx]
-
-                # Get contributions for this detection point
                 contrib_data = {
                     "Feature": feature_names,
                     "Martingale Value": df[feature_cols].iloc[idx].values,
-                    "Contribution %": classifier_contributions[idx] * 100,
+                    "Contribution %": trad_contributions[idx] * 100,
                     "Detection Point": detection_time,
+                    "Type": "Traditional",
                 }
-
-                # Create DataFrame and sort by contribution
                 contrib_df = pd.DataFrame(contrib_data)
                 contrib_df = contrib_df.sort_values("Contribution %", ascending=False)
-                all_contributions.append(contrib_df)
+                trad_contributions_list.append(contrib_df)
 
-                print(f"\nFeature contributions at detection point {detection_time}:")
-                print(
-                    f"{'Feature':<15} {'Martingale Value':<15} {'Contribution %':<15}"
-                )
-                print("-" * 50)
+    # Horizon contributions
+    if horizon_detection_indices:
+        for idx in horizon_detection_indices:
+            if 0 <= idx < len(df):
+                detection_time = timesteps[idx]
+                contrib_data = {
+                    "Feature": feature_names,
+                    "Martingale Value": df[feature_cols].iloc[idx].values,
+                    "Contribution %": horizon_contributions[idx] * 100,
+                    "Detection Point": detection_time,
+                    "Type": "Horizon",
+                }
+                contrib_df = pd.DataFrame(contrib_data)
+                contrib_df = contrib_df.sort_values("Contribution %", ascending=False)
+                horizon_contributions_list.append(contrib_df)
 
-                for _, row in contrib_df.iterrows():
-                    print(
-                        f"{row['Feature']:<15} {row['Martingale Value']:<15.6f} {row['Contribution %']:<15.2f}"
-                    )
+    # Combine all contributions
+    all_contributions = []
+    all_contributions.extend(trad_contributions_list)
+    all_contributions.extend(horizon_contributions_list)
 
-    return all_contributions
+    if all_contributions:
+        combined_df = pd.concat(all_contributions)
+        return combined_df
+    else:
+        return pd.DataFrame()
 
 
 def plot_feature_contributions(contributions_df, output_path):
@@ -669,17 +831,32 @@ def analyze_shap(
     if df is None:
         return
 
-    # Get feature columns
-    feature_cols = get_feature_cols(df)
-    if not feature_cols:
+    # Get feature columns (traditional)
+    trad_feature_cols = get_feature_cols(
+        df, prefix="individual_traditional_martingales_feature", suffix="_mean"
+    )
+
+    # Get feature columns (horizon)
+    horizon_feature_cols = get_feature_cols(
+        df, prefix="individual_horizon_martingales_feature", suffix="_mean"
+    )
+
+    # Use traditional columns if horizon ones aren't found (compatibility)
+    if not horizon_feature_cols:
+        print(
+            "No horizon feature columns found, using traditional columns for both analyses"
+        )
+        horizon_feature_cols = trad_feature_cols
+
+    if not trad_feature_cols:
         print("No feature columns found in the data")
         return
 
-    # Get display names
-    feature_names = get_display_names(feature_cols)
+    # Get display names (should be the same for both types)
+    feature_names = get_display_names(trad_feature_cols)
 
-    # Determine sum column name
-    sum_col = next(
+    # Determine sum column names
+    trad_sum_col = next(
         (
             col
             for col in df.columns
@@ -689,70 +866,94 @@ def analyze_shap(
         None,
     )
 
-    if sum_col is None:
-        print("Sum martingale column not found in the data")
+    horizon_sum_col = next(
+        (
+            col
+            for col in df.columns
+            if col in ["horizon_sum_martingales_mean", "horizon_sum_martingales"]
+        ),
+        None,
+    )
+
+    if trad_sum_col is None:
+        print("Traditional sum martingale column not found in the data")
         return
 
-    print(f"Analyzing {len(feature_cols)} features with {sum_col}")
+    if horizon_sum_col is None:
+        print("Horizon sum martingale column not found in the data")
+        return
+
+    print(
+        f"Analyzing {len(trad_feature_cols)} features with traditional: {trad_sum_col} and horizon: {horizon_sum_col}"
+    )
 
     # Use provided threshold
     print(f"Using threshold: {threshold}")
 
-    # Compute SHAP values
-    shap_values, contributions_df = compute_shap_values(
-        df=df, feature_cols=feature_cols, sum_col=sum_col, threshold=threshold
+    # Compute SHAP values for traditional martingales
+    trad_shap_values, trad_contributions_df = compute_shap_values(
+        df=df, feature_cols=trad_feature_cols, sum_col=trad_sum_col, threshold=threshold
     )
 
-    # Create SHAP summary plot
-    plot_shap_summary(
-        shap_values=shap_values,
-        X=df[feature_cols],
-        feature_names=feature_names,
-        output_path=os.path.join(output_dir, "shap_summary.png"),
-    )
-
-    # Create SHAP waterfall plot
-    # Find detection point if any
-    detection_idx = None
-    for i in range(1, len(df)):
-        if df[sum_col].iloc[i - 1] <= threshold and df[sum_col].iloc[i] > threshold:
-            detection_idx = i
-            break
-
-    if detection_idx is not None:
-        plot_shap_waterfall(
-            shap_values=shap_values,
-            X=df[feature_cols],
-            feature_names=feature_names,
-            output_path=os.path.join(output_dir, "shap_waterfall.png"),
-            sample_idx=detection_idx,
-        )
-
-    # Create SHAP over time plot
-    plot_shap_over_time(
-        shap_values=shap_values,
+    # Compute SHAP values for horizon martingales
+    horizon_shap_values, horizon_contributions_df = compute_shap_values(
         df=df,
-        feature_cols=feature_cols,
-        sum_col=sum_col,
+        feature_cols=horizon_feature_cols,
+        sum_col=horizon_sum_col,
+        threshold=threshold,
+    )
+
+    # Create SHAP summary plots
+    plot_shap_summary(
+        shap_values=trad_shap_values,
+        X=df[trad_feature_cols],
+        feature_names=feature_names,
+        output_path=os.path.join(output_dir, "traditional_shap_summary.png"),
+    )
+
+    plot_shap_summary(
+        shap_values=horizon_shap_values,
+        X=df[horizon_feature_cols],
+        feature_names=feature_names,
+        output_path=os.path.join(output_dir, "horizon_shap_summary.png"),
+    )
+
+    # Create comparative SHAP over time plot (2x2 grid)
+    contributions_df = plot_shap_over_time(
+        shap_values_trad=trad_shap_values,
+        shap_values_horizon=horizon_shap_values,
+        df=df,
+        feature_cols=trad_feature_cols,
+        trad_sum_col=trad_sum_col,
+        horizon_sum_col=horizon_sum_col,
         change_points=change_points,
         threshold=threshold,
-        output_path=os.path.join(output_dir, "shap_over_time.png"),
+        output_path=os.path.join(output_dir, "comparative_shap.png"),
     )
 
-    # Create feature contributions plot
-    if not contributions_df.empty:
+    # Create feature contributions plots for each type
+    if not trad_contributions_df.empty:
         plot_feature_contributions(
-            contributions_df=contributions_df,
-            output_path=os.path.join(output_dir, "feature_contributions.png"),
+            contributions_df=trad_contributions_df,
+            output_path=os.path.join(
+                output_dir, "traditional_feature_contributions.png"
+            ),
         )
 
-        # Save contributions to CSV
+    if not horizon_contributions_df.empty:
+        plot_feature_contributions(
+            contributions_df=horizon_contributions_df,
+            output_path=os.path.join(output_dir, "horizon_feature_contributions.png"),
+        )
+
+    # Save combined contributions to CSV
+    if not contributions_df.empty:
         contributions_df.to_csv(
-            os.path.join(output_dir, "feature_contributions.csv"), index=False
+            os.path.join(output_dir, "comparative_feature_contributions.csv"),
+            index=False,
         )
-
         print(
-            f"Saved feature contributions to {os.path.join(output_dir, 'feature_contributions.csv')}"
+            f"Saved feature contributions to {os.path.join(output_dir, 'comparative_feature_contributions.csv')}"
         )
 
     print(f"SHAP analysis complete. Results saved to {output_dir}")

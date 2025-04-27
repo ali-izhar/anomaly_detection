@@ -14,14 +14,14 @@ def setup_plot_style():
         {
             "font.family": "serif",
             "font.serif": ["Computer Modern Roman", "Times New Roman"],
-            "font.size": 11,
-            "axes.labelsize": 12,
-            "axes.titlesize": 14,
-            "figure.titlesize": 16,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 10,
-            "figure.figsize": (10, 6),
+            "font.size": 13,
+            "axes.labelsize": 14,
+            "axes.titlesize": 16,
+            "figure.titlesize": 18,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 12,
+            "figure.figsize": (12, 7),
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
@@ -369,14 +369,14 @@ def plot_individual_martingales(
             # Set title and labels
             ax.set_title(
                 feature_name,
-                fontsize=11,
+                fontsize=13,
                 fontweight=title_fontweight,
                 color="#444444" if not is_important else "#000066",
             )
             if i % n_cols == 0:
-                ax.set_ylabel("Martingale Value", fontsize=10)
+                ax.set_ylabel("Martingale Value", fontsize=12)
             if i >= n_features - n_cols:
-                ax.set_xlabel("Time", fontsize=10)
+                ax.set_xlabel("Time", fontsize=12)
 
             ax.set_ylim(0, y_max)
             ax.set_yticks(range(0, int(y_max) + 1, 50))
@@ -403,9 +403,9 @@ def plot_individual_martingales(
                             label="Horizon",
                         ),
                     ]
-                    ax.legend(handles=legend_elements, loc="upper right", fontsize=8)
+                    ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
                 else:
-                    ax.legend(loc="upper right", fontsize=8)
+                    ax.legend(loc="upper right", fontsize=10)
 
     # Hide unused subplots
     for i in range(n_features, len(axes)):
@@ -505,7 +505,7 @@ def plot_sum_martingales(
         xytext=(10, 20),  # Text directly at the point
         color="green",
         fontweight="bold",
-        fontsize=9,
+        fontsize=11,
         ha="center",
         va="bottom",
         bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8, ec="green"),
@@ -622,7 +622,7 @@ def plot_sum_martingales(
             Patch(facecolor="red", edgecolor="red", alpha=0.5, label="Threshold"),
             Patch(facecolor="gray", edgecolor="gray", alpha=0.5, label="Change Points"),
         ]
-        ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
+        ax.legend(handles=legend_elements, loc="upper right", fontsize=12)
 
     else:
         # Standard line plots (original behavior)
@@ -646,7 +646,7 @@ def plot_sum_martingales(
             )
 
         # Add legend
-        ax.legend(loc="upper right", fontsize=10)
+        ax.legend(loc="upper right", fontsize=12)
 
     # Add threshold line
     ax.axhline(
@@ -706,7 +706,7 @@ def plot_sum_martingales(
                         xytext=(trad_detection + 2, threshold * 1.1),
                         color="#00008B",
                         fontweight="bold",
-                        fontsize=9,
+                        fontsize=11,
                         bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
                     )
 
@@ -716,7 +716,7 @@ def plot_sum_martingales(
                         xytext=(hor_detection - 2, threshold * 0.9),
                         color="#FF4500",
                         fontweight="bold",
-                        fontsize=9,
+                        fontsize=11,
                         ha="right",
                         bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
                     )
@@ -732,7 +732,7 @@ def plot_sum_martingales(
                         xytext=(mid_point, threshold * 1.3),
                         color="#006400",
                         fontweight="bold",
-                        fontsize=9,
+                        fontsize=11,
                         ha="center",
                         bbox=dict(boxstyle="round,pad=0.3", fc="#E8F8E8", alpha=0.9),
                     )
@@ -749,8 +749,8 @@ def plot_sum_martingales(
 
     ax.set_xlim(x_limits)
     plt.setp(ax.get_xticklabels(), rotation=0)
-    ax.set_xlabel("Time", fontsize=12, fontweight="bold")
-    ax.set_ylabel("Martingale Value", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Time", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Martingale Value", fontsize=14, fontweight="bold")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
