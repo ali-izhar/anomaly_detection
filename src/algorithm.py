@@ -13,6 +13,11 @@ from src.configs import get_config, get_full_model_name
 from src.graph import GraphGenerator, NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
 from src.predictor import PredictorFactory
+from src.forecast import (
+    ARIMAGraphForecaster,
+    GRNNGraphForecaster,
+    HybridGraphForecaster,
+)
 from src.utils import (
     normalize_features,
     normalize_predictions,
@@ -103,14 +108,81 @@ class GraphChangeDetection:
         """Initialize the graph predictor.
 
         Returns:
-            Predictor instance from PredictorFactory
+            Predictor instance from PredictorFactory or a forecaster instance
         """
         predictor_config = self.config["model"]["predictor"]
+        predictor_type = predictor_config["type"]
 
-        return PredictorFactory.create(
-            predictor_config["type"],
-            predictor_config["config"],
-        )
+        # Handle new forecasting models
+        if predictor_type == "arima":
+            logger.info("Initializing ARIMA forecaster")
+            return ARIMAGraphForecaster(
+                order=predictor_config["config"].get("order", (3, 1, 3)),
+                seasonal_order=predictor_config["config"].get("seasonal_order"),
+                enforce_connectivity=predictor_config["config"].get(
+                    "enforce_connectivity", True
+                ),
+                threshold=predictor_config["config"].get("threshold", 0.5),
+                max_iter=predictor_config["config"].get("max_iter", 50),
+                method=predictor_config["config"].get("method", "lbfgs"),
+                force_posparams=predictor_config["config"].get("force_posparams", True),
+                auto_order=predictor_config["config"].get("auto_order", True),
+                enable_preprocessing=predictor_config["config"].get(
+                    "enable_preprocessing", True
+                ),
+            )
+        elif predictor_type == "grnn":
+            logger.info("Initializing GRNN forecaster")
+            return GRNNGraphForecaster(
+                hidden_layer_sizes=predictor_config["config"].get(
+                    "hidden_layer_sizes", (100, 50)
+                ),
+                activation=predictor_config["config"].get("activation", "relu"),
+                solver=predictor_config["config"].get("solver", "adam"),
+                alpha=predictor_config["config"].get("alpha", 0.0001),
+                batch_size=predictor_config["config"].get("batch_size", 32),
+                learning_rate=predictor_config["config"].get(
+                    "learning_rate", "constant"
+                ),
+                max_iter=predictor_config["config"].get("max_iter", 200),
+                random_state=predictor_config["config"].get("random_state"),
+                enforce_connectivity=predictor_config["config"].get(
+                    "enforce_connectivity", True
+                ),
+                threshold=predictor_config["config"].get("threshold", 0.5),
+            )
+        elif predictor_type == "hybrid":
+            logger.info("Initializing Hybrid forecaster")
+            return HybridGraphForecaster(
+                arima_order=predictor_config["config"].get("arima_order", (3, 1, 3)),
+                arima_seasonal_order=predictor_config["config"].get(
+                    "arima_seasonal_order"
+                ),
+                grnn_hidden_layers=predictor_config["config"].get(
+                    "grnn_hidden_layers", (100, 50)
+                ),
+                grnn_activation=predictor_config["config"].get(
+                    "grnn_activation", "relu"
+                ),
+                grnn_solver=predictor_config["config"].get("grnn_solver", "adam"),
+                grnn_alpha=predictor_config["config"].get("grnn_alpha", 0.0001),
+                grnn_batch_size=predictor_config["config"].get("grnn_batch_size", 32),
+                grnn_learning_rate=predictor_config["config"].get(
+                    "grnn_learning_rate", "constant"
+                ),
+                grnn_max_iter=predictor_config["config"].get("grnn_max_iter", 200),
+                random_state=predictor_config["config"].get("random_state"),
+                enforce_connectivity=predictor_config["config"].get(
+                    "enforce_connectivity", True
+                ),
+                threshold=predictor_config["config"].get("threshold", 0.5),
+            )
+        else:
+            # Fall back to original predictor factory for other types
+            return PredictorFactory.create(
+                predictor_config["type"],
+                predictor_config["config"],
+            )
 
     def _init_detector(
         self,

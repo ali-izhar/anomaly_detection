@@ -5,7 +5,7 @@
 from .data_utils import normalize_features, normalize_predictions, prepare_result_data
 from .output_manager import OutputManager
 from .plot_graph import NetworkVisualizer
-from .plot_martingale import plot_martingales_from_csv
+from .plot_martingale import plot_individual_martingales, plot_sum_martingales
 from .analysis_utils import analyze_detection_results, print_analysis_report
 
 __all__ = [
@@ -14,7 +14,8 @@ __all__ = [
     "prepare_result_data",
     "OutputManager",
     "NetworkVisualizer",
-    "plot_martingales_from_csv",
+    "plot_individual_martingales",
+    "plot_sum_martingales",
     "analyze_detection_results",
     "print_analysis_report",
 ]
