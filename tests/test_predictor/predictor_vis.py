@@ -15,6 +15,11 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.configs.loader import get_config
+from src.forecast import (
+    ARIMAGraphForecaster,
+    GRNNGraphForecaster,
+    HybridGraphForecaster,
+)
 from src.graph.features import NetworkFeatureExtractor
 from src.graph.generator import GraphGenerator
 from src.utils.plot_graph import NetworkVisualizer
@@ -73,79 +78,6 @@ def generate_network_and_features():
         features.append(feature_extractor.get_features(graph))
 
     return model_name, params, graphs, change_points, features
-
-
-def test_network_feature_visualization(
-    model_name, params, graphs, change_points, features
-):
-    """Test network feature visualization for different graph models."""
-    # This function is temporarily disabled
-    print("Network state visualization is disabled.")
-    return
-
-    # Original code below
-    """
-    output_dir = "tests/test_predictor/output"
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    # Initialize visualizer
-    viz = NetworkVisualizer()
-
-    # Create network state visualizations
-    print("Creating network state visualizations...")
-    key_points = [0] + change_points + [len(graphs) - 1]
-    n_points = len(key_points)
-
-    fig, axes = plt.subplots(
-        n_points,
-        2,
-        figsize=(FD["SINGLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * n_points / 2),
-    )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Network States",
-        fontsize=TYPO["TITLE_SIZE"],
-        y=0.98,
-    )
-
-    for i, time_idx in enumerate(key_points):
-        # Prepare node colors for SBM
-        node_color = None
-        if model_alias == "sbm":
-            block_sizes = [params["n"] // params["num_blocks"]] * (
-                params["num_blocks"] - 1
-            )
-            block_sizes.append(params["n"] - sum(block_sizes))
-            node_color = []
-            for j, size in enumerate(block_sizes):
-                node_color.extend([f"C{j}"] * size)
-
-        # Plot network state
-        viz.plot_network(
-            graphs[time_idx],
-            ax=axes[i, 0],
-            title=f"Network State at t={time_idx}"
-            + (" (Change Point)" if time_idx in change_points else ""),
-            layout="spring",
-            node_color=node_color,
-        )
-
-        # Plot adjacency matrix
-        viz.plot_adjacency(
-            graphs[time_idx],
-            ax=axes[i, 1],
-            title=f"Adjacency Matrix at t={time_idx}",
-        )
-
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
-    plt.savefig(
-        Path(output_dir) / f"{model_name}_states.png",
-        bbox_inches="tight",
-        dpi=300,
-    )
-    plt.close()
-
-    print(f"Done! Network state visualizations have been saved to {output_dir}/")
-    """
 
 
 def create_prediction_comparison_matrix(
@@ -373,7 +305,7 @@ def compare_predictors(
 
     # Get all predictor types
     # predictor_types = list(PredictorFactory.PREDICTOR_TYPES.keys())
-    predictor_types = ["graph"]
+    predictor_types = ["graph", "arima", "grnn", "hybrid"]
 
     # Store results for each predictor
     results = {}
@@ -387,7 +319,17 @@ def compare_predictors(
 
         # Create predictor
         config = predictor_configs.get(predictor_type) if predictor_configs else None
-        predictor = PredictorFactory.create(predictor_type, config)
+
+        if predictor_type == "arima":
+            predictor = ARIMAGraphForecaster(**(config or {}))
+        elif predictor_type == "grnn":
+            predictor = GRNNGraphForecaster(**(config or {}))
+        elif predictor_type == "hybrid":
+            predictor = HybridGraphForecaster(**(config or {}))
+        else:
+            # Use factory for other predictor types
+            predictor = PredictorFactory.create(predictor_type, config)
+
         print(f"Using config:", config or "default")
 
         # Initialize history
@@ -399,14 +341,20 @@ def compare_predictors(
         for t in range(warmup):
             state = {"adjacency": graphs[t], "time": t}
             history.append(state)
-            predictor.update_state(state)
+            if hasattr(predictor, "update_state"):
+                predictor.update_state(state)
 
         # Generate predictions
         for t in range(warmup, len(graphs) - 1):
             # Update current state
             state = {"adjacency": graphs[t], "time": t}
             history.append(state)
-            if len(history) > predictor.history_size:
+
+            # Limit history size if predictor has history_size attribute
+            if (
+                hasattr(predictor, "history_size")
+                and len(history) > predictor.history_size
+            ):
                 history = history[-predictor.history_size :]
 
             # Get predicted next state features
@@ -418,8 +366,9 @@ def compare_predictors(
             predicted_adjs.append(pred_adj)
             predicted_features.append(feature_extractor.get_features(pred_graph))
 
-            # Update predictor state
-            predictor.update_state(state)
+            # Update predictor state if it has the method
+            if hasattr(predictor, "update_state"):
+                predictor.update_state(state)
 
         # Get all actual features for full timeline display
         actual_features = features
@@ -493,12 +442,6 @@ def plot_prediction_comparison(
     fig, axes = plt.subplots(
         4, 2, figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["GRID_HEIGHT"] * 2)
     )
-    # Remove suptitle
-    # fig.suptitle(
-    #     f"{model_name.replace('_', ' ').title()} Feature Prediction Comparison\n({predictor_type} predictor)",
-    #     fontsize=TYPO["TITLE_SIZE"],
-    #     y=0.98,
-    # )
     axes = axes.flatten()
 
     # Create references for legend (will use plot from first subplot)
@@ -635,70 +578,6 @@ def plot_prediction_comparison(
     plt.close()
 
 
-def plot_predictor_comparison(
-    model_name: str,
-    results: Dict[str, Dict[str, Any]],
-    viz: NetworkVisualizer,
-    output_dir: str,
-):
-    """Plot comparison across all predictors."""
-    # This function is temporarily disabled
-    print("Predictor comparison is disabled.")
-    return
-
-    # Original code below
-    """
-    # Get feature names from first predictor's results
-    first_predictor = next(iter(results.values()))
-    feature_names = list(first_predictor["basic_metrics"].keys())
-
-    # Create comparison plots
-    fig, axes = plt.subplots(
-        len(feature_names),
-        1,
-        figsize=(FD["DOUBLE_COLUMN_WIDTH"], FD["STANDARD_HEIGHT"] * len(feature_names)),
-    )
-    fig.suptitle(
-        f"{model_name.replace('_', ' ').title()} Predictor Comparison",
-        fontsize=TYPO["TITLE_SIZE"],
-        y=0.98,
-    )
-
-    if len(feature_names) == 1:
-        axes = [axes]
-
-    # Plot comparison for each feature
-    for i, feature in enumerate(feature_names):
-        ax = axes[i]
-
-        # Bar plot of RMSE and R² for each predictor
-        x = np.arange(len(results))
-        width = 0.35
-
-        rmse_values = [results[p]["basic_metrics"][feature].rmse for p in results]
-        r2_values = [results[p]["basic_metrics"][feature].r2 for p in results]
-
-        ax.bar(x - width / 2, rmse_values, width, label="RMSE")
-        ax.bar(x + width / 2, r2_values, width, label="R²")
-
-        ax.set_title(
-            f"{feature.replace('_', ' ').title()}", fontsize=TYPO["TITLE_SIZE"]
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(results.keys())
-        ax.legend()
-        ax.grid(True, alpha=LS["GRID_ALPHA"])
-
-    plt.tight_layout(pad=0.5, rect=[0, 0, 1, 0.95])
-    plt.savefig(
-        Path(output_dir) / f"{model_name}_predictor_comparison.png",
-        bbox_inches="tight",
-        dpi=300,
-    )
-    plt.close()
-    """
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test network predictors")
     parser.add_argument(
@@ -726,11 +605,6 @@ if __name__ == "__main__":
     model_name, params, graphs, change_points, features = (
         generate_network_and_features()
     )
-
-    # Run visualizations - DISABLED
-    # test_network_feature_visualization(
-    #     model_name, params, graphs, change_points, features
-    # )
 
     # Compare all predictors
     results = compare_predictors(
