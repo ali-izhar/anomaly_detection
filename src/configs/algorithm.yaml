@@ -34,17 +34,17 @@ model:
     #   enable_preprocessing: true  # Apply preprocessing to time series for better convergence
     
     # Graph predictor configuration
-    # type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
-    # config:
-    #   alpha: 0.8
-    #   gamma: 0.5
-    #   omega: null
-    #   beta_init: 0.5
-    #   enforce_connectivity: true
-    #   adaptive: true
-    #   optimization_iterations: 3
-    #   threshold: 0.5
-    #   n_history: 10
+    type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
+    config:
+      alpha: 0.8
+      gamma: 0.5
+      omega: null
+      beta_init: 0.5
+      enforce_connectivity: true
+      adaptive: true
+      optimization_iterations: 3
+      threshold: 0.5
+      n_history: 10
 
     # # GRNN forecaster configuration
     # type: "grnn"
@@ -61,22 +61,22 @@ model:
     #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
     #   n_history: 10  # Number of historical points to use
     
-    # Hybrid ARIMA-GRNN forecaster configuration
-    type: "hybrid"
-    config:
-      arima_order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
-      arima_seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s)
-      grnn_hidden_layers: [100, 50]  # Size of hidden layers in neural network
-      grnn_activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
-      grnn_solver: "adam"  # Solver for weight optimization
-      grnn_alpha: 0.0001  # L2 regularization parameter
-      grnn_batch_size: 32  # Size of minibatches for stochastic optimizers
-      grnn_learning_rate: "constant"  # Learning rate schedule for weight updates
-      grnn_max_iter: 200  # Maximum number of iterations
-      random_state: 42  # Random seed for reproducibility
-      enforce_connectivity: true  # Ensure predicted graphs remain connected
-      threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-      n_history: 10  # Number of historical points to use
+    # # Hybrid ARIMA-GRNN forecaster configuration
+    # type: "hybrid"
+    # config:
+    #   arima_order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
+    #   arima_seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s)
+    #   grnn_hidden_layers: [100, 50]  # Size of hidden layers in neural network
+    #   grnn_activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
+    #   grnn_solver: "adam"  # Solver for weight optimization
+    #   grnn_alpha: 0.0001  # L2 regularization parameter
+    #   grnn_batch_size: 32  # Size of minibatches for stochastic optimizers
+    #   grnn_learning_rate: "constant"  # Learning rate schedule for weight updates
+    #   grnn_max_iter: 200  # Maximum number of iterations
+    #   random_state: 42  # Random seed for reproducibility
+    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
+    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
+    #   n_history: 10  # Number of historical points to use
 
     # type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
     # config:
