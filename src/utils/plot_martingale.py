@@ -176,10 +176,10 @@ def plot_individual_martingales(
     # tick_spacing = max(40, (x_max - x_min) // 5)
 
     # Generate ticks from 0 to 200 by 40s, including 10 for prediction start
-    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+    x_ticks = np.array([0, 40, 80, 120, 160, 200, 240, 280])
 
     # Explicitly set the x-axis limits to show just a little beyond 200
-    x_limits = (x_min, 205)
+    x_limits = (x_min, 285)
 
     # Find global maximum for consistent y-axis limits
     y_max = 0
@@ -435,6 +435,7 @@ def plot_sum_martingales(
     threshold=50.0,
     trial_dfs=None,
     metadata_df=None,
+    enable_annot=True,
 ):
     """Create a comparison plot of sum martingales.
 
@@ -445,6 +446,7 @@ def plot_sum_martingales(
         threshold: Detection threshold value
         trial_dfs: List of DataFrames for individual trials (for box plots)
         metadata_df: DataFrame with change point metadata for delay annotations
+        enable_annot: Whether to show delay reduction annotations
     """
     # Find column names for sum martingales
     trad_sum_col = next(
@@ -479,10 +481,10 @@ def plot_sum_martingales(
     x_min, x_max = min(x), max(x)
 
     # Use same fixed tick marks as in individual plot, but add 10 for prediction start
-    x_ticks = np.array([0, 10, 40, 80, 120, 160, 200])
+    x_ticks = np.array([0, 10, 40, 80, 120, 160, 200, 240, 280])
 
     # Set proper x-axis limits to include the last tick mark at 200 with small margin
-    x_limits = (x_min, 205)
+    x_limits = (x_min, 285)
 
     # Check if we have trial data for box plots
     has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
@@ -686,61 +688,66 @@ def plot_sum_martingales(
                     trad_detection = cp + trad_delay
                     hor_detection = cp + hor_delay
 
-                    # Mark detection points
-                    ax.scatter(
-                        [trad_detection],
-                        [threshold],
-                        color="#0000CD",
-                        s=80,
-                        zorder=10,
-                        marker="o",
-                    )
-                    ax.scatter(
-                        [hor_detection],
-                        [threshold],
-                        color="#FF8C00",
-                        s=80,
-                        zorder=10,
-                        marker="o",
-                    )
+                    # Add detection points and annotations only if enabled
+                    if enable_annot:
+                        # Mark detection points
+                        ax.scatter(
+                            [trad_detection],
+                            [threshold],
+                            color="#0000CD",
+                            s=80,
+                            zorder=10,
+                            marker="o",
+                        )
+                        ax.scatter(
+                            [hor_detection],
+                            [threshold],
+                            color="#FF8C00",
+                            s=80,
+                            zorder=10,
+                            marker="o",
+                        )
 
-                    # Add delay annotations
-                    ax.annotate(
-                        f"Traditional: {trad_delay:.1f}",
-                        xy=(trad_detection, threshold),
-                        xytext=(trad_detection + 2, threshold * 1.1),
-                        color="#00008B",
-                        fontweight="bold",
-                        fontsize=11,
-                        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
-                    )
+                        # Add traditional delay annotation
+                        ax.annotate(
+                            f"Traditional: {trad_delay:.1f}",
+                            xy=(trad_detection, threshold),
+                            xytext=(trad_detection + 2, threshold * 1.1),
+                            color="#00008B",
+                            fontweight="bold",
+                            fontsize=11,
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                        )
 
-                    ax.annotate(
-                        f"Horizon: {hor_delay:.1f}",
-                        xy=(hor_detection, threshold),
-                        xytext=(hor_detection - 2, threshold * 0.9),
-                        color="#FF4500",
-                        fontweight="bold",
-                        fontsize=11,
-                        ha="right",
-                        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
-                    )
+                        # Add horizon delay annotation
+                        ax.annotate(
+                            f"Horizon: {hor_delay:.1f}",
+                            xy=(hor_detection, threshold),
+                            xytext=(hor_detection - 2, threshold * 0.9),
+                            color="#FF4500",
+                            fontweight="bold",
+                            fontsize=11,
+                            ha="right",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                        )
 
-                    # Add delay reduction info between arrows
-                    reduction = metadata_df.iloc[i].get(
-                        "delay_reduction", 1 - hor_delay / trad_delay
-                    )
-                    mid_point = (trad_detection + hor_detection) / 2
-                    ax.annotate(
-                        f"{reduction:.1%} faster",
-                        xy=(mid_point, threshold),
-                        xytext=(mid_point, threshold * 1.3),
-                        color="#006400",
-                        fontweight="bold",
-                        fontsize=11,
-                        ha="center",
-                        bbox=dict(boxstyle="round,pad=0.3", fc="#E8F8E8", alpha=0.9),
-                    )
+                        # Add delay reduction info between arrows
+                        reduction = metadata_df.iloc[i].get(
+                            "delay_reduction", 1 - hor_delay / trad_delay
+                        )
+                        mid_point = (trad_detection + hor_detection) / 2
+                        ax.annotate(
+                            f"{reduction:.1%} faster",
+                            xy=(mid_point, threshold),
+                            xytext=(mid_point, threshold * 1.3),
+                            color="#006400",
+                            fontweight="bold",
+                            fontsize=11,
+                            ha="center",
+                            bbox=dict(
+                                boxstyle="round,pad=0.3", fc="#E8F8E8", alpha=0.9
+                            ),
+                        )
                 except Exception as e:
                     print(f"Error adding delay annotations: {e}")
 
@@ -769,6 +776,7 @@ def plot_martingales(
     output_dir="results",
     threshold=50.0,
     use_boxplots=True,
+    enable_annot=True,
 ):
     """Main function to plot martingale data from an Excel file.
 
@@ -778,6 +786,7 @@ def plot_martingales(
         output_dir: Directory to save output plots
         threshold: Detection threshold value
         use_boxplots: Whether to use box plots for showing distributions
+        enable_annot: Whether to show delay reduction annotations
     """
     setup_plot_style()
     os.makedirs(output_dir, exist_ok=True)
@@ -813,6 +822,7 @@ def plot_martingales(
         threshold=threshold,
         trial_dfs=trial_dfs if use_boxplots else None,
         metadata_df=metadata_df,
+        enable_annot=enable_annot,
     )
 
 
@@ -835,6 +845,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no_boxplots", action="store_true", help="Disable box plots for distributions"
     )
+    parser.add_argument(
+        "--no_annotations",
+        action="store_true",
+        help="Disable delay reduction annotations",
+    )
 
     args = parser.parse_args()
 
@@ -844,4 +859,5 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         threshold=args.threshold,
         use_boxplots=not args.no_boxplots,
+        enable_annot=not args.no_annotations,
     )

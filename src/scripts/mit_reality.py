@@ -20,7 +20,13 @@ if project_root not in sys.path:
 from src.changepoint import BettingFunctionConfig, ChangePointDetector, DetectorConfig
 from src.graph import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
-from src.utils import normalize_features, OutputManager, prepare_result_data
+from src.utils import (
+    normalize_features,
+    normalize_predictions,
+    OutputManager,
+    prepare_result_data,
+)
+from src.predictor import PredictorFactory
 
 logger = logging.getLogger(__name__)
 
@@ -884,6 +890,7 @@ def process_mit_reality_dataset(
     output_dir: str = "results/mit_reality",
     visualize: bool = False,
     run_detection: bool = True,
+    enable_prediction: bool = True,  # Added prediction parameter
     detection_config: Dict = None,
 ) -> Dict[str, Any]:
     """Process MIT Reality dataset from raw file to extracted features.
@@ -903,6 +910,7 @@ def process_mit_reality_dataset(
         output_dir: Base directory for saving results
         visualize: Whether to generate visualizations
         run_detection: Whether to run change point detection
+        enable_prediction: Whether to use prediction for enhanced detection
         detection_config: Optional configuration for detection
 
     Returns:
@@ -1052,7 +1060,18 @@ def process_mit_reality_dataset(
             },
             "model": {
                 "type": "multiview",
-                "predictor": {"config": {"n_history": 5}},
+                "network": "sbm",  # Added for compatibility
+                "predictor": {
+                    "type": "graph",  # Default graph predictor
+                    "config": {
+                        "n_history": 5,
+                        "alpha": 0.8,
+                        "gamma": 0.5,
+                        "beta_init": 0.5,
+                        "enforce_connectivity": True,
+                        "adaptive": True,
+                    },
+                },
             },
             "features": features["feature_names"],
             "params": {
@@ -1062,6 +1081,10 @@ def process_mit_reality_dataset(
             "evaluation": {
                 "true_change_points": potential_change_points,
                 "events": known_events,
+            },
+            "execution": {
+                "enable_prediction": enable_prediction,
+                "save_csv": save_results,
             },
         }
 
@@ -1094,6 +1117,7 @@ def process_mit_reality_dataset(
             config=final_config,  # Use the merged config
             output_dir=detection_dir,
             save_csv=save_results,
+            enable_prediction=enable_prediction,  # Pass the prediction flag
         )
 
         # Add known events information to results
@@ -1126,6 +1150,73 @@ def process_mit_reality_dataset(
                 logger.info(
                     f"Change point at {cp} (date: {dates[cp]}) might be related to events: {event_names}"
                 )
+
+            # Evaluate horizon change points if available
+            if "horizon" in detection_results["change_points"]:
+                horizon_cps = detection_results["change_points"]["horizon"]
+                horizon_evaluation = evaluate_change_points(
+                    horizon_cps, potential_change_points, tolerance=10
+                )
+                detection_results["horizon_evaluation"] = horizon_evaluation
+
+                # Map horizon change points to events
+                horizon_cp_to_events = map_change_points_to_events(
+                    horizon_cps, known_events, dates, tolerance=10
+                )
+                detection_results["horizon_change_points_to_events"] = (
+                    horizon_cp_to_events
+                )
+
+                # Compare traditional vs horizon detection
+                if horizon_cps and detected_cps:
+                    # For each actual event, compute the detection latency difference
+                    latency_comparison = {}
+                    for cp in potential_change_points:
+                        # Find closest traditional CP
+                        closest_trad = (
+                            min(detected_cps, key=lambda x: abs(x - cp))
+                            if detected_cps
+                            else None
+                        )
+                        trad_latency = (
+                            closest_trad - cp
+                            if closest_trad and closest_trad >= cp
+                            else None
+                        )
+
+                        # Find closest horizon CP
+                        closest_horizon = (
+                            min(horizon_cps, key=lambda x: abs(x - cp))
+                            if horizon_cps
+                            else None
+                        )
+                        horizon_latency = (
+                            closest_horizon - cp
+                            if closest_horizon and closest_horizon >= cp
+                            else None
+                        )
+
+                        if trad_latency is not None and horizon_latency is not None:
+                            latency_diff = trad_latency - horizon_latency
+                            latency_comparison[cp] = {
+                                "traditional_latency": trad_latency,
+                                "horizon_latency": horizon_latency,
+                                "latency_difference": latency_diff,
+                                "date": dates[cp],
+                                "improvement": "Yes" if latency_diff > 0 else "No",
+                            }
+
+                    if latency_comparison:
+                        detection_results["latency_comparison"] = latency_comparison
+                        # Log latency comparison
+                        logger.info("Latency comparison (traditional vs horizon):")
+                        for cp, comparison in latency_comparison.items():
+                            logger.info(
+                                f"  Event at {comparison['date']}: "
+                                f"Traditional={comparison['traditional_latency']} days, "
+                                f"Horizon={comparison['horizon_latency']} days, "
+                                f"Improvement={comparison['improvement']}"
+                            )
 
         logger.info("Change point detection completed")
 
@@ -1252,7 +1343,7 @@ def run_change_detection(
     detection_threshold=20.0,  # Changed from 60.0 to 20.0 (from Reality Mining config)
     betting_function="mixture",
     distance_measure="mahalanobis",
-    enable_prediction=False,
+    enable_prediction=True,  # Changed to True to enable prediction
     save_csv=True,
 ):
     """Run change point detection on extracted features.
@@ -1270,7 +1361,7 @@ def run_change_detection(
         detection_threshold: Detection threshold (20.0 from Reality Mining config)
         betting_function: Betting function to use
         distance_measure: Distance measure for detection
-        enable_prediction: Whether to use prediction (not implemented here)
+        enable_prediction: Whether to use prediction
         save_csv: Whether to save results to CSV
 
     Returns:
@@ -1281,6 +1372,12 @@ def run_change_detection(
     # Get the actual number of timesteps
     n_timesteps = len(adjacency_matrices)
     logger.info(f"Working with {n_timesteps} timesteps of data")
+
+    # Extract potential_change_points and known_events from config if available
+    potential_change_points = (
+        config.get("evaluation", {}).get("true_change_points", []) if config else []
+    )
+    known_events = config.get("evaluation", {}).get("events", {}) if config else {}
 
     # Create default config if none provided
     if config is None:
@@ -1315,7 +1412,21 @@ def run_change_detection(
             },
             "model": {
                 "type": "multiview",
-                "predictor": {"config": {"n_history": 5}},
+                "network": "sbm",  # Placeholder for compatibility
+                "predictor": {
+                    "type": "graph",  # Default graph predictor
+                    "config": {
+                        "n_history": 5,
+                        "alpha": 0.8,
+                        "gamma": 0.5,
+                        "omega": None,
+                        "beta_init": 0.5,
+                        "enforce_connectivity": True,
+                        "adaptive": True,
+                        "optimization_iterations": 3,
+                        "threshold": 0.5,
+                    },
+                },
             },
             "features": feature_names,
             "output": {
@@ -1336,10 +1447,56 @@ def run_change_detection(
             "params": {
                 "seq_len": n_timesteps,
             },
+            "evaluation": {
+                "true_change_points": potential_change_points,
+                "events": known_events,
+            },
         }
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
+
+    # Initialize predictor
+    predictor = None
+    predicted_features = None
+    predicted_normalized = None
+
+    if enable_prediction:
+        try:
+            logger.info("Initializing graph predictor")
+            predictor_config = config["model"]["predictor"]
+            predictor = PredictorFactory.create(
+                predictor_config["type"],
+                predictor_config["config"],
+            )
+
+            # Generate predictions
+            logger.info("Generating graph predictions")
+            predicted_graphs = generate_predictions(
+                adjacency_matrices, predictor, config
+            )
+
+            if predicted_graphs:
+                # Process predictions into features
+                logger.info("Processing predictions into features")
+                predicted_features = process_predictions(
+                    predicted_graphs, feature_names
+                )
+
+                # Normalize predicted features using the same parameters as original features
+                _, feature_means, feature_stds = normalize_features(features_numeric)
+                predicted_normalized = normalize_predictions(
+                    predicted_features, feature_means, feature_stds
+                )
+                logger.info(
+                    f"Generated predictions for {len(predicted_normalized)} timesteps"
+                )
+        except Exception as e:
+            logger.error(f"Prediction failed: {str(e)}")
+            logger.info("Continuing without prediction")
+            predicted_normalized = None
+    else:
+        logger.info("Prediction disabled")
 
     # Determine number of trials and seeds
     n_trials = config["trials"]["n_trials"]
@@ -1410,11 +1567,10 @@ def run_change_detection(
         detector = ChangePointDetector(detector_config)
 
         try:
-            # Run detection
-            predicted_data = None  # No prediction in this simplified version
+            # Run detection with predictions if available
             detection_result = detector.run(
                 data=features_normalized,
-                predicted_data=predicted_data,
+                predicted_data=predicted_normalized,  # Pass predictions if available
                 reset_state=True,
             )
 
@@ -1438,6 +1594,15 @@ def run_change_detection(
                 if trad_cp:
                     date_cps = [dates[cp] for cp in trad_cp if cp < len(dates)]
                     logger.info(f"Change points detected on dates: {date_cps}")
+
+                # Log horizon change points (from prediction) if available
+                if horizon_cp:
+                    horizon_date_cps = [
+                        dates[cp] for cp in horizon_cp if cp < len(dates)
+                    ]
+                    logger.info(
+                        f"Horizon CPs: {horizon_cp} (dates: {horizon_date_cps})"
+                    )
 
         except Exception as e:
             logger.error(f"Trial {trial_idx + 1}/{n_trials} failed: {str(e)}")
@@ -1463,7 +1628,7 @@ def run_change_detection(
         "graphs": adjacency_matrices,
         "change_points": config.get("evaluation", {}).get(
             "true_change_points", []
-        ),  # Use potential change points
+        ),  # Use potential change points from config
         "dates": dates,
     }
 
@@ -1472,9 +1637,11 @@ def run_change_detection(
         sequence_result,
         features_numeric,
         None,  # Skip features_raw
-        None,  # Skip predicted_graphs
+        (
+            predicted_graphs if enable_prediction else None
+        ),  # Include predicted graphs if available
         trial_results,
-        None,  # Skip predictor
+        predictor,  # Include predictor
         config,
     )
 
@@ -1514,7 +1681,75 @@ def run_change_detection(
         logger.info(f"Final detected change points: {trad_cp}")
         logger.info(f"Corresponding dates: {date_cps}")
 
+        # Map horizon change points if available
+        if "horizon" in results["change_points"]:
+            horizon_cp = results["change_points"]["horizon"]
+            horizon_date_cps = [dates[cp] for cp in horizon_cp if cp < len(dates)]
+            results["change_points"]["horizon_dates"] = horizon_date_cps
+
+            logger.info(f"Final horizon change points: {horizon_cp}")
+            logger.info(f"Corresponding dates: {horizon_date_cps}")
+
     return results
+
+
+def generate_predictions(graphs, predictor, config):
+    """Generate predictions for the graph sequence.
+
+    Args:
+        graphs: List of adjacency matrices
+        predictor: Initialized predictor instance
+        config: Configuration dictionary
+
+    Returns:
+        List of predicted future adjacency matrices
+    """
+    predicted_graphs = []
+    horizon = config["detection"]["prediction_horizon"]
+    history_size = config["model"]["predictor"]["config"]["n_history"]
+
+    for t in range(len(graphs)):
+        history_start = max(0, t - history_size)
+        history = [{"adjacency": g} for g in graphs[history_start:t]]
+
+        if t >= history_size:
+            try:
+                predictions = predictor.predict(history, horizon=horizon)
+                predicted_graphs.append(predictions)
+            except Exception as e:
+                logger.warning(f"Prediction failed at timestep {t}: {str(e)}")
+                # If prediction fails, use the last graph repeated
+                if t > 0:
+                    last_graph = graphs[t - 1]
+                    predicted_graphs.append([last_graph] * horizon)
+
+    return predicted_graphs
+
+
+def process_predictions(predicted_graphs, feature_names):
+    """Process predictions into feature space.
+
+    Args:
+        predicted_graphs: List of predicted adjacency matrices
+        feature_names: Names of features to extract
+
+    Returns:
+        numpy array of predicted features
+    """
+    feature_extractor = NetworkFeatureExtractor()
+    predicted_features = []
+
+    for predictions in predicted_graphs:
+        timestep_features = []
+        for pred_adj in predictions:
+            graph = adjacency_to_graph(pred_adj)
+            numeric_features = feature_extractor.get_numeric_features(graph)
+            feature_vector = [numeric_features[name] for name in feature_names]
+            timestep_features.append(feature_vector)
+        predicted_features.append(timestep_features)
+
+    predicted_array = np.array(predicted_features)
+    return predicted_array
 
 
 def main():
@@ -1531,9 +1766,10 @@ def main():
         save_results=True,
         visualize=False,
         run_detection=True,
+        enable_prediction=True,  # Enable prediction
         detection_config={
             "trials": {
-                "n_trials": 3,  # Run 3 trials for proper aggregation
+                "n_trials": 5,  # Run 3 trials for proper aggregation
                 "random_seeds": 42,  # Use consistent seed for reproducibility
             },
             "detection": {
@@ -1555,10 +1791,19 @@ def main():
             "model": {
                 "type": "multiview",
                 "predictor": {
+                    "type": "graph",  # Default graph predictor
                     "config": {
                         "n_history": 5,  # Smaller history window
-                    }
+                        "alpha": 0.8,
+                        "gamma": 0.5,
+                        "beta_init": 0.5,
+                        "enforce_connectivity": True,
+                        "adaptive": True,
+                    },
                 },
+            },
+            "execution": {
+                "enable_prediction": True,
             },
         },
     )
@@ -1571,15 +1816,39 @@ def main():
     # Print detection results if available
     if "detection" in results and "change_points" in results["detection"]:
         if "traditional_dates" in results["detection"]["change_points"]:
-            cps = results["detection"]["change_points"]["traditional_dates"]
-            logger.info(f"Detected change points on dates: {cps}")
+            trad_cps = results["detection"]["change_points"]["traditional_dates"]
+            logger.info(f"Detected traditional change points on dates: {trad_cps}")
+
+        if "horizon_dates" in results["detection"]["change_points"]:
+            horizon_cps = results["detection"]["change_points"]["horizon_dates"]
+            logger.info(f"Detected horizon change points on dates: {horizon_cps}")
 
         # Print evaluation results if available
         if "evaluation" in results["detection"]:
             eval_results = results["detection"]["evaluation"]
-            logger.info(f"Precision: {eval_results['precision']:.2f}")
-            logger.info(f"Recall: {eval_results['recall']:.2f}")
-            logger.info(f"F1 Score: {eval_results['f1']:.2f}")
+            logger.info(f"Traditional CP Evaluation:")
+            logger.info(f"  Precision: {eval_results['precision']:.2f}")
+            logger.info(f"  Recall: {eval_results['recall']:.2f}")
+            logger.info(f"  F1 Score: {eval_results['f1']:.2f}")
+
+        if "horizon_evaluation" in results["detection"]:
+            horizon_eval = results["detection"]["horizon_evaluation"]
+            logger.info(f"Horizon CP Evaluation:")
+            logger.info(f"  Precision: {horizon_eval['precision']:.2f}")
+            logger.info(f"  Recall: {horizon_eval['recall']:.2f}")
+            logger.info(f"  F1 Score: {horizon_eval['f1']:.2f}")
+
+        # Print latency comparison if available
+        if "latency_comparison" in results["detection"]:
+            logger.info("Latency Comparison Summary:")
+            improvements = [
+                c
+                for c in results["detection"]["latency_comparison"].values()
+                if c["improvement"] == "Yes"
+            ]
+            logger.info(
+                f"  Events with improved latency: {len(improvements)}/{len(results['detection']['latency_comparison'])}"
+            )
 
         # Print mapped events
         if "change_points_to_events" in results["detection"]:
