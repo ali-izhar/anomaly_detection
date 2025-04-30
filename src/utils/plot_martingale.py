@@ -131,7 +131,12 @@ def load_trial_data(file_path):
 
 
 def plot_individual_martingales(
-    df, output_path, change_points=None, trial_dfs=None, metadata_df=None
+    df,
+    output_path,
+    change_points=None,
+    trial_dfs=None,
+    metadata_df=None,
+    threshold=50.0,
 ):
     """Create a grid of plots for individual feature martingales.
 
@@ -183,8 +188,8 @@ def plot_individual_martingales(
         if col_max > y_max:
             y_max = col_max
 
-    # Round up to nearest 50
-    y_max = ((y_max // 50) + 1) * 50
+    # Round up to nearest threshold
+    y_max = ((y_max // threshold) + 1) * threshold
 
     # Find max feature martingale values at change points to determine importance
     feature_importance = {}
@@ -294,7 +299,7 @@ def plot_individual_martingales(
                         hor_positions.append(time_point)
 
                 # Create box plots with narrower width for better visibility
-                box_width = min(3.0, 50 / len(sample_points))
+                box_width = min(3.0, threshold / len(sample_points))
 
                 if trad_data:
                     trad_boxes = ax.boxplot(
@@ -379,7 +384,7 @@ def plot_individual_martingales(
                 ax.set_xlabel("Time", fontsize=12)
 
             ax.set_ylim(0, y_max)
-            ax.set_yticks(range(0, int(y_max) + 1, 50))
+            ax.set_yticks(range(0, int(y_max) + 1, int(threshold)))
             ax.set_xticks(x_ticks)
             ax.set_xlim(x_limits)
             ax.set_xticklabels([str(int(tick)) for tick in ax.get_xticks()])
@@ -797,6 +802,7 @@ def plot_martingales(
         change_points=change_points,
         trial_dfs=trial_dfs if use_boxplots else None,
         metadata_df=metadata_df,
+        threshold=threshold,
     )
 
     # Plot sum martingales
