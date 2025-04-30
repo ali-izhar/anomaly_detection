@@ -100,7 +100,7 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
     metrics = {
         "traditional": {
             "by_cp": defaultdict(
-                lambda: {"detections": [], "delays": [], "within_window": 0}
+                lambda: {"detections": [], "delays": [], "within_window": 0, "trials_detected": set()}
             ),
             "tpr": 0,
             "fpr": 0,
@@ -111,7 +111,7 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
         },
         "horizon": {
             "by_cp": defaultdict(
-                lambda: {"detections": [], "delays": [], "within_window": 0}
+                lambda: {"detections": [], "delays": [], "within_window": 0, "trials_detected": set()}
             ),
             "tpr": 0,
             "fpr": 0,
@@ -122,10 +122,11 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
         },
     }
 
-    # Detection window size (changed from 10 to 20)
-    DETECTION_WINDOW = 20
+    # Detection window size
+    DETECTION_WINDOW = 15
 
     for i, df in enumerate(trial_dfs):
+        trial_idx = i  # Keep track of which trial we're processing
         # Get change points and detections
         trial_change_points = find_change_points(df)
         for method in ["traditional", "horizon"]:
@@ -163,8 +164,13 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
                 metrics[method]["by_cp"][closest_cp]["detections"].append(detection)
                 metrics[method]["by_cp"][closest_cp]["delays"].append(delay)
 
+                # Is this a true positive (within window)?
                 if abs(delay) <= DETECTION_WINDOW:
-                    metrics[method]["by_cp"][closest_cp]["within_window"] += 1
+                    # Only count as a new true positive if we haven't already detected 
+                    # this change point in this trial
+                    if trial_idx not in metrics[method]["by_cp"][closest_cp]["trials_detected"]:
+                        metrics[method]["by_cp"][closest_cp]["within_window"] += 1
+                        metrics[method]["by_cp"][closest_cp]["trials_detected"].add(trial_idx)
                 else:
                     # This is a false positive - not within window of any change point
                     metrics[method]["false_positives"].append(detection)
@@ -201,13 +207,13 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
             metrics[method]["by_cp"][cp]["avg_detection"] = avg_detection
             metrics[method]["by_cp"][cp]["avg_delay"] = avg_delay
             metrics[method]["by_cp"][cp]["detection_rate"] = (
-                detection_count / total_trials
+                len(cp_data["trials_detected"]) / total_trials
             )
 
-        # Overall metrics
-        metrics[method]["tpr"] = total_within_window / (
-            len(change_points_list) * total_trials
-        )
+        # Calculate TPR as proportion of possible change points correctly detected
+        # (max 1 detection per change point per trial)
+        max_possible_detections = len(change_points_list) * total_trials
+        metrics[method]["tpr"] = total_within_window / max_possible_detections
 
         # Calculate FPR as proportion of detections that are false positives
         if metrics[method]["total_detections"] > 0:
