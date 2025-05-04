@@ -16,6 +16,7 @@ import yaml
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
+import random
 
 # Add parent directory to path to allow imports
 project_root = str(Path(__file__).parent.parent.parent)
@@ -81,7 +82,7 @@ def update_config(base_config, param_dict):
     return config
 
 
-def run_parameter_sweep(base_config_path, output_dir, networks=None, n_trials=3):
+def run_parameter_sweep(base_config_path, output_dir, networks=None, n_trials=5):
     """Run parameter sweep across specified parameter combinations.
 
     Args:
@@ -102,10 +103,10 @@ def run_parameter_sweep(base_config_path, output_dir, networks=None, n_trials=3)
     # Define parameter ranges to sweep
     param_ranges = {
         "network": networks or ["sbm", "ba", "er", "ws"],
-        "threshold": [20, 50, 100],
+        "threshold": [20, 50, 70, 100],
         "window": [5, 10],
-        "horizon": [1, 5, 10],
-        "epsilon": [0.2, 0.5, 0.9],
+        "horizon": [1, 3, 5, 10],
+        "epsilon": [0.2, 0.5, 0.7, 0.9],
         "betting_func": ["power", "mixture", "beta"],
         "distance": ["euclidean", "mahalanobis", "cosine", "chebyshev"],
     }
@@ -126,75 +127,21 @@ def run_parameter_sweep(base_config_path, output_dir, networks=None, n_trials=3)
 
     logger.info(f"Parameter space contains {total_combinations} combinations")
 
-    # For practical reasons, we'll prioritize key parameters and limit combinations
-    priority_combinations = list(
+    # Generate all possible parameter combinations (full factorial design)
+    param_combinations = list(
         itertools.product(
             param_ranges["network"],
             param_ranges["threshold"],
             param_ranges["window"],
             param_ranges["horizon"],
-            [0.7],  # Fixed epsilon
-            ["mixture"],  # Fixed betting function
-            ["mahalanobis"],  # Fixed distance
-        )
-    )
-
-    # Additional sweep for betting function, keeping other params fixed
-    betting_combinations = list(
-        itertools.product(
-            param_ranges["network"],
-            [60],  # Fixed threshold
-            [10],  # Fixed window
-            [5],  # Fixed horizon
-            [0.7],  # Fixed epsilon
+            param_ranges["epsilon"],
             param_ranges["betting_func"],
-            ["mahalanobis"],  # Fixed distance
-        )
-    )
-
-    # Additional sweep for distance metrics, keeping other params fixed
-    distance_combinations = list(
-        itertools.product(
-            param_ranges["network"],
-            [60],  # Fixed threshold
-            [10],  # Fixed window
-            [5],  # Fixed horizon
-            [0.7],  # Fixed epsilon
-            ["mixture"],  # Fixed betting function
             param_ranges["distance"],
         )
     )
 
-    # Additional sweep for epsilon values, keeping other params fixed
-    epsilon_combinations = list(
-        itertools.product(
-            param_ranges["network"],
-            [60],  # Fixed threshold
-            [10],  # Fixed window
-            [5],  # Fixed horizon
-            param_ranges["epsilon"],
-            ["mixture"],  # Fixed betting function
-            ["mahalanobis"],  # Fixed distance
-        )
-    )
-
-    # Combine all parameter combinations
-    all_combinations = (
-        priority_combinations
-        + betting_combinations
-        + distance_combinations
-        + epsilon_combinations
-    )
-
-    # Remove duplicates while preserving order
-    seen = set()
-    param_combinations = []
-    for combo in all_combinations:
-        if combo not in seen:
-            param_combinations.append(combo)
-            seen.add(combo)
-
-    logger.info(f"Running sweep with {len(param_combinations)} parameter combinations")
+    logger.info(f"Running exhaustive sweep with {len(param_combinations)} parameter combinations")
+    logger.info(f"This will test all possible combinations of parameters")
 
     # Run parameter sweep
     for combo in tqdm(param_combinations, desc="Parameter combinations"):
@@ -426,7 +373,7 @@ def main():
         "-t",
         "--trials",
         type=int,
-        default=1,
+        default=5,
         help="Number of trials per parameter combination",
     )
 
