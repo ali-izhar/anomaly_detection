@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Optional, Dict
 from datetime import datetime
+from matplotlib.ticker import MaxNLocator
 
 plt.style.use("seaborn-v0_8-whitegrid")
 sns.set_context("talk")
@@ -347,13 +348,10 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     fig, axs = plt.subplots(
         2,
         2,
-        figsize=(14, 10),  # Slightly reduce vertical size
-        gridspec_kw={"wspace": 0.22, "hspace": 0.20},  # Tighter spacing
-        constrained_layout=False,  # Switch to tight_layout for better control
+        figsize=(10, 8),  # Reduced size for better proportions
+        gridspec_kw={"wspace": 0.15, "hspace": 0.15},  # Tighter spacing
+        constrained_layout=True,  # Use constrained_layout for better spacing
     )
-    plt.tight_layout(
-        pad=2.0, h_pad=2.0, w_pad=2.0
-    )  # Careful padding for research layout
 
     betting_funcs = sorted(df["betting_func"].unique())
     colors = {bf: BETTING_COLORS.get(bf, f"C{i}") for i, bf in enumerate(betting_funcs)}
@@ -600,11 +598,41 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
                 ),
             )
 
+    # Publication-ready styling applied at the end
+    for i in range(2):
+        for j in range(2):
+            # Remove top and right spines
+            axs[i, j].spines["top"].set_visible(False)
+            axs[i, j].spines["right"].set_visible(False)
+
+            # Make bottom and left spines slightly thicker
+            axs[i, j].spines["bottom"].set_linewidth(1.2)
+            axs[i, j].spines["left"].set_linewidth(1.2)
+
+            # Add subtle tick marks
+            axs[i, j].tick_params(direction="out", length=4, width=1.2, pad=4)
+
+            # Ensure y-axis has enough ticks for readability
+            axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
+
+            # Format tick labels to avoid scientific notation and unnecessary decimals
+            axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
+
+            # For x-axis ticks
+            if (i == 0 and j == 0) or (
+                i == 1 and j == 0
+            ):  # Threshold and epsilon plots
+                axs[i, j].xaxis.set_major_locator(MaxNLocator(integer=True))
+
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
         output_dir, f"{network_name}_detection_accuracy_grid.png"
     )
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    # Also save a PDF version for publication use
+    pdf_path = os.path.join(output_dir, f"{network_name}_detection_accuracy_grid.pdf")
+    plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
 
     # Generate metrics for analysis log
     # Find best threshold based on optimal TPR-FPR tradeoff
@@ -649,7 +677,7 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
         network_name,
     )
 
-    print(f"Saved detection accuracy grid to {output_path}")
+    print(f"Saved detection accuracy grid to {output_path} and {pdf_path}")
     plt.close(fig)
 
 
@@ -828,6 +856,561 @@ The analysis demonstrates the impact of epsilon on both TPR and FPR for epsilon-
 
 
 # ---------------------------------------------------------------------------
+# --------------------- (3) PERFORMANCE TIMING DASHBOARD --------------------
+# ---------------------------------------------------------------------------
+def plot_performance_timing_dashboard(
+    df: pd.DataFrame, output_dir: str, network_name: str
+):
+    """Create a 2x2 grid visualization focusing on detection timing and delay analysis."""
+    if df.empty:
+        print("Error: No data available for performance timing analysis")
+        return
+
+    # Create publication-ready figure with tighter layout
+    fig, axs = plt.subplots(
+        2,
+        2,
+        figsize=(10, 8),  # Slightly smaller for more compact presentation
+        gridspec_kw={"wspace": 0.15, "hspace": 0.15},  # Tighter spacing
+        constrained_layout=True,  # Use constrained layout for better spacing
+    )
+
+    # Remove tight_layout since we're using constrained_layout
+    # plt.tight_layout(pad=2.0, h_pad=2.0, w_pad=2.0)
+
+    betting_funcs = sorted(df["betting_func"].unique())
+    colors = {bf: BETTING_COLORS.get(bf, f"C{i}") for i, bf in enumerate(betting_funcs)}
+
+    # 1. Detection Delay by Window Size (top-left)
+    ax = axs[0, 0]
+    windows = sorted(df["window"].unique())
+
+    for bf in betting_funcs:
+        subset = df[df["betting_func"] == bf]
+        if not subset.empty:
+            window_groups = (
+                subset.groupby("window")["traditional_avg_delay"].mean().reset_index()
+            )
+            if not window_groups.empty:
+                ax.plot(
+                    window_groups["window"],
+                    window_groups["traditional_avg_delay"],
+                    "o-",
+                    label=bf.capitalize(),
+                    color=colors[bf],
+                    linewidth=2.5,
+                    markersize=8,
+                    alpha=0.8,
+                    markeredgecolor="white",
+                    markeredgewidth=0.8,
+                )
+
+    ax.set_xlabel("Window Size", fontsize=16)
+    ax.set_ylabel("Average Detection Delay", fontsize=16)
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(fontsize=14, loc="best", frameon=True, framealpha=0.9, handlelength=1.5)
+
+    # Add annotation about window size effect with better positioning
+    if windows:
+        max_window = max(windows)
+        min_window = min(windows)
+        mid_x = (max_window + min_window) / 2
+        y_pos = ax.get_ylim()[0] + (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.8
+
+        # Use clearer positioning for annotation
+        ax.annotate(
+            "Larger windows improve\nmodel accuracy but\nincrease delay",
+            xy=(max_window - (max_window - min_window) * 0.2, y_pos),
+            xytext=(mid_x, y_pos * 0.6),
+            fontsize=14,
+            ha="center",
+            va="center",
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                fc="white",
+                alpha=0.9,
+                edgecolor="lightgray",
+            ),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                connectionstyle="arc3,rad=0.2",
+                linewidth=1.5,
+                alpha=0.8,
+            ),
+            zorder=10,
+        )
+
+    # 2. Early Detection Capabilities (top-right)
+    ax = axs[0, 1]
+
+    # Analyze fraction of delay to horizon
+    if "traditional_avg_delay" in df.columns and "horizon" in df.columns:
+        df_with_ratio = df.copy()
+        # Calculate delay as a fraction of horizon
+        df_with_ratio["delay_ratio"] = (
+            df_with_ratio["traditional_avg_delay"] / df_with_ratio["horizon"]
+        )
+
+        # Group by betting function
+        boxprops = dict(linewidth=2.5, alpha=0.8)
+        whiskerprops = dict(linewidth=2.0, alpha=0.8)
+        medianprops = dict(linewidth=2.5, color="black")
+
+        # Make boxplots narrower and adjust plotting
+        sns.boxplot(
+            x="betting_func",
+            y="delay_ratio",
+            hue="betting_func",
+            data=df_with_ratio,
+            ax=ax,
+            palette=colors,
+            boxprops=boxprops,
+            whiskerprops=whiskerprops,
+            medianprops=medianprops,
+            showfliers=False,
+            legend=False,
+            width=0.6,  # Make boxes narrower
+        )
+
+        # Add individual points for better visibility
+        sns.stripplot(
+            x="betting_func",
+            y="delay_ratio",
+            data=df_with_ratio,
+            ax=ax,
+            color="black",
+            size=3,
+            alpha=0.3,
+            jitter=True,
+        )
+
+        ax.set_xlabel("Betting Function", fontsize=16)
+        ax.set_ylabel("Delay / Horizon Ratio", fontsize=16)
+
+        # First check the actual data range before setting limits
+        actual_max = df_with_ratio["delay_ratio"].max()
+
+        # Set y-axis limits to ensure all data is visible with padding
+        # Use a generous upper limit to ensure all data points and whiskers are shown
+        ax.set_ylim(0, max(2.0, actual_max * 1.1))
+
+        # Make the reference line more prominent
+        ax.axhline(y=1.0, color="r", linestyle="--", alpha=0.8, linewidth=2.5, zorder=5)
+        ax.grid(True, linestyle=":", alpha=0.4)
+
+        # Add shading below the red line to highlight early detection region
+        ax.axhspan(0, 1.0, alpha=0.1, color="green", zorder=1)
+
+        # Move the annotation to avoid overlapping with data
+        # Find position based on betting functions
+        bf_count = len(betting_funcs)
+
+        # Better positioned annotation
+        ax.annotate(
+            "Ideal early detection\n(before horizon end)",
+            xy=(bf_count - 1, 0.9),  # Point to right side near the red line
+            xytext=(bf_count / 2, 0.4),  # Position text lower and centered
+            fontsize=14,
+            ha="center",
+            va="center",
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                fc="white",
+                alpha=0.9,
+                edgecolor="lightgray",
+            ),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                connectionstyle="arc3,rad=-0.2",
+                linewidth=1.5,
+                alpha=0.8,
+            ),
+        )
+
+        # Format x-tick labels
+        ticks = ax.get_xticks()
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([x.get_text().capitalize() for x in ax.get_xticklabels()])
+
+    # 3. Delay Reduction by Parameter (bottom-left)
+    ax = axs[1, 0]
+
+    # We'll use threshold as the parameter for delay reduction
+    thresholds = sorted(df["threshold"].unique())
+
+    for bf in betting_funcs:
+        subset = df[df["betting_func"] == bf]
+        if not subset.empty:
+            threshold_groups = (
+                subset.groupby("threshold")
+                .agg(
+                    {
+                        "traditional_avg_delay": "mean",
+                        "trad_tpr": "mean",
+                    }
+                )
+                .reset_index()
+            )
+
+            if not threshold_groups.empty:
+                ax.plot(
+                    threshold_groups["threshold"],
+                    threshold_groups["traditional_avg_delay"],
+                    "o-",
+                    label=bf.capitalize(),
+                    color=colors[bf],
+                    linewidth=2.5,
+                    markersize=8,
+                    alpha=0.8,
+                    markeredgecolor="white",
+                    markeredgewidth=0.8,
+                )
+
+    ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=16)
+    ax.set_ylabel("Average Detection Delay", fontsize=16)
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(fontsize=14, loc="best", frameon=True, framealpha=0.9, handlelength=1.5)
+
+    # Add informative annotation about threshold impact
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+
+    # Determine if threshold increases or decreases delay
+    if len(thresholds) > 1:
+        if (
+            df.groupby("threshold")["traditional_avg_delay"]
+            .mean()
+            .corr(pd.Series(sorted(df["threshold"].unique())))
+            > 0
+        ):
+            trend = "increases"
+            arrow_dir = 0.2  # Positive arc
+        else:
+            trend = "decreases"
+            arrow_dir = -0.2  # Negative arc
+
+        ax.annotate(
+            f"Higher threshold\n{trend} detection delay",
+            xy=(
+                xlim[1] - (xlim[1] - xlim[0]) * 0.2,
+                ylim[0] + (ylim[1] - ylim[0]) * 0.7,
+            ),
+            xytext=(
+                xlim[0] + (xlim[1] - xlim[0]) * 0.5,
+                ylim[0] + (ylim[1] - ylim[0]) * 0.4,
+            ),
+            fontsize=14,
+            ha="center",
+            va="center",
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                fc="white",
+                alpha=0.9,
+                edgecolor="lightgray",
+            ),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                connectionstyle=f"arc3,rad={arrow_dir}",
+                linewidth=1.5,
+                alpha=0.8,
+            ),
+            zorder=10,
+        )
+
+    # 4. Optimal Configuration Regions (bottom-right)
+    ax = axs[1, 1]
+
+    # Create a scatter plot with delay vs TPR, colored by betting function
+    # Size points by FPR (smaller is better)
+
+    # First, calculate metrics for each configuration
+    config_metrics = (
+        df.groupby(["betting_func", "threshold", "window"])
+        .agg(
+            {
+                "traditional_avg_delay": "mean",
+                "trad_tpr": "mean",
+                "trad_fpr": "mean",
+            }
+        )
+        .reset_index()
+    )
+
+    # Size inversely proportional to FPR (smaller FPR = larger point)
+    # Add small constant to avoid division by zero
+    config_metrics["point_size"] = 100 / (config_metrics["trad_fpr"] + 0.005)
+
+    # Cap the size for very small FPRs
+    config_metrics["point_size"] = config_metrics["point_size"].clip(20, 200)
+
+    # Use edgecolor for better visibility
+    for bf in betting_funcs:
+        subset = config_metrics[config_metrics["betting_func"] == bf]
+        if not subset.empty:
+            ax.scatter(
+                subset["traditional_avg_delay"],
+                subset["trad_tpr"],
+                s=subset["point_size"],
+                alpha=0.7,
+                label=bf.capitalize(),
+                color=colors[bf],
+                edgecolor="white",
+                linewidth=0.5,
+            )
+
+    # Highlight optimal region more clearly
+    ax.axhspan(0.8, 1.0, alpha=0.15, color="green", zorder=0)
+
+    # Add thin gridlines
+    ax.grid(True, linestyle=":", alpha=0.4, zorder=0)
+
+    ax.set_xlabel("Detection Delay", fontsize=16)
+    ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
+    ax.set_ylim(0, 1.05)
+
+    # Add legend for betting functions with better placement
+    ax.legend(
+        fontsize=14,
+        loc="lower right",
+        frameon=True,
+        framealpha=0.9,
+        handlelength=1.5,
+        markerscale=0.8,  # Make legend markers smaller
+    )
+
+    # Move annotation for point size to better location
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x_pos = xlim[0] + (xlim[1] - xlim[0]) * 0.25
+
+    # Avoid overlapping with data points
+    ax.annotate(
+        "Point size $\\propto 1/FPR$\n(larger = better)",
+        xy=(x_pos, 0.2),  # Arrow endpoint
+        xytext=(x_pos, 0.08),  # Text position - moved lower
+        fontsize=14,
+        ha="center",
+        va="center",
+        bbox=dict(
+            boxstyle="round,pad=0.5",
+            fc="white",
+            alpha=0.9,
+            edgecolor="lightgray",
+        ),
+        arrowprops=dict(
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=0.2",
+            linewidth=1.5,
+        ),
+        zorder=10,
+    )
+
+    # Better position for optimal region annotation
+    ax.annotate(
+        "Optimal region\n(high TPR, low delay)",
+        xy=(
+            xlim[0] + (xlim[1] - xlim[0]) * 0.25,
+            0.9,
+        ),  # Arrow endpoint in green region
+        xytext=(xlim[0] + (xlim[1] - xlim[0]) * 0.5, 0.65),  # Text centered and lower
+        fontsize=14,
+        ha="center",
+        va="center",
+        bbox=dict(
+            boxstyle="round,pad=0.5",
+            fc="white",
+            alpha=0.9,
+            edgecolor="lightgray",
+        ),
+        arrowprops=dict(
+            arrowstyle="-|>",
+            connectionstyle="arc3,rad=-0.2",
+            linewidth=1.5,
+        ),
+        zorder=10,
+    )
+
+    # Publication-ready styling for all subplots
+    for i in range(2):
+        for j in range(2):
+            # Remove top and right spines
+            axs[i, j].spines["top"].set_visible(False)
+            axs[i, j].spines["right"].set_visible(False)
+
+            # Make bottom and left spines slightly thicker
+            axs[i, j].spines["bottom"].set_linewidth(1.2)
+            axs[i, j].spines["left"].set_linewidth(1.2)
+
+            # Add subtle tick marks
+            axs[i, j].tick_params(direction="out", length=4, width=1.2, pad=4)
+
+            # Ensure y-axis has enough ticks for readability
+            axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
+
+            # Format tick labels to avoid scientific notation and unnecessary decimals
+            if i == 0 and j == 1:  # For Delay/Horizon Ratio plot
+                axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
+            else:  # For other plots
+                axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
+
+            # For x-axis ticks
+            if (i == 0 and j == 0) or (
+                i == 1 and j == 0
+            ):  # Window Size and Threshold plots
+                axs[i, j].xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(
+        output_dir, f"{network_name}_performance_timing_dashboard.png"
+    )
+
+    # Use higher DPI and better format options for publication-quality output
+    plt.savefig(
+        output_path, dpi=300, bbox_inches="tight", format="png", transparent=False
+    )
+
+    # Also save a PDF version for publication use
+    pdf_path = os.path.join(
+        output_dir, f"{network_name}_performance_timing_dashboard.pdf"
+    )
+    plt.savefig(pdf_path, format="pdf", bbox_inches="tight")
+
+    generate_performance_timing_analysis_log(df, output_dir, network_name)
+
+    print(f"Saved performance timing dashboard to {output_path} and {pdf_path}")
+    plt.close(fig)
+
+
+def generate_performance_timing_analysis_log(
+    df: pd.DataFrame, output_dir: str, network_name: str
+):
+    """Generate analysis log for performance timing dashboard."""
+    data_points = len(df)
+
+    # Calculate metrics for window size impact
+    window_metrics = (
+        df.groupby(["window", "betting_func"])
+        .agg({"traditional_avg_delay": "mean", "trad_tpr": "mean", "trad_fpr": "mean"})
+        .reset_index()
+    )
+
+    # Find optimal window size (balancing delay and TPR)
+    window_metrics["efficiency"] = window_metrics["trad_tpr"] / (
+        window_metrics["traditional_avg_delay"] + 1
+    )
+    best_window_group = window_metrics.groupby("window")["efficiency"].mean().idxmax()
+
+    # Calculate delay/horizon ratios
+    df_with_ratio = df.copy()
+    df_with_ratio["delay_ratio"] = (
+        df_with_ratio["traditional_avg_delay"] / df_with_ratio["horizon"]
+    )
+
+    # Find betting function with lowest delay ratio
+    best_bf_for_early = (
+        df_with_ratio.groupby("betting_func")["delay_ratio"].mean().idxmin()
+    )
+    early_detection_rate = (df_with_ratio["delay_ratio"] < 1.0).mean() * 100
+
+    # Identify configuration with optimal balance
+    # Weight: 60% for TPR, 30% for delay (inverse), 10% for FPR (inverse)
+    df_config = df.copy()
+    # Normalize metrics to 0-1 scale
+    max_delay = df_config["traditional_avg_delay"].max()
+    df_config["norm_delay"] = 1 - (df_config["traditional_avg_delay"] / max_delay)
+    df_config["norm_fpr"] = 1 - (df_config["trad_fpr"] / df_config["trad_fpr"].max())
+
+    # Calculate balanced score
+    df_config["balanced_score"] = (
+        0.6 * df_config["trad_tpr"]
+        + 0.3 * df_config["norm_delay"]
+        + 0.1 * df_config["norm_fpr"]
+    )
+
+    # Get best configuration
+    best_config_idx = df_config["balanced_score"].idxmax()
+    best_config = df_config.loc[best_config_idx]
+
+    log_content = f"""# Performance Timing Analysis Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## General Information
+
+- network_type: {NETWORK_NAMES.get(network_name, network_name.upper())}
+- analysis_date: {datetime.now().strftime("%Y-%m-%d")}
+- data_points: {data_points}
+
+## Window Size Impact
+
+- optimal_window_size: {int(best_window_group)}
+- window_size_impact: Larger windows generally increase detection delay but can improve model accuracy
+- window_delay_correlation: {df.groupby("window")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["window"].unique()))):.4f}
+
+## Early Detection Analysis
+
+- best_betting_function_for_early_detection: {best_bf_for_early.capitalize()}
+- early_detection_rate: {early_detection_rate:.2f}% (detection before horizon end)
+- avg_delay_ratio: {df_with_ratio["delay_ratio"].mean():.4f} (delay as fraction of horizon)
+- early_detection_advantage: Detecting anomalies before the end of the prediction horizon enables proactive responses
+
+## Delay Reduction Analysis
+
+- threshold_delay_correlation: {df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique()))):.4f}
+- parameter_with_most_delay_impact: {"threshold" if abs(df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique())))) > abs(df.groupby("window")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["window"].unique())))) else "window"}
+- delay_reduction_strategy: {"Increase threshold" if df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique()))) < 0 else "Decrease threshold"} to reduce detection delay
+
+## Optimal Configuration
+
+- best_betting_function: {best_config["betting_func"].capitalize()}
+- optimal_threshold: {int(best_config["threshold"])}
+- optimal_window: {int(best_config["window"])}
+- optimal_configuration_tpr: {best_config["trad_tpr"]:.4f}
+- optimal_configuration_delay: {best_config["traditional_avg_delay"]:.2f}
+- optimal_configuration_fpr: {best_config["trad_fpr"]:.6f}
+
+## Plot Description
+
+The visualization consists of a 2x2 grid that shows:
+
+### 1. Detection Delay by Window Size (top-left)
+- Shows how window size affects detection delay for each betting function
+- Larger windows typically increase delay but may improve model accuracy
+- Useful for selecting optimal window size based on application needs
+
+### 2. Early Detection Capabilities (top-right)
+- Compares delay/horizon ratio across betting functions
+- Ratio < 1.0 indicates detection before the prediction horizon ends
+- Helps identify betting functions that excel at early anomaly detection
+
+### 3. Delay Reduction by Threshold (bottom-left)
+- Shows relationship between detection threshold and delay
+- Helps identify thresholds that minimize detection delay
+- Useful for delay-sensitive applications
+
+### 4. Optimal Configuration Regions (bottom-right)
+- Scatter plot positioning configurations by delay and TPR
+- Point size inversely proportional to FPR (larger = better)
+- Highlights optimal region with high TPR and low delay
+- Provides visual guide for parameter selection based on priorities
+
+## Summary
+
+The performance timing analysis reveals that {best_config["betting_func"].capitalize()} betting function with threshold {int(best_config["threshold"])} and window size {int(best_config["window"])} provides the optimal balance between detection accuracy (TPR: {best_config["trad_tpr"]:.4f}) and timeliness (delay: {best_config["traditional_avg_delay"]:.2f}). 
+
+{best_bf_for_early.capitalize()} betting function demonstrates the best early detection capabilities, with detection often occurring before the prediction horizon ends. Window size shows a {"positive" if df.groupby("window")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["window"].unique()))) > 0 else "negative"} correlation with detection delay, confirming the expected tradeoff between model accuracy and timeliness.
+
+For applications where early detection is critical, the analysis suggests using {best_bf_for_early.capitalize()} betting with smaller window sizes and {"higher" if df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique()))) < 0 else "lower"} threshold values.
+"""
+
+    log_path = os.path.join(
+        output_dir, f"{network_name}_performance_timing_analysis_log.md"
+    )
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write(log_content)
+
+    print(f"Saved performance timing analysis log to {log_path}")
+
+
+# ---------------------------------------------------------------------------
 # ------------------------------ MAIN FUNCTION -----------------------
 # ---------------------------------------------------------------------------
 def main():
@@ -854,7 +1437,7 @@ def main():
         "-p",
         type=str,
         default="all",
-        choices=["betting", "accuracy", "all"],
+        choices=["betting", "accuracy", "timing", "all"],
         help="Type of plot to generate (default: all)",
     )
 
@@ -872,6 +1455,11 @@ def main():
 
         if args.plot_type in ["accuracy", "all"]:
             plot_detection_accuracy_grid(
+                df_network_clean, args.output_dir, args.network_name
+            )
+
+        if args.plot_type in ["timing", "all"]:
+            plot_performance_timing_dashboard(
                 df_network_clean, args.output_dir, args.network_name
             )
     else:
