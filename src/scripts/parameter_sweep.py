@@ -140,7 +140,9 @@ def run_parameter_sweep(base_config_path, output_dir, networks=None, n_trials=5)
         )
     )
 
-    logger.info(f"Running exhaustive sweep with {len(param_combinations)} parameter combinations")
+    logger.info(
+        f"Running exhaustive sweep with {len(param_combinations)} parameter combinations"
+    )
     logger.info(f"This will test all possible combinations of parameters")
 
     # Run parameter sweep

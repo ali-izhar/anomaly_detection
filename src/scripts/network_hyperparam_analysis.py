@@ -279,10 +279,6 @@ def analyze_hyperparameters(network_name: str, limit: int = 10) -> pd.DataFrame:
                             ]
                         )
 
-                    # Calculate effective total timesteps (excluding periods around change points)
-                    # For accurate FPR calculation in the context of Doob's/Ville's inequality,
-                    # we should count FPR as (number of false detections) / (number of opportunities for false detection)
-
                     # Get number of trials (typically 3)
                     trial_sheets = [
                         s
@@ -291,35 +287,53 @@ def analyze_hyperparameters(network_name: str, limit: int = 10) -> pd.DataFrame:
                     ]
                     num_trials = len(trial_sheets)
 
-                    # For consistency with theoretical bounds, use raw count directly without scaling
-                    # But apply a correction factor for the finite sample effect
-                    # This accounts for the difference between asymptotic guarantees and finite sample behavior
-                    correction_factor = 0.85  # Empirically determined
+                    # Most rigorous FPR calculation - count false positives and divide by total opportunity
+                    # Only include timesteps that are NOT during change point transitions
+                    # This ensures we are evaluating the theoretical bound correctly
+                    stable_timesteps = total_timesteps
 
-                    # Original FPR calculation using total timesteps
-                    raw_trad_fpr = (
+                    # Each change point creates a period of instability around it
+                    # Conservatively remove these periods from the denominator
+                    change_point_transition_window = (
+                        20  # timesteps around each change point
+                    )
+                    stable_timesteps = max(
+                        1,
+                        stable_timesteps
+                        - len(true_change_points) * change_point_transition_window,
+                    )
+
+                    # Calculate FPR using only stable periods for denominator
+                    # This is the most strict interpretation for testing Ville's inequality
+                    trad_fpr = (
+                        trad_fp / (stable_timesteps * num_trials)
+                        if (stable_timesteps * num_trials) > 0
+                        else 0
+                    )
+                    horizon_fpr = (
+                        horizon_fp / (stable_timesteps * num_trials)
+                        if (stable_timesteps * num_trials) > 0
+                        else 0
+                    )
+
+                    # Store both the raw and adjusted FPR values
+                    metrics["trad_fpr_raw"] = (
                         trad_fp / (total_timesteps * num_trials)
                         if (total_timesteps * num_trials) > 0
                         else 0
                     )
-                    raw_horizon_fpr = (
+                    metrics["horizon_fpr_raw"] = (
                         horizon_fp / (total_timesteps * num_trials)
                         if (total_timesteps * num_trials) > 0
                         else 0
                     )
 
-                    # Store the raw FPR
-                    metrics["trad_fpr_raw"] = raw_trad_fpr
-                    metrics["horizon_fpr_raw"] = raw_horizon_fpr
+                    # Use the stricter FPR calculation for comparison with theoretical bound
+                    metrics["trad_fpr"] = trad_fpr
+                    metrics["horizon_fpr"] = horizon_fpr
 
-                    # Apply correction factor for theoretical bound comparison
-                    metrics["trad_fpr"] = raw_trad_fpr
-                    metrics["horizon_fpr"] = raw_horizon_fpr
-
-                    # The theoretical bound with correction
-                    metrics["theoretical_bound"] = (
-                        correction_factor / params["threshold"]
-                    )
+                    # Theoretical bound is exactly 1/threshold - no adjustment
+                    metrics["theoretical_bound"] = 1.0 / params["threshold"]
 
                 except Exception as e:
                     logger.warning(f"Error calculating FPR from Trial sheet: {str(e)}")
@@ -409,10 +423,6 @@ def analyze_hyperparameters(network_name: str, limit: int = 10) -> pd.DataFrame:
                             ]
                         )
 
-                    # Calculate effective total timesteps (excluding periods around change points)
-                    # For accurate FPR calculation in the context of Doob's/Ville's inequality,
-                    # we should count FPR as (number of false detections) / (number of opportunities for false detection)
-
                     # Get number of trials (typically 3)
                     trial_sheets = [
                         s
@@ -421,35 +431,53 @@ def analyze_hyperparameters(network_name: str, limit: int = 10) -> pd.DataFrame:
                     ]
                     num_trials = len(trial_sheets)
 
-                    # For consistency with theoretical bounds, use raw count directly without scaling
-                    # But apply a correction factor for the finite sample effect
-                    # This accounts for the difference between asymptotic guarantees and finite sample behavior
-                    correction_factor = 0.85  # Empirically determined
+                    # Most rigorous FPR calculation - count false positives and divide by total opportunity
+                    # Only include timesteps that are NOT during change point transitions
+                    # This ensures we are evaluating the theoretical bound correctly
+                    stable_timesteps = total_timesteps
 
-                    # Original FPR calculation using total timesteps
-                    raw_trad_fpr = (
+                    # Each change point creates a period of instability around it
+                    # Conservatively remove these periods from the denominator
+                    change_point_transition_window = (
+                        20  # timesteps around each change point
+                    )
+                    stable_timesteps = max(
+                        1,
+                        stable_timesteps
+                        - len(true_change_points) * change_point_transition_window,
+                    )
+
+                    # Calculate FPR using only stable periods for denominator
+                    # This is the most strict interpretation for testing Ville's inequality
+                    trad_fpr = (
+                        trad_fp / (stable_timesteps * num_trials)
+                        if (stable_timesteps * num_trials) > 0
+                        else 0
+                    )
+                    horizon_fpr = (
+                        horizon_fp / (stable_timesteps * num_trials)
+                        if (stable_timesteps * num_trials) > 0
+                        else 0
+                    )
+
+                    # Store both the raw and adjusted FPR values
+                    metrics["trad_fpr_raw"] = (
                         trad_fp / (total_timesteps * num_trials)
                         if (total_timesteps * num_trials) > 0
                         else 0
                     )
-                    raw_horizon_fpr = (
+                    metrics["horizon_fpr_raw"] = (
                         horizon_fp / (total_timesteps * num_trials)
                         if (total_timesteps * num_trials) > 0
                         else 0
                     )
 
-                    # Store the raw FPR
-                    metrics["trad_fpr_raw"] = raw_trad_fpr
-                    metrics["horizon_fpr_raw"] = raw_horizon_fpr
+                    # Use the stricter FPR calculation for comparison with theoretical bound
+                    metrics["trad_fpr"] = trad_fpr
+                    metrics["horizon_fpr"] = horizon_fpr
 
-                    # Apply correction factor for theoretical bound comparison
-                    metrics["trad_fpr"] = raw_trad_fpr
-                    metrics["horizon_fpr"] = raw_horizon_fpr
-
-                    # The theoretical bound with correction
-                    metrics["theoretical_bound"] = (
-                        correction_factor / params["threshold"]
-                    )
+                    # Theoretical bound is exactly 1/threshold - no adjustment
+                    metrics["theoretical_bound"] = 1.0 / params["threshold"]
 
                 except Exception as e:
                     logger.warning(
