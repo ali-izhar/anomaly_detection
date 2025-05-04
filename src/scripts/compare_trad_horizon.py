@@ -100,7 +100,12 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
     metrics = {
         "traditional": {
             "by_cp": defaultdict(
-                lambda: {"detections": [], "delays": [], "within_window": 0, "trials_detected": set()}
+                lambda: {
+                    "detections": [],
+                    "delays": [],
+                    "within_window": 0,
+                    "trials_detected": set(),
+                }
             ),
             "tpr": 0,
             "fpr": 0,
@@ -111,7 +116,12 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
         },
         "horizon": {
             "by_cp": defaultdict(
-                lambda: {"detections": [], "delays": [], "within_window": 0, "trials_detected": set()}
+                lambda: {
+                    "detections": [],
+                    "delays": [],
+                    "within_window": 0,
+                    "trials_detected": set(),
+                }
             ),
             "tpr": 0,
             "fpr": 0,
@@ -166,11 +176,16 @@ def calculate_detection_metrics(trial_dfs, change_points_list=None):
 
                 # Is this a true positive (within window)?
                 if abs(delay) <= DETECTION_WINDOW:
-                    # Only count as a new true positive if we haven't already detected 
+                    # Only count as a new true positive if we haven't already detected
                     # this change point in this trial
-                    if trial_idx not in metrics[method]["by_cp"][closest_cp]["trials_detected"]:
+                    if (
+                        trial_idx
+                        not in metrics[method]["by_cp"][closest_cp]["trials_detected"]
+                    ):
                         metrics[method]["by_cp"][closest_cp]["within_window"] += 1
-                        metrics[method]["by_cp"][closest_cp]["trials_detected"].add(trial_idx)
+                        metrics[method]["by_cp"][closest_cp]["trials_detected"].add(
+                            trial_idx
+                        )
                 else:
                     # This is a false positive - not within window of any change point
                     metrics[method]["false_positives"].append(detection)

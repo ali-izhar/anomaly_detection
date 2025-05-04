@@ -6,9 +6,7 @@ import numpy as np
 
 
 def extract_contributions(excel_path):
-    """
-    Extract feature contributions from Excel file and generate LaTeX tables
-    """
+    """Extract feature contributions from Excel file and generate LaTeX tables"""
     # Read the Excel file
     print(f"Reading data from {excel_path}...")
 

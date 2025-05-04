@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and visualize synthetic networks:
+"""Generate and visualize sample synthetic networks:
 1. Stochastic Block Model (SBM)
 2. Barabási-Albert (BA)
 3. Erdős-Rényi (ER)

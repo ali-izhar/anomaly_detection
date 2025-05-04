@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Martingale Detection on MIT Reality Dataset"""
+"""Run Martingale Detection on MIT Reality Dataset"""
 
 import pandas as pd
 import networkx as nx
