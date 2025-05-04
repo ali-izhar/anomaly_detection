@@ -7,7 +7,6 @@ import argparse
 import glob
 import logging
 import pandas as pd
-import numpy as np
 import re
 from typing import Dict, List, Optional, Any
 
