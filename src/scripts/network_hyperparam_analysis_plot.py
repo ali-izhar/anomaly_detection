@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Optional, Dict
 from datetime import datetime
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 plt.style.use("seaborn-v0_8-whitegrid")
 sns.set_context("talk")
@@ -156,7 +156,7 @@ def plot_betting_function_comparison(
                 if pct_improve > 5:
                     bf_idx = list(betting_funcs).index(bf)
                     ax.annotate(
-                        f"+{pct_improve:.1f}%",
+                        f"+{pct_improve:.1f}\\%",
                         xy=(bf_idx + 0.2, hor_tpr + 0.03),
                         ha="center",
                         va="bottom",
@@ -233,7 +233,7 @@ def plot_betting_function_comparison(
                 if pct_improve > 5:
                     bf_idx = list(betting_funcs).index(bf)
                     ax.annotate(
-                        f"-{pct_improve:.1f}%",
+                        f"-{pct_improve:.1f}\\%",
                         xy=(bf_idx + 0.2, hor_delay),
                         xytext=(0, -15),
                         textcoords="offset points",
@@ -339,7 +339,7 @@ def plot_betting_function_comparison(
                 ),
             )
 
-    ax.set_xlabel("Betting Function", fontsize=14, fontweight="bold")
+    ax.set_xlabel("")
     ax.set_ylabel("False Positive Rate (FPR)", fontsize=14, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
@@ -679,13 +679,12 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
         print("Error: No data available for detection accuracy analysis")
         return
 
-    # Optimize layout for research paper - tighter spacing with just enough room for labels
     fig, axs = plt.subplots(
         2,
         2,
-        figsize=(10, 8),  # Reduced size for better proportions
-        gridspec_kw={"wspace": 0.15, "hspace": 0.15},  # Tighter spacing
-        constrained_layout=True,  # Use constrained_layout for better spacing
+        figsize=(11, 8),
+        gridspec_kw={"wspace": 0.15, "hspace": 0.15},
+        constrained_layout=True,
     )
 
     betting_funcs = sorted(df["betting_func"].unique())
@@ -697,39 +696,65 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     thresholds = sorted(df["threshold"].unique())
     x = np.array(thresholds)
     theoretical_values = 1 / x
-    ax.plot(
+    theoretical_line = ax.plot(
         x,
         theoretical_values,
         "k--",
         label="Theoretical bound (1/$\lambda$)",
         linewidth=2.5,
         alpha=0.8,
-    )
+    )[0]
 
-    # Group by threshold and betting function
+    # Group by threshold and betting function for both Traditional and Horizon
     for bf in betting_funcs:
         subset = df[df["betting_func"] == bf]
         if not subset.empty:
-            threshold_groups = (
+            trad_threshold_groups = (
                 subset.groupby("threshold")["trad_fpr"].mean().reset_index()
             )
-            if not threshold_groups.empty:
+            if not trad_threshold_groups.empty:
                 ax.plot(
-                    threshold_groups["threshold"],
-                    threshold_groups["trad_fpr"],
+                    trad_threshold_groups["threshold"],
+                    trad_threshold_groups["trad_fpr"],
                     "o-",
-                    label=bf.capitalize(),
+                    label=f"{bf.capitalize()} (Trad)",
                     color=colors[bf],
                     linewidth=2.5,
                     markersize=8,
                     alpha=0.8,
                 )
 
+            hor_threshold_groups = (
+                subset.groupby("threshold")["horizon_fpr"].mean().reset_index()
+            )
+            if not hor_threshold_groups.empty:
+                ax.plot(
+                    hor_threshold_groups["threshold"],
+                    hor_threshold_groups["horizon_fpr"],
+                    "s--",
+                    label=f"{bf.capitalize()} (Horizon)",
+                    color=colors[bf],
+                    linewidth=2.0,
+                    markersize=7,
+                    alpha=0.6,
+                )
+
     ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=16)
     ax.set_ylabel("False Positive Rate (FPR)", fontsize=16)
     ax.grid(True, linestyle=":", alpha=0.4)
+    formatter = ScalarFormatter(useMathText=True)
+    formatter.set_scientific(True)
+    formatter.set_powerlimits((-3, 3))
+    ax.yaxis.set_major_formatter(formatter)
+
     ax.legend(
-        fontsize=14, loc="upper right", frameon=True, framealpha=0.9, handlelength=1.5
+        [theoretical_line],
+        ["Theoretical bound (1/$\lambda$)"],
+        fontsize=11,
+        loc="upper right",
+        frameon=True,
+        framealpha=0.9,
+        handlelength=1.5,
     )
 
     # 2. TPR by distance metric (top-right)
@@ -737,52 +762,86 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     if "distance" in df.columns:
         distances = sorted(df["distance"].unique())
 
-        # Calculate average TPR for each distance and betting function combination
-        tpr_by_distance = []
-        for bf in betting_funcs:
-            for dist in distances:
-                subset = df[(df["betting_func"] == bf) & (df["distance"] == dist)]
-                if not subset.empty:
-                    avg_tpr = subset["trad_tpr"].mean()
-                    tpr_by_distance.append(
-                        {"betting_func": bf, "distance": dist, "tpr": avg_tpr}
+        # Create a dataframe for grouped barplot
+        distance_data = []
+        for dist in distances:
+            for bf in betting_funcs:
+                # Get mean TPR for this betting function and distance
+                bf_dist_data = df[(df["betting_func"] == bf) & (df["distance"] == dist)]
+                if not bf_dist_data.empty:
+                    trad_tpr = bf_dist_data["trad_tpr"].mean()
+                    horizon_tpr = bf_dist_data["horizon_tpr"].mean()
+                    distance_data.append(
+                        {
+                            "Distance": dist.capitalize(),
+                            "Betting Function": bf.capitalize(),
+                            "Traditional": trad_tpr,
+                            "Horizon": horizon_tpr,
+                        }
                     )
 
-        if tpr_by_distance:
-            distance_df = pd.DataFrame(tpr_by_distance)
-            # Use a more research-oriented bar style
-            sns.barplot(
-                x="distance",
-                y="tpr",
-                hue="betting_func",
-                data=distance_df,
-                palette=colors,
-                ax=ax,
-                saturation=0.8,
-                err_kws={"linewidth": 1.5},
-                capsize=0.1,
-            )
-            ticks = ax.get_xticks()
-            ax.set_xticks(ticks)
-            ax.set_xticklabels(
-                [x.get_text().capitalize() for x in ax.get_xticklabels()],
-                fontsize=14,
-            )
+        distance_df = pd.DataFrame(distance_data)
+        bar_width = 0.15  # Width of each bar
+        index = np.arange(len(distances))  # X locations for groups
 
-            ax.set_xlabel("Distance Metric", fontsize=16)
-            ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
-            ax.set_ylim(0, 1.05)
-            ax.grid(True, linestyle=":", alpha=0.4)
-            ax.legend(
-                fontsize=14,
-                title="Betting Function",
-                title_fontsize=14,
-                loc="upper right",
-                frameon=True,
-                framealpha=0.9,
-                handlelength=1.5,
-                ncol=1,
-            )
+        # Calculate positions for bars
+        for i, bf in enumerate(betting_funcs):
+            bf_data = distance_df[distance_df["Betting Function"] == bf.capitalize()]
+            if not bf_data.empty:
+                # Calculate offset based on betting function
+                offset = (i - len(betting_funcs) / 2 + 0.5) * bar_width * 2
+
+                # Plot Traditional bars
+                ax.bar(
+                    index + offset,
+                    bf_data["Traditional"],
+                    bar_width,
+                    color=colors[bf],
+                    alpha=0.85,
+                    label=f"{bf.capitalize()} (Trad)",
+                )
+
+                # Plot Horizon bars with hatch pattern
+                ax.bar(
+                    index + offset + bar_width,
+                    bf_data["Horizon"],
+                    bar_width,
+                    color=colors[bf],
+                    alpha=0.65,
+                    hatch="///",
+                    label=f"{bf.capitalize()} (Horizon)",
+                )
+
+                # Removed value annotations on top of bars
+
+        ax.set_xticks(index)
+        ax.set_xticklabels([d.capitalize() for d in distances])
+
+        # First create betting function legend handles
+        bf_handles = []
+        bf_labels = []
+        for bf in betting_funcs:
+            bf_handles.append(plt.Rectangle((0, 0), 1, 1, color=colors[bf], alpha=0.85))
+            bf_labels.append(bf.capitalize())
+
+        # Then create method legend handles
+        method_handles = [
+            plt.Rectangle((0, 0), 1, 1, color="gray", alpha=0.85),
+            plt.Rectangle((0, 0), 1, 1, color="gray", alpha=0.65, hatch="///"),
+        ]
+        method_labels = ["Traditional", "Horizon"]
+        ax.legend(
+            method_handles,
+            method_labels,
+            loc="lower center",
+            fontsize=10,
+            frameon=True,
+        )
+
+        ax.set_xlabel("Distance Metric", fontsize=16)
+        ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
+        ax.set_ylim(0, 1.05)
+        ax.grid(True, linestyle=":", alpha=0.4)
 
     # 3. FPR with epsilon (bottom-left)
     ax = axs[1, 0]
@@ -796,53 +855,156 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
             fontsize=14,
         )
     else:
+        # Get epsilon values directly from data
         epsilon_values = sorted(df["epsilon"].unique())
+
+        # Explicitly define epsilon values to ensure they're shown
+        expected_epsilons = [0.2, 0.5, 0.9]  # Hardcoded based on data
 
         # Filter out beta betting function which doesn't depend on epsilon
         epsilon_betting_funcs = [bf for bf in betting_funcs if bf != "beta"]
 
-        # Plot for each betting function (except beta)
+        # Create full legend with all betting functions
+        legend_entries = []
+        for bf in betting_funcs:
+            # Traditional entry
+            legend_entries.append(
+                (
+                    plt.Line2D(
+                        [0],
+                        [0],
+                        color=colors[bf],
+                        linestyle="-",
+                        marker="o",
+                        linewidth=2.5,
+                        markersize=8,
+                        alpha=0.8,
+                    ),
+                    f"{bf.capitalize()} (Trad)",
+                )
+            )
+            # Horizon entry
+            legend_entries.append(
+                (
+                    plt.Line2D(
+                        [0],
+                        [0],
+                        color=colors[bf],
+                        linestyle="--",
+                        marker="s",
+                        linewidth=2.0,
+                        markersize=7,
+                        alpha=0.6,
+                    ),
+                    f"{bf.capitalize()} (Horizon)",
+                )
+            )
+
+        # Plot only non-beta betting functions
         for bf in epsilon_betting_funcs:
             subset = df[df["betting_func"] == bf]
             if not subset.empty:
-                epsilon_metrics = []
-
-                # Group by epsilon and calculate average FPR
+                # Traditional FPR
+                trad_epsilon_metrics = []
                 for eps in epsilon_values:
                     eps_data = subset[subset["epsilon"] == eps]
                     avg_fpr = eps_data["trad_fpr"].mean()
-
-                    epsilon_metrics.append(
+                    trad_epsilon_metrics.append(
                         {
                             "epsilon": eps,
-                            "fpr": avg_fpr,
+                            "FPR": avg_fpr,
+                            "Method": "Traditional",
                         }
                     )
 
-                eps_df = pd.DataFrame(epsilon_metrics)
+                # Horizon FPR
+                hor_epsilon_metrics = []
+                for eps in epsilon_values:
+                    eps_data = subset[subset["epsilon"] == eps]
+                    avg_fpr = eps_data["horizon_fpr"].mean()
+                    hor_epsilon_metrics.append(
+                        {
+                            "epsilon": eps,
+                            "FPR": avg_fpr,
+                            "Method": "Horizon",
+                        }
+                    )
 
-                # Plot FPR with improved line properties
+                # Plot Traditional FPR
+                trad_eps_df = pd.DataFrame(trad_epsilon_metrics)
                 ax.plot(
-                    eps_df["epsilon"],
-                    eps_df["fpr"],
+                    trad_eps_df["epsilon"],
+                    trad_eps_df["FPR"],
                     "o-",
                     color=colors[bf],
                     linewidth=2.5,
-                    markersize=9,
+                    markersize=8,
                     alpha=0.8,
-                    label=f"{bf.capitalize()}",
+                    solid_capstyle="round",
+                )
+
+                # Plot Horizon FPR
+                hor_eps_df = pd.DataFrame(hor_epsilon_metrics)
+                ax.plot(
+                    hor_eps_df["epsilon"],
+                    hor_eps_df["FPR"],
+                    "s--",
+                    color=colors[bf],
+                    linewidth=2.0,
+                    markersize=7,
+                    alpha=0.6,
+                    solid_capstyle="round",
                 )
 
         ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=16)
         ax.set_ylabel("False Positive Rate (FPR)", fontsize=16)
-        ax.set_ylim(0, min(1.05, max(df["trad_fpr"].max() * 1.2, 0.1)))
+
+        # Using a more direct approach to set x-axis ticks
+        # Clear existing ticks first
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+
+        # Set explicit x-axis limits with padding
+        ax.set_xlim(0.1, 1.0)
+
+        # Use hardcoded values that match the data
+        ax.set_xticks(expected_epsilons)
+        ax.set_xticklabels([f"{eps:.1f}" for eps in expected_epsilons])
+
+        # Ensure ticks are visible
+        ax.tick_params(axis="x", which="both", length=6, width=1.5, direction="out")
+
+        # Fix FPR y-axis scaling and formatting
+        # Find actual min and max FPR values
+        fpr_values = []
+        for bf in epsilon_betting_funcs:  # Only consider non-beta functions
+            subset = df[df["betting_func"] == bf]
+            if not subset.empty:
+                fpr_values.extend(subset["trad_fpr"].tolist())
+                fpr_values.extend(subset["horizon_fpr"].tolist())
+
+        if fpr_values:
+            max_fpr = max(fpr_values)
+            ax.set_ylim(0, max_fpr * 1.2)
+            formatter = ScalarFormatter(useMathText=True, useOffset=False)
+            formatter.set_scientific(True)
+            formatter.set_powerlimits((-3, 3))
+            ax.yaxis.set_major_formatter(formatter)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+
         ax.grid(True, linestyle=":", alpha=0.4)
+
+        # Use legend_entries for the full legend with all betting functions
+        handles, labels = zip(*legend_entries)
         ax.legend(
-            fontsize=14,
+            handles,
+            labels,
+            fontsize=10,
             loc="upper right",
             frameon=True,
             framealpha=0.9,
             handlelength=1.5,
+            ncol=2,
         )
 
     # 4. TPR with epsilon (bottom-right)
@@ -857,83 +1019,93 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
             fontsize=14,
         )
     else:
+        # Get epsilon values from data
         epsilon_values = sorted(df["epsilon"].unique())
 
-        # Filter out beta betting function which doesn't depend on epsilon
+        # Explicitly define epsilon values to ensure they're shown
+        expected_epsilons = [0.2, 0.5, 0.9]  # Hardcoded based on data
+
+        # Filter out beta betting function for plotting
         epsilon_betting_funcs = [bf for bf in betting_funcs if bf != "beta"]
 
         # Plot for each betting function (except beta)
         for bf in epsilon_betting_funcs:
             subset = df[df["betting_func"] == bf]
             if not subset.empty:
-                epsilon_metrics = []
-
-                # Group by epsilon and calculate average TPR
+                # Traditional TPR
+                trad_epsilon_metrics = []
                 for eps in epsilon_values:
                     eps_data = subset[subset["epsilon"] == eps]
                     avg_tpr = eps_data["trad_tpr"].mean()
-
-                    epsilon_metrics.append(
+                    trad_epsilon_metrics.append(
                         {
                             "epsilon": eps,
-                            "tpr": avg_tpr,
+                            "TPR": avg_tpr,
+                            "Method": "Traditional",
                         }
                     )
 
-                eps_df = pd.DataFrame(epsilon_metrics)
+                # Horizon TPR
+                hor_epsilon_metrics = []
+                for eps in epsilon_values:
+                    eps_data = subset[subset["epsilon"] == eps]
+                    avg_tpr = eps_data["horizon_tpr"].mean()
+                    hor_epsilon_metrics.append(
+                        {
+                            "epsilon": eps,
+                            "TPR": avg_tpr,
+                            "Method": "Horizon",
+                        }
+                    )
 
-                # Plot TPR with improved styling
+                # Plot Traditional TPR
+                trad_eps_df = pd.DataFrame(trad_epsilon_metrics)
                 ax.plot(
-                    eps_df["epsilon"],
-                    eps_df["tpr"],
+                    trad_eps_df["epsilon"],
+                    trad_eps_df["TPR"],
                     "o-",
                     color=colors[bf],
                     linewidth=2.5,
-                    markersize=9,
+                    markersize=8,
                     alpha=0.8,
-                    label=f"{bf.capitalize()}",
+                    solid_capstyle="round",
+                    label=f"{bf.capitalize()} (Trad)",
                 )
+
+                # Plot Horizon TPR
+                hor_eps_df = pd.DataFrame(hor_epsilon_metrics)
+                ax.plot(
+                    hor_eps_df["epsilon"],
+                    hor_eps_df["TPR"],
+                    "s--",
+                    color=colors[bf],
+                    linewidth=2.0,
+                    markersize=7,
+                    alpha=0.6,
+                    solid_capstyle="round",
+                    label=f"{bf.capitalize()} (Horizon)",
+                )
+
+        # Using the same direct approach to set x-axis ticks
+        # Clear existing ticks first
+        ax.set_xticks([])
+        ax.set_xticklabels([])
+
+        # Set explicit x-axis limits with padding
+        ax.set_xlim(0.1, 1.0)
+
+        # Use hardcoded values that match the data
+        ax.set_xticks(expected_epsilons)
+        ax.set_xticklabels([f"{eps:.1f}" for eps in expected_epsilons])
+
+        # Ensure ticks are visible
+        ax.tick_params(axis="x", which="both", length=6, width=1.5, direction="out")
 
         ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=16)
         ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
         ax.set_ylim(0, 1.05)
         ax.grid(True, linestyle=":", alpha=0.4)
-        ax.legend(
-            fontsize=14,
-            loc="lower right",
-            frameon=True,
-            framealpha=0.9,
-            handlelength=1.5,
-        )
 
-        # Better annotation with non-overlapping arrow
-        if epsilon_values and epsilon_betting_funcs:
-            eps_min = min(epsilon_values)
-            eps_max = max(epsilon_values)
-            eps_range = eps_max - eps_min
-
-            ax.annotate(
-                "Higher epsilon improves TPR\nfor aggressive detection",
-                xy=(eps_max - eps_range * 0.2, 0.75),  # Arrow endpoint
-                xytext=(eps_max - eps_range * 0.6, 0.45),  # Text position
-                fontsize=14,
-                ha="center",
-                va="center",
-                bbox=dict(
-                    boxstyle="round,pad=0.5",
-                    fc="white",
-                    alpha=0.9,
-                    edgecolor="lightgray",
-                ),
-                arrowprops=dict(
-                    arrowstyle="-|>",
-                    connectionstyle="arc3,rad=-0.2",
-                    linewidth=1.5,
-                    relpos=(0.8, 0.8),  # Connect from top-right of text box
-                ),
-            )
-
-    # Publication-ready styling applied at the end
     for i in range(2):
         for j in range(2):
             # Remove top and right spines
@@ -951,7 +1123,8 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
             axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
 
             # Format tick labels to avoid scientific notation and unnecessary decimals
-            axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
+            if (i == 0 and j == 1) or (i == 1 and j == 1):  # For TPR plots
+                axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
 
             # For x-axis ticks
             if (i == 0 and j == 0) or (
@@ -965,8 +1138,7 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     )
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
 
-    # Generate metrics for analysis log
-    # Find best threshold based on optimal TPR-FPR tradeoff
+    # Update the analysis log generation with more accurate metrics
     df_copy = df.copy()
     df_copy["score"] = (
         df_copy["trad_tpr"] - 5 * df_copy["trad_fpr"]
@@ -976,7 +1148,14 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     # Best distance metric
     best_distance = None
     if "distance" in df.columns:
-        best_distance = df.groupby("distance")["trad_tpr"].mean().idxmax()
+        distance_stats = df.groupby("distance").agg(
+            {
+                "trad_tpr": "mean",
+                "horizon_tpr": "mean",
+                "trad_fpr": "mean",
+            }
+        )
+        best_distance = distance_stats["trad_tpr"].idxmax()
 
     # Average metrics by threshold
     threshold_metrics = (
