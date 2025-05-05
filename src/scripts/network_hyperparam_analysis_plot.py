@@ -1371,29 +1371,39 @@ The analysis demonstrates the impact of epsilon on both TPR and FPR for epsilon-
 def plot_performance_timing_dashboard(
     df: pd.DataFrame, output_dir: str, network_name: str
 ):
-    """Create a 2x2 grid visualization focusing on detection timing and delay analysis."""
+    """Create a 1x2 grid visualization focusing on detection timing and delay analysis."""
     if df.empty:
         print("Error: No data available for performance timing analysis")
         return
 
-    # Create publication-ready figure with tighter layout
     fig, axs = plt.subplots(
+        1,
         2,
-        2,
-        figsize=(10, 8),  # Slightly smaller for more compact presentation
-        gridspec_kw={"wspace": 0.15, "hspace": 0.15},  # Tighter spacing
-        constrained_layout=True,  # Use constrained layout for better spacing
+        figsize=(12, 5),
+        gridspec_kw={"wspace": 0.2},
+        constrained_layout=True,
     )
-
-    # Remove tight_layout since we're using constrained_layout
-    # plt.tight_layout(pad=2.0, h_pad=2.0, w_pad=2.0)
 
     betting_funcs = sorted(df["betting_func"].unique())
     colors = {bf: BETTING_COLORS.get(bf, f"C{i}") for i, bf in enumerate(betting_funcs)}
 
-    # 1. Detection Delay by Window Size (top-left)
-    ax = axs[0, 0]
-    windows = sorted(df["window"].unique())
+    # 1. Detection Delay by Window Size (left)
+    ax = axs[0]
+    trad_style = {
+        "linewidth": 2.5,
+        "markersize": 8,
+        "alpha": 0.8,
+        "markeredgecolor": "white",
+        "markeredgewidth": 0.8,
+    }
+
+    horizon_style = {
+        "linewidth": 2.0,
+        "markersize": 7,
+        "alpha": 0.6,
+        "markeredgecolor": "white",
+        "markeredgewidth": 0.6,
+    }
 
     for bf in betting_funcs:
         subset = df[df["betting_func"] == bf]
@@ -1406,155 +1416,46 @@ def plot_performance_timing_dashboard(
                     window_groups["window"],
                     window_groups["traditional_avg_delay"],
                     "o-",
-                    label=bf.capitalize(),
+                    label=f"{bf.capitalize()} (Trad)",
                     color=colors[bf],
-                    linewidth=2.5,
-                    markersize=8,
-                    alpha=0.8,
-                    markeredgecolor="white",
-                    markeredgewidth=0.8,
+                    **trad_style,
+                )
+
+            horizon_window_groups = (
+                subset.groupby("window")["horizon_avg_delay"].mean().reset_index()
+            )
+            if (
+                not horizon_window_groups.empty
+                and not horizon_window_groups["horizon_avg_delay"].isna().all()
+            ):
+                ax.plot(
+                    horizon_window_groups["window"],
+                    horizon_window_groups["horizon_avg_delay"],
+                    "s--",
+                    label=f"{bf.capitalize()} (Horizon)",
+                    color=colors[bf],
+                    **horizon_style,
                 )
 
     ax.set_xlabel("Window Size", fontsize=16)
     ax.set_ylabel("Average Detection Delay", fontsize=16)
     ax.grid(True, linestyle=":", alpha=0.4)
-    ax.legend(fontsize=14, loc="best", frameon=True, framealpha=0.9, handlelength=1.5)
 
-    # Add annotation about window size effect with better positioning
-    if windows:
-        max_window = max(windows)
-        min_window = min(windows)
-        mid_x = (max_window + min_window) / 2
-        y_pos = ax.get_ylim()[0] + (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.8
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(
+        by_label.values(),
+        by_label.keys(),
+        fontsize=10,
+        loc="best",
+        frameon=True,
+        framealpha=0.9,
+        handlelength=1.5,
+        ncol=2,
+    )
 
-        # Use clearer positioning for annotation
-        ax.annotate(
-            "Larger windows improve\nmodel accuracy but\nincrease delay",
-            xy=(max_window - (max_window - min_window) * 0.2, y_pos),
-            xytext=(mid_x, y_pos * 0.6),
-            fontsize=14,
-            ha="center",
-            va="center",
-            bbox=dict(
-                boxstyle="round,pad=0.5",
-                fc="white",
-                alpha=0.9,
-                edgecolor="lightgray",
-            ),
-            arrowprops=dict(
-                arrowstyle="-|>",
-                connectionstyle="arc3,rad=0.2",
-                linewidth=1.5,
-                alpha=0.8,
-            ),
-            zorder=10,
-        )
-
-    # 2. Early Detection Capabilities (top-right)
-    ax = axs[0, 1]
-
-    # Analyze fraction of delay to horizon
-    if "traditional_avg_delay" in df.columns and "horizon" in df.columns:
-        df_with_ratio = df.copy()
-        # Calculate delay as a fraction of horizon
-        df_with_ratio["delay_ratio"] = (
-            df_with_ratio["traditional_avg_delay"] / df_with_ratio["horizon"]
-        )
-
-        # Group by betting function
-        boxprops = dict(linewidth=2.5, alpha=0.8)
-        whiskerprops = dict(linewidth=2.0, alpha=0.8)
-        medianprops = dict(linewidth=2.5, color="black")
-
-        # Make boxplots narrower and adjust plotting
-        sns.boxplot(
-            x="betting_func",
-            y="delay_ratio",
-            hue="betting_func",
-            data=df_with_ratio,
-            ax=ax,
-            palette=colors,
-            boxprops=boxprops,
-            whiskerprops=whiskerprops,
-            medianprops=medianprops,
-            showfliers=False,
-            legend=False,
-            width=0.6,  # Make boxes narrower
-        )
-
-        # Add individual points for better visibility
-        sns.stripplot(
-            x="betting_func",
-            y="delay_ratio",
-            data=df_with_ratio,
-            ax=ax,
-            color="black",
-            size=3,
-            alpha=0.3,
-            jitter=True,
-        )
-
-        ax.set_xlabel("Betting Function", fontsize=16)
-        ax.set_ylabel("Delay / Horizon Ratio", fontsize=16)
-
-        # First check the actual data range before setting limits
-        actual_max = df_with_ratio["delay_ratio"].max()
-
-        # Set y-axis limits to ensure all data is visible with padding
-        # Use a generous upper limit to ensure all data points and whiskers are shown
-        ax.set_ylim(0, max(2.0, actual_max * 1.1))
-
-        # Make the reference line more prominent
-        ax.axhline(y=1.0, color="r", linestyle="--", alpha=0.8, linewidth=2.5, zorder=5)
-        ax.grid(True, linestyle=":", alpha=0.4)
-
-        # Add shading below the red line to highlight early detection region
-        ax.axhspan(0, 1.0, alpha=0.1, color="green", zorder=1)
-
-        # Move the annotation to avoid overlapping with data
-        # Find position based on betting functions
-        bf_count = len(betting_funcs)
-
-        # Better positioned annotation
-        ax.annotate(
-            "Ideal early detection\n(before horizon end)",
-            xy=(bf_count - 1, 0.9),  # Point to right side near the red line
-            xytext=(bf_count / 2, 0.4),  # Position text lower and centered
-            fontsize=14,
-            ha="center",
-            va="center",
-            bbox=dict(
-                boxstyle="round,pad=0.5",
-                fc="white",
-                alpha=0.9,
-                edgecolor="lightgray",
-            ),
-            arrowprops=dict(
-                arrowstyle="-|>",
-                connectionstyle="arc3,rad=-0.2",
-                linewidth=1.5,
-                alpha=0.8,
-            ),
-        )
-
-        # Format x-tick labels
-        ticks = ax.get_xticks()
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(
-            [x.get_text().capitalize() for x in ax.get_xticklabels()], fontsize=12
-        )
-        ax.tick_params(axis="y", labelsize=12)
-
-        # Set a reasonable y-axis limit
-        y_max = df_with_ratio["delay_ratio"].max() * 1.15
-        ax.set_ylim(0, y_max)
-
-    # 3. Delay Reduction by Parameter (bottom-left)
-    ax = axs[1, 0]
-
-    # We'll use threshold as the parameter for delay reduction
-    thresholds = sorted(df["threshold"].unique())
-
+    # 2. Delay Reduction by Parameter (right)
+    ax = axs[1]
     for bf in betting_funcs:
         subset = df[df["betting_func"] == bf]
         if not subset.empty:
@@ -1574,207 +1475,58 @@ def plot_performance_timing_dashboard(
                     threshold_groups["threshold"],
                     threshold_groups["traditional_avg_delay"],
                     "o-",
-                    label=bf.capitalize(),
+                    label=f"{bf.capitalize()} (Trad)",
                     color=colors[bf],
-                    linewidth=2.5,
-                    markersize=8,
-                    alpha=0.8,
-                    markeredgecolor="white",
-                    markeredgewidth=0.8,
+                    **trad_style,
+                )
+
+            horizon_threshold_groups = (
+                subset.groupby("threshold")
+                .agg(
+                    {
+                        "horizon_avg_delay": "mean",
+                    }
+                )
+                .reset_index()
+            )
+
+            if (
+                not horizon_threshold_groups.empty
+                and not horizon_threshold_groups["horizon_avg_delay"].isna().all()
+            ):
+                ax.plot(
+                    horizon_threshold_groups["threshold"],
+                    horizon_threshold_groups["horizon_avg_delay"],
+                    "s--",
+                    label=f"{bf.capitalize()} (Horizon)",
+                    color=colors[bf],
+                    **horizon_style,
                 )
 
     ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=16)
     ax.set_ylabel("Average Detection Delay", fontsize=16)
     ax.grid(True, linestyle=":", alpha=0.4)
-    ax.legend(fontsize=14, loc="best", frameon=True, framealpha=0.9, handlelength=1.5)
 
-    # Add informative annotation about threshold impact
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-
-    # Determine if threshold increases or decreases delay
-    if len(thresholds) > 1:
-        if (
-            df.groupby("threshold")["traditional_avg_delay"]
-            .mean()
-            .corr(pd.Series(sorted(df["threshold"].unique())))
-            > 0
-        ):
-            trend = "increases"
-            arrow_dir = 0.2  # Positive arc
-        else:
-            trend = "decreases"
-            arrow_dir = -0.2  # Negative arc
-
-        ax.annotate(
-            f"Higher threshold\n{trend} detection delay",
-            xy=(
-                xlim[1] - (xlim[1] - xlim[0]) * 0.2,
-                ylim[0] + (ylim[1] - ylim[0]) * 0.7,
-            ),
-            xytext=(
-                xlim[0] + (xlim[1] - xlim[0]) * 0.5,
-                ylim[0] + (ylim[1] - ylim[0]) * 0.4,
-            ),
-            fontsize=14,
-            ha="center",
-            va="center",
-            bbox=dict(
-                boxstyle="round,pad=0.5",
-                fc="white",
-                alpha=0.9,
-                edgecolor="lightgray",
-            ),
-            arrowprops=dict(
-                arrowstyle="-|>",
-                connectionstyle=f"arc3,rad={arrow_dir}",
-                linewidth=1.5,
-                alpha=0.8,
-            ),
-            zorder=10,
-        )
-
-    # 4. Optimal Configuration Regions (bottom-right)
-    ax = axs[1, 1]
-
-    # Create a scatter plot with delay vs TPR, colored by betting function
-    # Size points by FPR (smaller is better)
-
-    # First, calculate metrics for each configuration
-    config_metrics = (
-        df.groupby(["betting_func", "threshold", "window"])
-        .agg(
-            {
-                "traditional_avg_delay": "mean",
-                "trad_tpr": "mean",
-                "trad_fpr": "mean",
-            }
-        )
-        .reset_index()
-    )
-
-    # Size inversely proportional to FPR (smaller FPR = larger point)
-    # Add small constant to avoid division by zero
-    config_metrics["point_size"] = 100 / (config_metrics["trad_fpr"] + 0.005)
-
-    # Cap the size for very small FPRs
-    config_metrics["point_size"] = config_metrics["point_size"].clip(20, 200)
-
-    # Use edgecolor for better visibility
-    for bf in betting_funcs:
-        subset = config_metrics[config_metrics["betting_func"] == bf]
-        if not subset.empty:
-            ax.scatter(
-                subset["traditional_avg_delay"],
-                subset["trad_tpr"],
-                s=subset["point_size"],
-                alpha=0.7,
-                label=bf.capitalize(),
-                color=colors[bf],
-                edgecolor="white",
-                linewidth=0.5,
-            )
-
-    # Highlight optimal region more clearly
-    ax.axhspan(0.8, 1.0, alpha=0.15, color="green", zorder=0)
-
-    # Add thin gridlines
-    ax.grid(True, linestyle=":", alpha=0.4, zorder=0)
-
-    ax.set_xlabel("Detection Delay", fontsize=16)
-    ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
-    ax.set_ylim(0, 1.05)
-
-    # Add legend for betting functions with better placement
-    ax.legend(
-        fontsize=14,
-        loc="lower right",
-        frameon=True,
-        framealpha=0.9,
-        handlelength=1.5,
-        markerscale=0.8,  # Make legend markers smaller
-    )
-
-    # Move annotation for point size to better location
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-    x_pos = xlim[0] + (xlim[1] - xlim[0]) * 0.25
-
-    # Avoid overlapping with data points
-    ax.annotate(
-        "Point size $\\propto 1/FPR$\n(larger = better)",
-        xy=(x_pos, 0.2),  # Arrow endpoint
-        xytext=(x_pos, 0.08),  # Text position - moved lower
-        fontsize=14,
-        ha="center",
-        va="center",
-        bbox=dict(
-            boxstyle="round,pad=0.5",
-            fc="white",
-            alpha=0.9,
-            edgecolor="lightgray",
-        ),
-        arrowprops=dict(
-            arrowstyle="-|>",
-            connectionstyle="arc3,rad=0.2",
-            linewidth=1.5,
-        ),
-        zorder=10,
-    )
-
-    # Better position for optimal region annotation
-    ax.annotate(
-        "Optimal region\n(high TPR, low delay)",
-        xy=(
-            xlim[0] + (xlim[1] - xlim[0]) * 0.25,
-            0.9,
-        ),  # Arrow endpoint in green region
-        xytext=(xlim[0] + (xlim[1] - xlim[0]) * 0.5, 0.65),  # Text centered and lower
-        fontsize=14,
-        ha="center",
-        va="center",
-        bbox=dict(
-            boxstyle="round,pad=0.5",
-            fc="white",
-            alpha=0.9,
-            edgecolor="lightgray",
-        ),
-        arrowprops=dict(
-            arrowstyle="-|>",
-            connectionstyle="arc3,rad=-0.2",
-            linewidth=1.5,
-        ),
-        zorder=10,
-    )
-
-    # Publication-ready styling for all subplots
     for i in range(2):
-        for j in range(2):
-            # Remove top and right spines
-            axs[i, j].spines["top"].set_visible(False)
-            axs[i, j].spines["right"].set_visible(False)
+        # Remove top and right spines
+        axs[i].spines["top"].set_visible(False)
+        axs[i].spines["right"].set_visible(False)
 
-            # Make bottom and left spines slightly thicker
-            axs[i, j].spines["bottom"].set_linewidth(1.2)
-            axs[i, j].spines["left"].set_linewidth(1.2)
+        # Make bottom and left spines slightly thicker
+        axs[i].spines["bottom"].set_linewidth(1.2)
+        axs[i].spines["left"].set_linewidth(1.2)
 
-            # Add subtle tick marks
-            axs[i, j].tick_params(direction="out", length=4, width=1.2, pad=4)
+        # Add subtle tick marks
+        axs[i].tick_params(direction="out", length=4, width=1.2, pad=4)
 
-            # Ensure y-axis has enough ticks for readability
-            axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
+        # Ensure y-axis has enough ticks for readability
+        axs[i].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
 
-            # Format tick labels to avoid scientific notation and unnecessary decimals
-            if i == 0 and j == 1:  # For Delay/Horizon Ratio plot
-                axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
-            else:  # For other plots
-                axs[i, j].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
+        # Format tick labels to avoid scientific notation and unnecessary decimals
+        axs[i].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
 
-            # For x-axis ticks
-            if (i == 0 and j == 0) or (
-                i == 1 and j == 0
-            ):  # Window Size and Threshold plots
-                axs[i, j].xaxis.set_major_locator(MaxNLocator(integer=True))
+        # For x-axis ticks
+        axs[i].xaxis.set_major_locator(MaxNLocator(integer=True))
 
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
@@ -1856,14 +1608,7 @@ def generate_performance_timing_analysis_log(
 - window_size_impact: Larger windows generally increase detection delay but can improve model accuracy
 - window_delay_correlation: {df.groupby("window")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["window"].unique()))):.4f}
 
-## Early Detection Analysis
-
-- best_betting_function_for_early_detection: {best_bf_for_early.capitalize()}
-- early_detection_rate: {early_detection_rate:.2f}% (detection before horizon end)
-- avg_delay_ratio: {df_with_ratio["delay_ratio"].mean():.4f} (delay as fraction of horizon)
-- early_detection_advantage: Detecting anomalies before the end of the prediction horizon enables proactive responses
-
-## Delay Reduction Analysis
+## Threshold Impact
 
 - threshold_delay_correlation: {df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique()))):.4f}
 - parameter_with_most_delay_impact: {"threshold" if abs(df.groupby("threshold")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["threshold"].unique())))) > abs(df.groupby("window")["traditional_avg_delay"].mean().corr(pd.Series(sorted(df["window"].unique())))) else "window"}
@@ -1880,28 +1625,17 @@ def generate_performance_timing_analysis_log(
 
 ## Plot Description
 
-The visualization consists of a 2x2 grid that shows:
+The visualization consists of a 1x2 grid that shows:
 
-### 1. Detection Delay by Window Size (top-left)
+### 1. Detection Delay by Window Size (left)
 - Shows how window size affects detection delay for each betting function
 - Larger windows typically increase delay but may improve model accuracy
 - Useful for selecting optimal window size based on application needs
 
-### 2. Early Detection Capabilities (top-right)
-- Compares delay/horizon ratio across betting functions
-- Ratio < 1.0 indicates detection before the prediction horizon ends
-- Helps identify betting functions that excel at early anomaly detection
-
-### 3. Delay Reduction by Threshold (bottom-left)
+### 2. Delay Reduction by Threshold (right)
 - Shows relationship between detection threshold and delay
 - Helps identify thresholds that minimize detection delay
 - Useful for delay-sensitive applications
-
-### 4. Optimal Configuration Regions (bottom-right)
-- Scatter plot positioning configurations by delay and TPR
-- Point size inversely proportional to FPR (larger = better)
-- Highlights optimal region with high TPR and low delay
-- Provides visual guide for parameter selection based on priorities
 
 ## Summary
 
@@ -1919,474 +1653,6 @@ For applications where early detection is critical, the analysis suggests using 
         f.write(log_content)
 
     print(f"Saved performance timing analysis log to {log_path}")
-
-
-# ---------------------------------------------------------------------------
-# ---------------- (4) HORIZON VS TRADITIONAL COMPARISON GRID --------------
-# ---------------------------------------------------------------------------
-def plot_horizon_comparison_grid(df: pd.DataFrame, output_dir: str, network_name: str):
-    """Create visualization comparing horizon and traditional approaches."""
-    if df.empty:
-        print("Error: No data available for horizon comparison analysis")
-        return
-
-    # Filter out rows with missing delay values
-    df_clean = df.dropna(subset=["traditional_avg_delay", "horizon_avg_delay"]).copy()
-
-    if len(df_clean) == 0:
-        print("Error: No valid delay data for horizon comparison")
-        return
-
-    # Create publication-ready figure with tight layout
-    plt.rcParams["font.family"] = "serif"
-    plt.rcParams["font.serif"] = ["Computer Modern Roman"] + plt.rcParams["font.serif"]
-
-    # Create 1x3 layout instead of 2x2
-    fig, axs = plt.subplots(
-        1,
-        3,
-        figsize=(15, 5),  # Wider and shorter for a single row
-        gridspec_kw={"wspace": 0.20},  # Adjust spacing between plots
-        constrained_layout=True,
-    )
-
-    # Define a better color palette for Traditional vs Horizon
-    trad_color = "#2C5F7F"  # Deeper blue
-    horizon_color = "#FF8C38"  # Warmer orange
-    method_palette = [trad_color, horizon_color]
-
-    betting_funcs = sorted(df_clean["betting_func"].unique())
-
-    # 1. Delay Comparison: Traditional vs Horizon (left)
-    ax = axs[0]
-
-    # Group by betting function and calculate average delays
-    delay_comp = []
-    for bf in betting_funcs:
-        bf_data = df_clean[df_clean["betting_func"] == bf]
-        if not bf_data.empty:
-            trad_delay = bf_data["traditional_avg_delay"].mean()
-            hor_delay = bf_data["horizon_avg_delay"].mean()
-            delay_comp.append(
-                {"betting_func": bf, "Traditional": trad_delay, "Horizon": hor_delay}
-            )
-
-    delay_df = pd.DataFrame(delay_comp)
-    if not delay_df.empty:
-        # Convert to long format for grouped bar plot
-        delay_long = pd.melt(
-            delay_df,
-            id_vars=["betting_func"],
-            value_vars=["Traditional", "Horizon"],
-            var_name="Method",
-            value_name="Delay",
-        )
-
-        # Create grouped bar plot with better styling
-        barplot = sns.barplot(
-            x="betting_func",
-            y="Delay",
-            hue="Method",
-            data=delay_long,
-            ax=ax,
-            palette=method_palette,
-            width=0.7,  # Slightly narrower bars
-            edgecolor="black",  # Add black edge for better definition
-            linewidth=0.8,
-        )
-
-        # Make bar edges more visible
-        for patch in barplot.patches:
-            r, g, b, a = patch.get_facecolor()
-            patch.set_facecolor((r, g, b, 0.8))  # Make bars slightly transparent
-
-        # Calculate percentage improvement for annotation
-        for i, bf in enumerate(delay_df["betting_func"]):
-            trad = delay_df.loc[delay_df["betting_func"] == bf, "Traditional"].values[0]
-            hor = delay_df.loc[delay_df["betting_func"] == bf, "Horizon"].values[0]
-            if trad > 0:  # Avoid division by zero
-                pct_improve = (trad - hor) / trad * 100
-                if pct_improve > 0:  # Only show positive improvements
-                    # Create better annotation background
-                    ax.annotate(
-                        f"-{pct_improve:.1f}%",
-                        xy=(i, hor),
-                        xytext=(0, -15),
-                        textcoords="offset points",
-                        ha="center",
-                        va="top",
-                        fontsize=10,
-                        fontweight="bold",
-                        color="#006400",  # Dark green
-                        bbox=dict(
-                            boxstyle="round,pad=0.2",
-                            fc="#F8F8F8",
-                            ec="#CCCCCC",
-                            alpha=0.9,
-                        ),
-                    )
-
-        ax.set_xlabel("")
-        ax.set_ylabel("Average Detection Delay", fontsize=14, fontweight="bold")
-
-        # Move legend to better position
-        ax.legend(
-            fontsize=12,
-            title_fontsize=13,
-            loc="upper right",
-            frameon=True,
-            framealpha=0.9,
-            edgecolor="#CCCCCC",
-        )
-
-        # Format x-tick labels
-        ticks = ax.get_xticks()
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(
-            [x.get_text().capitalize() for x in ax.get_xticklabels()], fontsize=12
-        )
-        ax.tick_params(axis="y", labelsize=12)
-
-        # Set a reasonable y-axis limit
-        y_max = delay_long["Delay"].max() * 1.15
-        ax.set_ylim(0, y_max)
-
-    # 2. TPR Comparison: Traditional vs Horizon (middle)
-    ax = axs[1]
-
-    # Group by betting function and calculate average TPR
-    tpr_comp = []
-    for bf in betting_funcs:
-        bf_data = df_clean[df_clean["betting_func"] == bf]
-        if not bf_data.empty:
-            trad_tpr = bf_data["trad_tpr"].mean()
-            hor_tpr = bf_data["horizon_tpr"].mean()
-            tpr_comp.append(
-                {"betting_func": bf, "Traditional": trad_tpr, "Horizon": hor_tpr}
-            )
-
-    tpr_df = pd.DataFrame(tpr_comp)
-    if not tpr_df.empty:
-        # Convert to long format for grouped bar plot
-        tpr_long = pd.melt(
-            tpr_df,
-            id_vars=["betting_func"],
-            value_vars=["Traditional", "Horizon"],
-            var_name="Method",
-            value_name="TPR",
-        )
-
-        # Create grouped bar plot with better styling
-        barplot = sns.barplot(
-            x="betting_func",
-            y="TPR",
-            hue="Method",
-            data=tpr_long,
-            ax=ax,
-            palette=method_palette,
-            width=0.7,
-            edgecolor="black",
-            linewidth=0.8,
-        )
-
-        # Make bar edges more visible
-        for patch in barplot.patches:
-            r, g, b, a = patch.get_facecolor()
-            patch.set_facecolor((r, g, b, 0.8))  # Make bars slightly transparent
-
-        # Calculate percentage improvement for annotation
-        for i, bf in enumerate(tpr_df["betting_func"]):
-            trad = tpr_df.loc[tpr_df["betting_func"] == bf, "Traditional"].values[0]
-            hor = tpr_df.loc[tpr_df["betting_func"] == bf, "Horizon"].values[0]
-            if trad > 0:  # Avoid division by zero
-                pct_improve = (hor - trad) / trad * 100
-                if pct_improve > 5:  # Only show significant improvements
-                    ax.annotate(
-                        f"+{pct_improve:.1f}%",
-                        xy=(i, hor),
-                        xytext=(0, -10),
-                        textcoords="offset points",
-                        ha="center",
-                        va="top",
-                        fontsize=10,
-                        fontweight="bold",
-                        color="#006400",
-                        bbox=dict(
-                            boxstyle="round,pad=0.2",
-                            fc="#F8F8F8",
-                            ec="#CCCCCC",
-                            alpha=0.9,
-                        ),
-                    )
-
-        ax.set_xlabel("")
-        ax.set_ylabel("True Positive Rate (TPR)", fontsize=14, fontweight="bold")
-
-        # Move legend to better position
-        ax.legend(
-            fontsize=12,
-            title_fontsize=13,
-            loc="upper left",
-            frameon=True,
-            framealpha=0.9,
-            edgecolor="#CCCCCC",
-        )
-
-        ax.set_ylim(0, 1.05)
-
-        # Format x-tick labels
-        ticks = ax.get_xticks()
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(
-            [x.get_text().capitalize() for x in ax.get_xticklabels()], fontsize=12
-        )
-        ax.tick_params(axis="y", labelsize=12)
-
-    # 3. FPR Comparison (right)
-    ax = axs[2]
-
-    # Group by betting function and calculate average FPR
-    fpr_comp = []
-    for bf in betting_funcs:
-        bf_data = df_clean[df_clean["betting_func"] == bf]
-        if not bf_data.empty:
-            trad_fpr = bf_data["trad_fpr"].mean()
-            hor_fpr = bf_data["horizon_fpr"].mean()
-            fpr_comp.append(
-                {"betting_func": bf, "Traditional": trad_fpr, "Horizon": hor_fpr}
-            )
-
-    fpr_df = pd.DataFrame(fpr_comp)
-    if not fpr_df.empty:
-        # Convert to long format for grouped bar plot
-        fpr_long = pd.melt(
-            fpr_df,
-            id_vars=["betting_func"],
-            value_vars=["Traditional", "Horizon"],
-            var_name="Method",
-            value_name="FPR",
-        )
-
-        # Create grouped bar plot with better styling
-        barplot = sns.barplot(
-            x="betting_func",
-            y="FPR",
-            hue="Method",
-            data=fpr_long,
-            ax=ax,
-            palette=method_palette,
-            width=0.7,
-            edgecolor="black",
-            linewidth=0.8,
-        )
-
-        # Make bar edges more visible
-        for patch in barplot.patches:
-            r, g, b, a = patch.get_facecolor()
-            patch.set_facecolor((r, g, b, 0.8))  # Make bars slightly transparent
-
-        ax.set_xlabel("")
-        ax.set_ylabel("False Positive Rate (FPR)", fontsize=14, fontweight="bold")
-
-        # Use scientific notation for small FPR values
-        from matplotlib.ticker import ScalarFormatter, FormatStrFormatter
-
-        formatter = ScalarFormatter(useMathText=True)
-        formatter.set_scientific(True)
-        formatter.set_powerlimits((-3, 3))
-        ax.yaxis.set_major_formatter(formatter)
-
-        # Set reasonable y-axis limits for FPR plot
-        max_fpr = max(fpr_long["FPR"].max() * 1.2, 0.05)  # Set reasonable upper limit
-        ax.set_ylim(0, min(max_fpr, 0.05))  # Cap at 0.05 to avoid excessive empty space
-
-        # Move legend to better position
-        ax.legend(
-            fontsize=12,
-            title_fontsize=13,
-            loc="upper right",
-            frameon=True,
-            framealpha=0.9,
-            edgecolor="#CCCCCC",
-        )
-
-        # Format x-tick labels
-        ticks = ax.get_xticks()
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(
-            [x.get_text().capitalize() for x in ax.get_xticklabels()], fontsize=12
-        )
-        ax.tick_params(axis="y", labelsize=12)
-
-    # Apply publication-ready styling to all subplots
-    for i in range(3):
-        # Remove top and right spines
-        axs[i].spines["top"].set_visible(False)
-        axs[i].spines["right"].set_visible(False)
-
-        # Make bottom and left spines slightly thicker
-        axs[i].spines["bottom"].set_linewidth(1.5)
-        axs[i].spines["left"].set_linewidth(1.5)
-
-        # Add subtle tick marks
-        axs[i].tick_params(direction="out", length=5, width=1.5, pad=5)
-
-        # Add grid but only for y-axis and more subtle
-        axs[i].grid(True, axis="y", linestyle=":", linewidth=0.7, alpha=0.3, zorder=0)
-
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(
-        output_dir, f"{network_name}_horizon_comparison_grid.png"
-    )
-
-    # Save high-resolution version
-    plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
-
-    generate_horizon_comparison_analysis_log(df_clean, output_dir, network_name)
-
-    print(f"Saved horizon comparison grid to {output_path}")
-    plt.close(fig)
-
-
-def generate_horizon_comparison_analysis_log(
-    df: pd.DataFrame, output_dir: str, network_name: str
-):
-    """Generate analysis log for horizon vs traditional comparison."""
-    data_points = len(df)
-
-    # Calculate average improvement metrics
-    avg_delay_reduction = (
-        (df["traditional_avg_delay"] - df["horizon_avg_delay"])
-        / df["traditional_avg_delay"]
-    ).mean() * 100
-
-    # Calculate TPR improvements
-    tpr_improvement = (df["horizon_tpr"] - df["trad_tpr"]).mean() * 100
-
-    # Calculate FPR changes (negative is better)
-    fpr_change = (df["horizon_fpr"] - df["trad_fpr"]).mean() * 100
-
-    # Summarize by betting function
-    betting_summary = []
-    for bf in sorted(df["betting_func"].unique()):
-        subset = df[df["betting_func"] == bf]
-        if not subset.empty:
-            delay_red = (
-                (subset["traditional_avg_delay"] - subset["horizon_avg_delay"])
-                / subset["traditional_avg_delay"]
-            ).mean() * 100
-            tpr_imp = (subset["horizon_tpr"] - subset["trad_tpr"]).mean() * 100
-            fpr_chg = (subset["horizon_fpr"] - subset["trad_fpr"]).mean() * 100
-
-            betting_summary.append(
-                {
-                    "betting_func": bf,
-                    "delay_reduction_pct": delay_red,
-                    "tpr_improvement_pct": tpr_imp,
-                    "fpr_change_pct": fpr_chg,
-                    "trad_tpr": subset["trad_tpr"].mean(),
-                    "horizon_tpr": subset["horizon_tpr"].mean(),
-                    "trad_delay": subset["traditional_avg_delay"].mean(),
-                    "horizon_delay": subset["horizon_avg_delay"].mean(),
-                }
-            )
-
-    bf_summary_df = pd.DataFrame(betting_summary)
-
-    # Find best betting function for horizon approach
-    best_bf_idx = None
-    if not bf_summary_df.empty:
-        # Score = TPR improvement + Delay reduction - FPR increase
-        bf_summary_df["score"] = (
-            bf_summary_df["tpr_improvement_pct"]
-            + bf_summary_df["delay_reduction_pct"]
-            - abs(bf_summary_df["fpr_change_pct"])
-        )
-        best_bf_idx = bf_summary_df["score"].idxmax()
-
-    log_content = f"""# Horizon vs. Traditional Comparison Analysis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-## General Information
-
-- network_type: {NETWORK_NAMES.get(network_name, network_name.upper())}
-- analysis_date: {datetime.now().strftime("%Y-%m-%d")}
-- data_points: {data_points}
-
-## Overall Performance Impact
-
-- average_delay_reduction: {avg_delay_reduction:.2f}% (positive values indicate horizon is faster)
-- tpr_improvement: {tpr_improvement:.2f}% (positive values indicate horizon has better detection rate)
-- fpr_change: {fpr_change:.2f}% (negative values indicate horizon has lower false positive rate)
-
-## Performance by Betting Function
-
-"""
-
-    if not bf_summary_df.empty:
-        # Add table headers
-        log_content += "Betting Function | Delay Reduction | TPR Improvement | FPR Change | Traditional TPR | Horizon TPR | Traditional Delay | Horizon Delay\n"
-        log_content += "--------------- | -------------- | -------------- | ---------- | -------------- | ---------- | ---------------- | ------------\n"
-
-        # Add data rows
-        for _, row in bf_summary_df.iterrows():
-            log_content += (
-                f"{row['betting_func'].capitalize()} | "
-                f"{row['delay_reduction_pct']:.2f}% | "
-                f"{row['tpr_improvement_pct']:.2f}% | "
-                f"{row['fpr_change_pct']:.2f}% | "
-                f"{row['trad_tpr']:.4f} | "
-                f"{row['horizon_tpr']:.4f} | "
-                f"{row['trad_delay']:.2f} | "
-                f"{row['horizon_delay']:.2f}\n"
-            )
-
-        # Add best betting function for horizon
-        if best_bf_idx is not None:
-            best_bf = bf_summary_df.loc[best_bf_idx, "betting_func"]
-            log_content += f"\n### Best Betting Function for Horizon Approach\n\n"
-            log_content += f"The **{best_bf.capitalize()}** betting function shows the best overall improvement with the horizon approach, "
-            log_content += f"with {bf_summary_df.loc[best_bf_idx, 'delay_reduction_pct']:.2f}% delay reduction and "
-            log_content += f"{bf_summary_df.loc[best_bf_idx, 'tpr_improvement_pct']:.2f}% TPR improvement.\n"
-
-    log_content += """
-## Plot Description
-
-The visualization consists of a 2x2 grid that shows:
-
-### 1. Delay Comparison (top-left)
-- Compares average detection delay between traditional and horizon approaches
-- Shows percentage improvement for each betting function
-- Lower bars indicate better performance
-
-### 2. TPR Comparison (top-right)
-- Compares true positive rate between traditional and horizon approaches
-- Shows percentage improvement for significant improvements
-- Higher bars indicate better performance
-
-### 3. Delay Reduction Distribution (bottom-left)
-- Shows the distribution of delay reduction percentages by betting function
-- Highlights the betting function with the best average reduction
-- Higher values indicate more improvement with the horizon approach
-
-### 4. FPR Comparison (bottom-right)
-- Compares false positive rates between traditional and horizon approaches
-- Shows the theoretical bound as a reference
-- Lower bars indicate better performance
-
-## Summary
-
-The horizon approach demonstrates substantial improvements over the traditional approach in terms of detection speed and accuracy. It achieves an average of {avg_delay_reduction:.2f}% reduction in detection delay while also improving the true positive rate by {tpr_improvement:.2f}%.
-
-This analysis highlights the effectiveness of incorporating prediction horizons in the anomaly detection framework, enabling earlier detection of changes with comparable or better accuracy. The improvements are particularly pronounced with certain betting functions, suggesting that the choice of betting function can significantly impact the benefits gained from the horizon approach.
-"""
-
-    log_path = os.path.join(
-        output_dir, f"{network_name}_horizon_comparison_analysis_log.md"
-    )
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write(log_content)
-
-    print(f"Saved horizon comparison analysis log to {log_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -2416,7 +1682,7 @@ def main():
         "-p",
         type=str,
         default="all",
-        choices=["betting", "accuracy", "timing", "horizon", "all"],
+        choices=["betting", "accuracy", "timing", "all"],
         help="Type of plot to generate (default: all)",
     )
 
@@ -2442,10 +1708,6 @@ def main():
                 df_network_clean, args.output_dir, args.network_name
             )
 
-        if args.plot_type in ["horizon", "all"]:
-            plot_horizon_comparison_grid(
-                df_network_clean, args.output_dir, args.network_name
-            )
     else:
         print(f"Error: Could not load {args.network_name} network data")
 
