@@ -49,6 +49,11 @@ BETTING_COLORS = {
     "normal": "#3182bd",  # Blue
 }
 
+STREAM_COLORS = {
+    "trad_color": "#2C5F7F",  # Deeper blue for traditional
+    "horizon_color": "#FF8C38",  # Warmer orange for horizon
+}
+
 
 def load_analysis_results(network_name: str) -> Optional[pd.DataFrame]:
     """Load hyperparameter analysis results from CSV file."""
@@ -89,115 +94,271 @@ def plot_betting_function_comparison(
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
     betting_funcs = sorted(df["betting_func"].unique())
-    colors = {bf: BETTING_COLORS.get(bf, f"C{i}") for i, bf in enumerate(betting_funcs)}
     plot_df = df.copy()
+    plot_df = plot_df.dropna(subset=["trad_tpr", "horizon_tpr"], how="all")
+
+    # Make sure betting_func is treated as categorical for proper ordering
     plot_df["betting_func"] = pd.Categorical(
         plot_df["betting_func"], categories=betting_funcs
     )
+    boxprops = dict(linewidth=2.0, alpha=0.8)
+    whiskerprops = dict(linewidth=1.5, alpha=0.8)
+    medianprops = dict(linewidth=2.0, color="black")
+    flierprops = dict(marker="o", markerfacecolor="gray", markersize=3, alpha=0.5)
 
-    boxprops = dict(linewidth=2.5, alpha=0.8)
-    whiskerprops = dict(linewidth=2.0, alpha=0.8)
-    medianprops = dict(linewidth=2.5, color="black")
-
-    # 1. Plot TPR by betting function
+    # 1. Plot TPR by betting function (traditional vs horizon)
     ax = axs[0]
+    tpr_data = []
+    for bf in betting_funcs:
+        bf_data = plot_df[plot_df["betting_func"] == bf]
+        if not bf_data.empty:
+            for tpr in bf_data["trad_tpr"]:
+                tpr_data.append(
+                    {"betting_func": bf, "Method": "Traditional", "TPR": tpr}
+                )
+            for tpr in bf_data["horizon_tpr"].dropna():
+                tpr_data.append({"betting_func": bf, "Method": "Horizon", "TPR": tpr})
+    tpr_df = pd.DataFrame(tpr_data)
     sns.boxplot(
         x="betting_func",
-        y="trad_tpr",
-        hue="betting_func",
-        data=plot_df,
+        y="TPR",
+        hue="Method",
+        data=tpr_df,
         ax=ax,
-        palette=colors,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
         boxprops=boxprops,
         whiskerprops=whiskerprops,
         medianprops=medianprops,
-        showfliers=False,
-        legend=False,
+        flierprops=flierprops,
+        showfliers=True,
+        width=0.7,
     )
     sns.stripplot(
         x="betting_func",
-        y="trad_tpr",
-        data=plot_df,
+        y="TPR",
+        hue="Method",
+        data=tpr_df,
         ax=ax,
-        color="black",
-        size=3,
-        alpha=0.3,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
+        size=2.5,
+        alpha=0.4,
         jitter=True,
+        dodge=True,
+        legend=False,
     )
+    for bf in betting_funcs:
+        bf_data = plot_df[plot_df["betting_func"] == bf]
+        if not bf_data.empty:
+            trad_tpr = bf_data["trad_tpr"].mean()
+            hor_tpr = bf_data["horizon_tpr"].mean()
+            if not np.isnan(hor_tpr) and trad_tpr > 0:
+                pct_improve = (hor_tpr - trad_tpr) / trad_tpr * 100
+                if pct_improve > 5:
+                    bf_idx = list(betting_funcs).index(bf)
+                    ax.annotate(
+                        f"+{pct_improve:.1f}%",
+                        xy=(bf_idx + 0.2, hor_tpr + 0.03),
+                        ha="center",
+                        va="bottom",
+                        fontsize=10,
+                        fontweight="bold",
+                        color="#006400",
+                        bbox=dict(
+                            boxstyle="round,pad=0.2",
+                            fc="#F8F8F8",
+                            ec="#CCCCCC",
+                            alpha=0.9,
+                        ),
+                    )
 
-    ax.set_xlabel("")
-    ax.set_ylabel(r"True Positive Rate (TPR)", fontsize=14)
+    ax.set_xlabel("", fontsize=14)
+    ax.set_ylabel("True Positive Rate (TPR)", fontsize=14, fontweight="bold")
     ax.set_ylim(0, 1.05)
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
     ax.set_xticks(ticks)
     ax.set_xticklabels([x.get_text().capitalize() for x in ax.get_xticklabels()])
+    ax.legend().remove()
 
-    # 2. Plot Detection Delay by betting function
+    # 2. Plot Detection Delay by betting function (traditional vs horizon)
     ax = axs[1]
+    delay_data = []
+    for bf in betting_funcs:
+        bf_data = plot_df[plot_df["betting_func"] == bf]
+        if not bf_data.empty:
+            for delay in bf_data["traditional_avg_delay"].dropna():
+                delay_data.append(
+                    {"betting_func": bf, "Method": "Traditional", "Delay": delay}
+                )
+            for delay in bf_data["horizon_avg_delay"].dropna():
+                delay_data.append(
+                    {"betting_func": bf, "Method": "Horizon", "Delay": delay}
+                )
+    delay_df = pd.DataFrame(delay_data)
     sns.boxplot(
         x="betting_func",
-        y="traditional_avg_delay",
-        hue="betting_func",
-        data=plot_df,
+        y="Delay",
+        hue="Method",
+        data=delay_df,
         ax=ax,
-        palette=colors,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
         boxprops=boxprops,
         whiskerprops=whiskerprops,
         medianprops=medianprops,
-        showfliers=False,
-        legend=False,
+        flierprops=flierprops,
+        showfliers=True,
+        width=0.7,
     )
     sns.stripplot(
         x="betting_func",
-        y="traditional_avg_delay",
-        data=plot_df,
+        y="Delay",
+        hue="Method",
+        data=delay_df,
         ax=ax,
-        color="black",
-        size=3,
-        alpha=0.3,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
+        size=2.5,
+        alpha=0.4,
         jitter=True,
+        dodge=True,
+        legend=False,
     )
 
-    ax.set_xlabel("")
-    ax.set_ylabel(r"Detection Delay (timesteps)", fontsize=14)
+    for bf in betting_funcs:
+        bf_data = plot_df[plot_df["betting_func"] == bf]
+        if not bf_data.empty:
+            trad_delay = bf_data["traditional_avg_delay"].mean()
+            hor_delay = bf_data["horizon_avg_delay"].mean()
+            if not np.isnan(hor_delay) and trad_delay > 0:
+                pct_improve = (trad_delay - hor_delay) / trad_delay * 100
+                if pct_improve > 5:
+                    bf_idx = list(betting_funcs).index(bf)
+                    ax.annotate(
+                        f"-{pct_improve:.1f}%",
+                        xy=(bf_idx + 0.2, hor_delay),
+                        xytext=(0, -15),
+                        textcoords="offset points",
+                        ha="center",
+                        va="top",
+                        fontsize=10,
+                        fontweight="bold",
+                        color="#006400",
+                        bbox=dict(
+                            boxstyle="round,pad=0.2",
+                            fc="#F8F8F8",
+                            ec="#CCCCCC",
+                            alpha=0.9,
+                        ),
+                    )
+    ax.set_xlabel("", fontsize=14)
+    ax.set_ylabel("Detection Delay (timesteps)", fontsize=14, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
     ax.set_xticks(ticks)
     ax.set_xticklabels([x.get_text().capitalize() for x in ax.get_xticklabels()])
 
-    # 3. Plot FPR by betting function
+    # Keep legend only for middle subplot with better positioning
+    handles, labels = ax.get_legend_handles_labels()
+    if len(handles) >= 2:
+        ax.legend(
+            handles[:2],
+            labels[:2],
+            title="Method",
+            fontsize=12,
+            title_fontsize=12,
+            loc="upper right",
+            frameon=True,
+            framealpha=0.9,
+            edgecolor="#CCCCCC",
+        )
+    else:
+        ax.legend().remove()
+
+    # 3. Plot FPR by betting function (traditional vs horizon)
     ax = axs[2]
+    fpr_data = []
+    for bf in betting_funcs:
+        bf_data = plot_df[plot_df["betting_func"] == bf]
+        if not bf_data.empty:
+            for fpr in bf_data["trad_fpr"].dropna():
+                fpr_data.append(
+                    {"betting_func": bf, "Method": "Traditional", "FPR": fpr}
+                )
+            for fpr in bf_data["horizon_fpr"].dropna():
+                fpr_data.append({"betting_func": bf, "Method": "Horizon", "FPR": fpr})
+    fpr_df = pd.DataFrame(fpr_data)
     sns.boxplot(
         x="betting_func",
-        y="trad_fpr",
-        hue="betting_func",
-        data=plot_df,
+        y="FPR",
+        hue="Method",
+        data=fpr_df,
         ax=ax,
-        palette=colors,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
         boxprops=boxprops,
         whiskerprops=whiskerprops,
         medianprops=medianprops,
-        showfliers=False,
-        legend=False,
+        flierprops=flierprops,
+        showfliers=True,
+        width=0.7,
     )
     sns.stripplot(
         x="betting_func",
-        y="trad_fpr",
-        data=plot_df,
+        y="FPR",
+        hue="Method",
+        data=fpr_df,
         ax=ax,
-        color="black",
-        size=3,
-        alpha=0.3,
+        palette=[STREAM_COLORS["trad_color"], STREAM_COLORS["horizon_color"]],
+        size=2.5,
+        alpha=0.4,
         jitter=True,
+        dodge=True,
+        legend=False,
     )
+    if "theoretical_bound" in plot_df.columns:
+        theo_bound = plot_df["theoretical_bound"].mean()
+        if not pd.isna(theo_bound):
+            ax.axhline(
+                y=theo_bound,
+                color="#D62728",
+                linestyle="--",
+                alpha=0.9,
+                linewidth=2,
+                label="Theoretical bound",
+            )
+            ax.annotate(
+                f"Bound: {theo_bound:.4f}",
+                xy=(len(betting_funcs) - 1, theo_bound),
+                xytext=(0, 5),
+                textcoords="offset points",
+                ha="right",
+                va="bottom",
+                fontsize=10,
+                color="#D62728",
+                fontweight="bold",
+                bbox=dict(
+                    boxstyle="round,pad=0.2", fc="#F8F8F8", ec="#CCCCCC", alpha=0.9
+                ),
+            )
 
-    ax.set_xlabel("")
-    ax.set_ylabel(r"False Positive Rate (FPR)", fontsize=14)
+    ax.set_xlabel("Betting Function", fontsize=14, fontweight="bold")
+    ax.set_ylabel("False Positive Rate (FPR)", fontsize=14, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
     ax.set_xticks(ticks)
     ax.set_xticklabels([x.get_text().capitalize() for x in ax.get_xticklabels()])
+    ax.legend().remove()
+
+    # Apply consistent styling to all subplots
+    for i in range(3):
+        # Remove top and right spines
+        axs[i].spines["top"].set_visible(False)
+        axs[i].spines["right"].set_visible(False)
+
+        # Make bottom and left spines slightly thicker
+        axs[i].spines["bottom"].set_linewidth(1.2)
+        axs[i].spines["left"].set_linewidth(1.2)
+
+        # Add subtle tick marks
+        axs[i].tick_params(direction="out", length=4, width=1.2, pad=4)
 
     bf_metrics = {}
     for bf in betting_funcs:
@@ -242,10 +403,14 @@ def generate_betting_function_comparison_analysis_log(
     """Generate analysis log with performance metrics."""
     data_points = len(df)
 
+    # Get list of all betting functions
+    betting_funcs = sorted(df["betting_func"].unique())
+
     # Determine best parameters based on metrics
     best_threshold = df[df["betting_func"] == best_bf]["threshold"].median()
     best_window = df[df["betting_func"] == best_bf]["window"].median()
     best_epsilon = df[df["betting_func"] == best_bf]["epsilon"].median()
+    best_horizon = df[df["betting_func"] == best_bf]["horizon"].median()
 
     # Find best distance metric
     best_distance = (
@@ -271,11 +436,81 @@ def generate_betting_function_comparison_analysis_log(
         "distance",
     ]
     unique_params = df.drop_duplicates(subset=param_cols).shape[0]
-
-    # Get column statistics
     stats_df = df.describe()
 
-    # Create the log content
+    # Calculate detailed betting function performance metrics
+    bf_detailed_metrics = {}
+
+    for bf in betting_funcs:
+        bf_data = df[df["betting_func"] == bf]
+        if bf_data.empty:
+            continue
+
+        # Calculate basic statistics
+        trad_tpr = bf_data["trad_tpr"].mean()
+        horizon_tpr = bf_data["horizon_tpr"].mean()
+        trad_fpr = bf_data["trad_fpr"].mean()
+        horizon_fpr = bf_data["horizon_fpr"].mean()
+        trad_delay = (
+            bf_data["traditional_avg_delay"].mean()
+            if "traditional_avg_delay" in bf_data
+            else np.nan
+        )
+        horizon_delay = (
+            bf_data["horizon_avg_delay"].mean()
+            if "horizon_avg_delay" in bf_data
+            else np.nan
+        )
+
+        # Perfect detection rates
+        perfect_trad_pct = (bf_data["trad_tpr"] == 1.0).mean() * 100
+        perfect_horizon_pct = (bf_data["horizon_tpr"] == 1.0).mean() * 100
+
+        # Calculate improvement percentages
+        tpr_improvement = (
+            ((horizon_tpr - trad_tpr) / trad_tpr * 100) if trad_tpr > 0 else np.nan
+        )
+        delay_reduction = (
+            ((trad_delay - horizon_delay) / trad_delay * 100)
+            if trad_delay > 0 and not np.isnan(horizon_delay)
+            else np.nan
+        )
+
+        # Find best parameters for this betting function
+        best_configs = (
+            bf_data.groupby(["threshold", "window", "horizon", "distance", "epsilon"])[
+                "trad_tpr"
+            ]
+            .mean()
+            .reset_index()
+        )
+        best_configs = best_configs.sort_values("trad_tpr", ascending=False).head(3)
+
+        # Best distance metric for this betting function
+        bf_best_distance = (
+            bf_data.groupby("distance")["trad_tpr"]
+            .mean()
+            .sort_values(ascending=False)
+            .index[0]
+            if not bf_data.groupby("distance")["trad_tpr"].mean().empty
+            else "N/A"
+        )
+
+        bf_detailed_metrics[bf] = {
+            "trad_tpr": trad_tpr,
+            "horizon_tpr": horizon_tpr,
+            "trad_fpr": trad_fpr,
+            "horizon_fpr": horizon_fpr,
+            "trad_delay": trad_delay,
+            "horizon_delay": horizon_delay,
+            "perfect_trad_pct": perfect_trad_pct,
+            "perfect_horizon_pct": perfect_horizon_pct,
+            "tpr_improvement": tpr_improvement,
+            "delay_reduction": delay_reduction,
+            "best_configs": best_configs,
+            "best_distance": bf_best_distance,
+        }
+
     log_content = f"""# Network Analysis Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## General Information
@@ -283,17 +518,18 @@ def generate_betting_function_comparison_analysis_log(
 - network_type: {NETWORK_NAMES.get(network_name, network_name.upper())}
 - analysis_date: {datetime.now().strftime("%Y-%m-%d")}
 - data_points: {data_points}
+- total_parameter_combinations: {unique_params}
 
-## Best Parameters
+## Overall Best Configuration
 
-- betting_function: {best_bf}
+- best_betting_function: {best_bf.capitalize()}
 - distance_metric: {best_distance}
 - threshold: {int(best_threshold)}
 - window_size: {int(best_window)}
+- horizon: {int(best_horizon)}
 - epsilon: {best_epsilon:.1f}
-- best_betting_function: {best_bf}
 
-## Performance Metrics
+## Overall Performance Metrics
 
 - best_betting_tpr: {bf_metrics[best_bf]["tpr"]:.4f}
 - avg_tpr: {avg_tpr:.4f}
@@ -302,37 +538,136 @@ def generate_betting_function_comparison_analysis_log(
 - best_betting_delay: {bf_metrics[best_bf]["delay"]:.1f}
 - best_betting_fpr: {bf_metrics[best_bf]["fpr"]:.4f}
 
-## Plot Annotations
+## Detailed Performance by Betting Function
 
-### parameter_grid
-- Threshold vs. FPR with theoretical bound showing detection confidence
-- Window size impact on detection delay by betting function
-- Prediction horizon effect on true positive rate
-- Distance metric comparison across betting functions
-
-### betting_comparison
-- True positive rate by betting function
-- Detection delay comparison between betting functions
-- False positive rate performance by betting function
-
-## Data Summary
-
-### Column Statistics
-
-```
-{stats_df.to_string()}
-```
-
-### Parameter Combinations
-
-Total unique parameter combinations: {unique_params}
 """
+
+    # Add performance comparison table
+    log_content += "Betting Function | Trad TPR | Horizon TPR | TPR Improvement | Trad Delay | Horizon Delay | Delay Reduction | Perfect Detection Rate\n"
+    log_content += "--------------- | -------- | ----------- | --------------- | ---------- | ------------- | --------------- | --------------------\n"
+
+    for bf in betting_funcs:
+        if bf in bf_detailed_metrics:
+            metrics = bf_detailed_metrics[bf]
+            tpr_imp_str = (
+                f"{metrics['tpr_improvement']:.1f}%"
+                if not np.isnan(metrics["tpr_improvement"])
+                else "N/A"
+            )
+            delay_red_str = (
+                f"{metrics['delay_reduction']:.1f}%"
+                if not np.isnan(metrics["delay_reduction"])
+                else "N/A"
+            )
+
+            log_content += (
+                f"{bf.capitalize()} | "
+                f"{metrics['trad_tpr']:.4f} | "
+                f"{metrics['horizon_tpr']:.4f} | "
+                f"{tpr_imp_str} | "
+                f"{metrics['trad_delay']:.2f} | "
+                f"{metrics['horizon_delay']:.2f} | "
+                f"{delay_red_str} | "
+                f"{metrics['perfect_trad_pct']:.1f}%\n"
+            )
+
+    # Add section for each betting function's detailed metrics
+    for bf in betting_funcs:
+        if bf in bf_detailed_metrics:
+            metrics = bf_detailed_metrics[bf]
+
+            log_content += f"\n### {bf.capitalize()} Betting Function Details\n\n"
+
+            # Basic metrics
+            log_content += f"- **Traditional TPR**: {metrics['trad_tpr']:.4f}\n"
+            log_content += f"- **Horizon TPR**: {metrics['horizon_tpr']:.4f}\n"
+            log_content += (
+                f"- **Perfect Detection Rate**: {metrics['perfect_trad_pct']:.1f}%\n"
+            )
+            log_content += f"- **Traditional Delay**: {metrics['trad_delay']:.2f}\n"
+            log_content += f"- **Horizon Delay**: {metrics['horizon_delay']:.2f}\n"
+            log_content += f"- **Traditional FPR**: {metrics['trad_fpr']:.6f}\n"
+            log_content += f"- **Horizon FPR**: {metrics['horizon_fpr']:.6f}\n"
+            log_content += f"- **Best Distance Metric**: {metrics['best_distance']}\n"
+
+            # Best configurations
+            log_content += "\n#### Top Configurations\n\n"
+            log_content += "Threshold | Window | Horizon | Distance | Epsilon | TPR\n"
+            log_content += "--------- | ------ | ------- | -------- | ------- | ---\n"
+
+            for _, config in metrics["best_configs"].iterrows():
+                log_content += (
+                    f"{int(config['threshold'])} | "
+                    f"{int(config['window'])} | "
+                    f"{int(config['horizon'])} | "
+                    f"{config['distance']} | "
+                    f"{config['epsilon']:.1f} | "
+                    f"{config['trad_tpr']:.4f}\n"
+                )
+
+    # Add best distance metric analysis
+    log_content += "\n## Distance Metric Analysis\n\n"
+
+    # Calculate performance by distance metric
+    dist_metrics = (
+        df.groupby("distance")
+        .agg(
+            {
+                "trad_tpr": ["mean", "max"],
+                "trad_fpr": "mean",
+                "traditional_avg_delay": "mean",
+            }
+        )
+        .reset_index()
+    )
+
+    dist_metrics.columns = ["distance", "tpr_mean", "tpr_max", "fpr_mean", "delay_mean"]
+
+    log_content += "Distance | Avg TPR | Max TPR | Avg FPR | Avg Delay\n"
+    log_content += "-------- | ------- | ------- | ------- | ---------\n"
+
+    for _, row in dist_metrics.iterrows():
+        log_content += (
+            f"{row['distance']} | "
+            f"{row['tpr_mean']:.4f} | "
+            f"{row['tpr_max']:.4f} | "
+            f"{row['fpr_mean']:.6f} | "
+            f"{row['delay_mean']:.2f}\n"
+        )
+
+    # Add horizon vs traditional comparative analysis
+    log_content += "\n## Horizon vs. Traditional Comparison\n\n"
+
+    # Calculate average improvements
+    avg_tpr_improvement = (df["horizon_tpr"] - df["trad_tpr"]).mean() * 100
+    avg_delay_reduction = (
+        (df["traditional_avg_delay"] - df["horizon_avg_delay"])
+        / df["traditional_avg_delay"]
+    ).dropna().mean() * 100
+
+    log_content += f"- **Average TPR Improvement**: {avg_tpr_improvement:.2f}%\n"
+    log_content += f"- **Average Delay Reduction**: {avg_delay_reduction:.2f}%\n"
+
+    # Calculation formula explanation
+    log_content += "\n## Calculation Formulas\n\n"
+    log_content += "- **TPR Improvement**: (Horizon TPR - Traditional TPR) / Traditional TPR * 100\n"
+    log_content += "- **Delay Reduction**: (Traditional Delay - Horizon Delay) / Traditional Delay * 100\n"
+    log_content += (
+        "- **Perfect Detection Rate**: Percentage of configurations where TPR = 1.0\n"
+    )
+    log_content += "- **Composite Score**: TPR - 0.5 * normalized_delay - 5 * FPR\n"
+
+    # Add column statistics for reference
+    log_content += "\n## Data Summary\n\n"
+    log_content += "### Column Statistics\n\n"
+    log_content += f"```\n{stats_df.to_string()}\n```\n"
+
     log_path = os.path.join(
         output_dir, f"{network_name}_betting_function_comparison_analysis_log.md"
     )
     with open(log_path, "w", encoding="utf-8") as f:
         f.write(log_content)
-    print(f"Saved analysis log to {log_path}")
+    print(f"Saved detailed analysis log to {log_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1032,7 +1367,7 @@ def plot_performance_timing_dashboard(
         ax.tick_params(axis="y", labelsize=12)
 
         # Set a reasonable y-axis limit
-        y_max = delay_long["Delay"].max() * 1.15
+        y_max = df_with_ratio["delay_ratio"].max() * 1.15
         ax.set_ylim(0, y_max)
 
     # 3. Delay Reduction by Parameter (bottom-left)
