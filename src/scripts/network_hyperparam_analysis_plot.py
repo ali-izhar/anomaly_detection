@@ -19,12 +19,12 @@ plt.rcParams["text.usetex"] = True
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["font.serif"] = ["Computer Modern Roman"]
 plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath} \usepackage{amssymb}"
-plt.rcParams["axes.labelsize"] = 16
-plt.rcParams["axes.titlesize"] = 18
-plt.rcParams["xtick.labelsize"] = 14
-plt.rcParams["ytick.labelsize"] = 14
-plt.rcParams["legend.fontsize"] = 14
-plt.rcParams["figure.titlesize"] = 20
+plt.rcParams["axes.labelsize"] = 18
+plt.rcParams["axes.titlesize"] = 20
+plt.rcParams["xtick.labelsize"] = 16
+plt.rcParams["ytick.labelsize"] = 16
+plt.rcParams["legend.fontsize"] = 16
+plt.rcParams["figure.titlesize"] = 22
 plt.rcParams["axes.titlepad"] = 15
 plt.rcParams["axes.formatter.use_mathtext"] = True
 plt.rcParams["mathtext.fontset"] = "cm"
@@ -92,7 +92,7 @@ def plot_betting_function_comparison(
         print("Error: No betting function data available")
         return
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+    fig, axs = plt.subplots(1, 3, figsize=(14, 4.5), constrained_layout=True)
     betting_funcs = sorted(df["betting_func"].unique())
     plot_df = df.copy()
     plot_df = plot_df.dropna(subset=["trad_tpr", "horizon_tpr"], how="all")
@@ -119,6 +119,8 @@ def plot_betting_function_comparison(
             for tpr in bf_data["horizon_tpr"].dropna():
                 tpr_data.append({"betting_func": bf, "Method": "Horizon", "TPR": tpr})
     tpr_df = pd.DataFrame(tpr_data)
+
+    # Draw boxplots first
     sns.boxplot(
         x="betting_func",
         y="TPR",
@@ -133,6 +135,8 @@ def plot_betting_function_comparison(
         showfliers=True,
         width=0.7,
     )
+
+    # Add individual data points
     sns.stripplot(
         x="betting_func",
         y="TPR",
@@ -146,7 +150,28 @@ def plot_betting_function_comparison(
         dodge=True,
         legend=False,
     )
-    for bf in betting_funcs:
+
+    # Add mean markers with more visibility
+    for i, bf in enumerate(betting_funcs):
+        for j, method in enumerate(["Traditional", "Horizon"]):
+            subset = tpr_df[
+                (tpr_df["betting_func"] == bf) & (tpr_df["Method"] == method)
+            ]
+            if not subset.empty:
+                mean_val = subset["TPR"].mean()
+                ax.scatter(
+                    i + (j * 0.4 - 0.2),  # Position for correct dodge
+                    mean_val,
+                    marker="D",  # Diamond for mean
+                    s=100,  # Larger size
+                    color="black",
+                    edgecolor="white",
+                    linewidth=1.5,
+                    zorder=10,  # Draw on top
+                    label="_nolegend_",  # Don't add to legend
+                )
+
+    for i, bf in enumerate(betting_funcs):
         bf_data = plot_df[plot_df["betting_func"] == bf]
         if not bf_data.empty:
             trad_tpr = bf_data["trad_tpr"].mean()
@@ -156,11 +181,11 @@ def plot_betting_function_comparison(
                 if pct_improve > 5:
                     bf_idx = list(betting_funcs).index(bf)
                     ax.annotate(
-                        f"+{pct_improve:.1f}\\%",
+                        f"+{pct_improve:.1f}\\% (mean)",  # Clarify this is mean improvement
                         xy=(bf_idx + 0.2, hor_tpr + 0.03),
                         ha="center",
                         va="bottom",
-                        fontsize=10,
+                        fontsize=11,
                         fontweight="bold",
                         color="#006400",
                         bbox=dict(
@@ -171,8 +196,8 @@ def plot_betting_function_comparison(
                         ),
                     )
 
-    ax.set_xlabel("", fontsize=14)
-    ax.set_ylabel("True Positive Rate (TPR)", fontsize=14, fontweight="bold")
+    ax.set_xlabel("", fontsize=16)
+    ax.set_ylabel("True Positive Rate (TPR)", fontsize=16, fontweight="bold")
     ax.set_ylim(0, 1.05)
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
@@ -195,6 +220,8 @@ def plot_betting_function_comparison(
                     {"betting_func": bf, "Method": "Horizon", "Delay": delay}
                 )
     delay_df = pd.DataFrame(delay_data)
+
+    # Draw boxplots for delay
     sns.boxplot(
         x="betting_func",
         y="Delay",
@@ -209,6 +236,8 @@ def plot_betting_function_comparison(
         showfliers=True,
         width=0.7,
     )
+
+    # Add individual points
     sns.stripplot(
         x="betting_func",
         y="Delay",
@@ -223,6 +252,26 @@ def plot_betting_function_comparison(
         legend=False,
     )
 
+    # Add mean markers with more visibility
+    for i, bf in enumerate(betting_funcs):
+        for j, method in enumerate(["Traditional", "Horizon"]):
+            subset = delay_df[
+                (delay_df["betting_func"] == bf) & (delay_df["Method"] == method)
+            ]
+            if not subset.empty:
+                mean_val = subset["Delay"].mean()
+                ax.scatter(
+                    i + (j * 0.4 - 0.2),  # Position for correct dodge
+                    mean_val,
+                    marker="D",  # Diamond for mean
+                    s=100,  # Larger size
+                    color="black",
+                    edgecolor="white",
+                    linewidth=1.5,
+                    zorder=10,  # Draw on top
+                    label="_nolegend_",  # Don't add to legend
+                )
+
     for bf in betting_funcs:
         bf_data = plot_df[plot_df["betting_func"] == bf]
         if not bf_data.empty:
@@ -233,13 +282,13 @@ def plot_betting_function_comparison(
                 if pct_improve > 5:
                     bf_idx = list(betting_funcs).index(bf)
                     ax.annotate(
-                        f"-{pct_improve:.1f}\\%",
+                        f"-{pct_improve:.1f}\\% (mean)",  # Clarify this is mean improvement
                         xy=(bf_idx + 0.2, hor_delay),
                         xytext=(0, -15),
                         textcoords="offset points",
                         ha="center",
                         va="top",
-                        fontsize=10,
+                        fontsize=11,
                         fontweight="bold",
                         color="#006400",
                         bbox=dict(
@@ -249,8 +298,8 @@ def plot_betting_function_comparison(
                             alpha=0.9,
                         ),
                     )
-    ax.set_xlabel("", fontsize=14)
-    ax.set_ylabel("Detection Delay (timesteps)", fontsize=14, fontweight="bold")
+    ax.set_xlabel("", fontsize=16)
+    ax.set_ylabel("Detection Delay (timesteps)", fontsize=16, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
     ax.set_xticks(ticks)
@@ -259,17 +308,56 @@ def plot_betting_function_comparison(
     # Keep legend only for middle subplot with better positioning
     handles, labels = ax.get_legend_handles_labels()
     if len(handles) >= 2:
-        ax.legend(
+        # Add a note about diamond markers representing means
+        legend = ax.legend(
             handles[:2],
             labels[:2],
             title="Method",
-            fontsize=12,
-            title_fontsize=12,
+            fontsize=14,
+            title_fontsize=14,
             loc="upper right",
             frameon=True,
             framealpha=0.9,
             edgecolor="#CCCCCC",
         )
+
+        # Add a custom handler for the mean marker
+        mean_patch = plt.Line2D(
+            [0],
+            [0],
+            marker="D",
+            color="w",
+            markerfacecolor="black",
+            markeredgecolor="white",
+            markersize=8,
+            label="Mean Value",
+        )
+        legend._legend_box.get_children()[0].get_children().append(
+            plt.matplotlib.offsetbox.VPacker(
+                children=[
+                    plt.matplotlib.offsetbox.TextArea(
+                        "Mean Value", textprops=dict(fontsize=14)
+                    ),
+                    plt.matplotlib.offsetbox.DrawingArea(20, 20, 0, 0),
+                ],
+                align="center",
+                pad=0,
+                sep=5,
+            )
+        )
+        da = legend._legend_box.get_children()[0].get_children()[-1].get_children()[1]
+        p = plt.matplotlib.patches.FancyArrow(
+            10,
+            10,
+            0,
+            0,
+            width=0,
+            head_width=8,
+            head_length=8,
+            fc="black",
+            transform=da.get_transform(),
+        )
+        da.add_artist(mean_patch)
     else:
         ax.legend().remove()
 
@@ -286,6 +374,8 @@ def plot_betting_function_comparison(
             for fpr in bf_data["horizon_fpr"].dropna():
                 fpr_data.append({"betting_func": bf, "Method": "Horizon", "FPR": fpr})
     fpr_df = pd.DataFrame(fpr_data)
+
+    # Draw boxplots
     sns.boxplot(
         x="betting_func",
         y="FPR",
@@ -300,6 +390,8 @@ def plot_betting_function_comparison(
         showfliers=True,
         width=0.7,
     )
+
+    # Add individual points
     sns.stripplot(
         x="betting_func",
         y="FPR",
@@ -313,6 +405,27 @@ def plot_betting_function_comparison(
         dodge=True,
         legend=False,
     )
+
+    # Add mean markers with more visibility
+    for i, bf in enumerate(betting_funcs):
+        for j, method in enumerate(["Traditional", "Horizon"]):
+            subset = fpr_df[
+                (fpr_df["betting_func"] == bf) & (fpr_df["Method"] == method)
+            ]
+            if not subset.empty:
+                mean_val = subset["FPR"].mean()
+                ax.scatter(
+                    i + (j * 0.4 - 0.2),  # Position for correct dodge
+                    mean_val,
+                    marker="D",  # Diamond for mean
+                    s=100,  # Larger size
+                    color="black",
+                    edgecolor="white",
+                    linewidth=1.5,
+                    zorder=10,  # Draw on top
+                    label="_nolegend_",  # Don't add to legend
+                )
+
     if "theoretical_bound" in plot_df.columns:
         theo_bound = plot_df["theoretical_bound"].mean()
         if not pd.isna(theo_bound):
@@ -331,7 +444,7 @@ def plot_betting_function_comparison(
                 textcoords="offset points",
                 ha="right",
                 va="bottom",
-                fontsize=10,
+                fontsize=11,
                 color="#D62728",
                 fontweight="bold",
                 bbox=dict(
@@ -340,7 +453,7 @@ def plot_betting_function_comparison(
             )
 
     ax.set_xlabel("")
-    ax.set_ylabel("False Positive Rate (FPR)", fontsize=14, fontweight="bold")
+    ax.set_ylabel("False Positive Rate (FPR)", fontsize=16, fontweight="bold")
     ax.grid(True, linestyle=":", alpha=0.4)
     ticks = ax.get_xticks()
     ax.set_xticks(ticks)
@@ -682,8 +795,8 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     fig, axs = plt.subplots(
         2,
         2,
-        figsize=(11, 8),
-        gridspec_kw={"wspace": 0.15, "hspace": 0.15},
+        figsize=(10, 8),
+        gridspec_kw={"wspace": 0.1, "hspace": 0.15},
         constrained_layout=True,
     )
 
@@ -739,8 +852,8 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
                     alpha=0.6,
                 )
 
-    ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=16)
-    ax.set_ylabel("False Positive Rate (FPR)", fontsize=16)
+    ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=18)
+    ax.set_ylabel("False Positive Rate (FPR)", fontsize=18)
     ax.grid(True, linestyle=":", alpha=0.4)
     formatter = ScalarFormatter(useMathText=True)
     formatter.set_scientific(True)
@@ -750,7 +863,7 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
     ax.legend(
         [theoretical_line],
         ["Theoretical bound (1/$\lambda$)"],
-        fontsize=11,
+        fontsize=12,
         loc="upper right",
         frameon=True,
         framealpha=0.9,
@@ -815,7 +928,7 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
                 # Removed value annotations on top of bars
 
         ax.set_xticks(index)
-        ax.set_xticklabels([d.capitalize() for d in distances])
+        ax.set_xticklabels([d.capitalize() for d in distances], rotation=45, ha="right")
 
         # First create betting function legend handles
         bf_handles = []
@@ -834,12 +947,11 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
             method_handles,
             method_labels,
             loc="lower center",
-            fontsize=10,
+            fontsize=12,
             frameon=True,
         )
 
-        ax.set_xlabel("Distance Metric", fontsize=16)
-        ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
+        ax.set_ylabel("True Positive Rate (TPR)", fontsize=18)
         ax.set_ylim(0, 1.05)
         ax.grid(True, linestyle=":", alpha=0.4)
 
@@ -956,8 +1068,8 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
                     solid_capstyle="round",
                 )
 
-        ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=16)
-        ax.set_ylabel("False Positive Rate (FPR)", fontsize=16)
+        ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=18)
+        ax.set_ylabel("False Positive Rate (FPR)", fontsize=18)
 
         # Using a more direct approach to set x-axis ticks
         # Clear existing ticks first
@@ -999,7 +1111,7 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
         ax.legend(
             handles,
             labels,
-            fontsize=10,
+            fontsize=12,
             loc="upper right",
             frameon=True,
             framealpha=0.9,
@@ -1086,23 +1198,8 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
                     label=f"{bf.capitalize()} (Horizon)",
                 )
 
-        # Using the same direct approach to set x-axis ticks
-        # Clear existing ticks first
-        ax.set_xticks([])
-        ax.set_xticklabels([])
-
-        # Set explicit x-axis limits with padding
-        ax.set_xlim(0.1, 1.0)
-
-        # Use hardcoded values that match the data
-        ax.set_xticks(expected_epsilons)
-        ax.set_xticklabels([f"{eps:.1f}" for eps in expected_epsilons])
-
-        # Ensure ticks are visible
-        ax.tick_params(axis="x", which="both", length=6, width=1.5, direction="out")
-
-        ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=16)
-        ax.set_ylabel("True Positive Rate (TPR)", fontsize=16)
+        ax.set_xlabel("Epsilon ($\\epsilon$)", fontsize=18)
+        ax.set_ylabel("True Positive Rate (TPR)", fontsize=18)
         ax.set_ylim(0, 1.05)
         ax.grid(True, linestyle=":", alpha=0.4)
 
@@ -1117,10 +1214,11 @@ def plot_detection_accuracy_grid(df: pd.DataFrame, output_dir: str, network_name
             axs[i, j].spines["left"].set_linewidth(1.2)
 
             # Add subtle tick marks
+            axs[i, j].tick_params(axis="both", which="major", labelsize=16)
             axs[i, j].tick_params(direction="out", length=4, width=1.2, pad=4)
 
             # Ensure y-axis has enough ticks for readability
-            axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
+            axs[i, j].yaxis.set_major_locator(MaxNLocator(nbins=5, prune="upper"))
 
             # Format tick labels to avoid scientific notation and unnecessary decimals
             if (i == 0 and j == 1) or (i == 1 and j == 1):  # For TPR plots
@@ -1379,7 +1477,7 @@ def plot_performance_timing_dashboard(
     fig, axs = plt.subplots(
         1,
         2,
-        figsize=(12, 5),
+        figsize=(10, 4.5),
         gridspec_kw={"wspace": 0.2},
         constrained_layout=True,
     )
@@ -1437,8 +1535,8 @@ def plot_performance_timing_dashboard(
                     **horizon_style,
                 )
 
-    ax.set_xlabel("Window Size", fontsize=16)
-    ax.set_ylabel("Average Detection Delay", fontsize=16)
+    ax.set_xlabel("Window Size", fontsize=18)
+    ax.set_ylabel("Average Detection Delay", fontsize=18)
     ax.grid(True, linestyle=":", alpha=0.4)
 
     handles, labels = ax.get_legend_handles_labels()
@@ -1446,12 +1544,9 @@ def plot_performance_timing_dashboard(
     ax.legend(
         by_label.values(),
         by_label.keys(),
-        fontsize=10,
+        fontsize=12,
         loc="best",
         frameon=True,
-        framealpha=0.9,
-        handlelength=1.5,
-        ncol=2,
     )
 
     # 2. Delay Reduction by Parameter (right)
@@ -1503,8 +1598,8 @@ def plot_performance_timing_dashboard(
                     **horizon_style,
                 )
 
-    ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=16)
-    ax.set_ylabel("Average Detection Delay", fontsize=16)
+    ax.set_xlabel("Detection Threshold ($\lambda$)", fontsize=18)
+    ax.set_ylabel("Average Detection Delay", fontsize=18)
     ax.grid(True, linestyle=":", alpha=0.4)
 
     for i in range(2):
@@ -1517,16 +1612,14 @@ def plot_performance_timing_dashboard(
         axs[i].spines["left"].set_linewidth(1.2)
 
         # Add subtle tick marks
+        axs[i].tick_params(axis="both", which="major", labelsize=16)
         axs[i].tick_params(direction="out", length=4, width=1.2, pad=4)
 
         # Ensure y-axis has enough ticks for readability
-        axs[i].yaxis.set_major_locator(MaxNLocator(nbins=6, prune="upper"))
+        axs[i].yaxis.set_major_locator(MaxNLocator(nbins=5, prune="upper"))
 
         # Format tick labels to avoid scientific notation and unnecessary decimals
         axs[i].yaxis.set_major_formatter(plt.FormatStrFormatter("%.1f"))
-
-        # For x-axis ticks
-        axs[i].xaxis.set_major_locator(MaxNLocator(integer=True))
 
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(
