@@ -39,8 +39,8 @@ predictions = model.predict(X)
 
 # SHAP analysis of a detected change point
 df = pd.read_excel("martingale_data.xlsx", sheet_name="Aggregate")
-feature_cols = [col for col in df.columns 
-                if col.startswith("individual_traditional_martingales_feature") 
+feature_cols = [col for col in df.columns
+                if col.startswith("individual_traditional_martingales_feature")
                 and col.endswith("_mean")]
 change_points = [40, 120]  # From metadata
 

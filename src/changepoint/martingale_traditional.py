@@ -1,6 +1,6 @@
 # src/changepoint/martingale_traditional.py
 
-"""Traditional martingale implementation for change point detection. 
+"""Traditional martingale implementation for change point detection.
 Traditional martingale uses the current observation and previous history."""
 
 import logging

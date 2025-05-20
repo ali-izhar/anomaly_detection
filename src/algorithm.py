@@ -8,7 +8,15 @@ import numpy as np
 import time
 import os
 
-from src.changepoint import BettingFunctionConfig, ChangePointDetector, DetectorConfig
+from src.changepoint import (
+    BettingFunctionConfig,
+    ChangePointDetector,
+    DetectorConfig,
+    CUSUMDetector,
+    CUSUMConfig,
+    EWMADetector,
+    EWMAConfig,
+)
 from src.configs import get_config, get_full_model_name
 from src.graph import GraphGenerator, NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
@@ -79,13 +87,20 @@ class GraphChangeDetection:
         """Create timestamped output directory with descriptive name."""
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         network_type = self.config["model"]["network"]
-        betting_function = self.config["detection"]["betting_func_config"]["name"]
+        detection_method = self.config["detection"]["method"]
         predictor_type = self.config["model"]["predictor"]["type"]
         distance_measure = self.config["detection"]["distance"]["measure"]
 
+        # For martingale method, include betting function in directory name
+        if detection_method == "martingale":
+            betting_function = self.config["detection"]["betting_func_config"]["name"]
+            dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}"
+        else:
+            dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{timestamp}"
+
         self.config["output"]["directory"] = os.path.join(
             self.config["output"]["directory"],
-            f"{network_type}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}",
+            dir_name,
         )
 
         os.makedirs(
@@ -200,45 +215,92 @@ class GraphChangeDetection:
             betting_seed: Optional separate seed for betting function randomization
 
         Returns:
-            ChangePointDetector instance
+            Detector instance (ChangePointDetector, CUSUMDetector, or EWMADetector)
         """
         det_config = self.config["detection"]
+        detection_method = det_config.get("method", "martingale")
 
         # Ensure random_state is compatible type
         if random_state is not None:
             random_state = int(random_state)
 
-        # Get betting function config
-        betting_func_name = det_config["betting_func_config"]["name"]
-        betting_func_params = det_config["betting_func_config"].get(
-            betting_func_name, {}
-        )
+        # Create appropriate detector based on method
+        if detection_method == "martingale":
+            # Get betting function config
+            betting_func_name = det_config["betting_func_config"]["name"]
+            betting_func_params = det_config["betting_func_config"].get(
+                betting_func_name, {}
+            )
 
-        # Create proper BettingFunctionConfig
-        betting_func_config = BettingFunctionConfig(
-            name=betting_func_name,
-            params=betting_func_params,
-            random_seed=betting_seed,  # Pass separate betting seed
-        )
+            # Create proper BettingFunctionConfig
+            betting_func_config = BettingFunctionConfig(
+                name=betting_func_name,
+                params=betting_func_params,
+                random_seed=betting_seed,  # Pass separate betting seed
+            )
 
-        # Create detector config
-        detector_config = DetectorConfig(
-            method=self.config["model"]["type"],
-            threshold=det_config["threshold"],
-            history_size=self.config["model"]["predictor"]["config"]["n_history"],
-            batch_size=det_config["batch_size"],
-            reset=det_config["reset"],
-            reset_on_traditional=det_config.get("reset_on_traditional", False),
-            max_window=det_config["max_window"],
-            betting_func_config=betting_func_config,
-            distance_measure=det_config["distance"]["measure"],
-            distance_p=det_config["distance"]["p"],
-            random_state=random_state,  # Main random state
-            strangeness_seed=strangeness_seed,  # Seed for strangeness calculation
-            pvalue_seed=pvalue_seed,  # Seed for p-value computation
-        )
+            # Create detector config
+            detector_config = DetectorConfig(
+                method=self.config["model"]["type"],
+                threshold=det_config["threshold"],
+                history_size=self.config["model"]["predictor"]["config"]["n_history"],
+                batch_size=det_config["batch_size"],
+                reset=det_config["reset"],
+                reset_on_traditional=det_config.get("reset_on_traditional", False),
+                max_window=det_config["max_window"],
+                betting_func_config=betting_func_config,
+                distance_measure=det_config["distance"]["measure"],
+                distance_p=det_config["distance"]["p"],
+                random_state=random_state,  # Main random state
+                strangeness_seed=strangeness_seed,  # Seed for strangeness calculation
+                pvalue_seed=pvalue_seed,  # Seed for p-value computation
+            )
 
-        return ChangePointDetector(detector_config)
+            return ChangePointDetector(detector_config)
+
+        elif detection_method == "cusum":
+            # Create CUSUM config
+            cusum_config = CUSUMConfig(
+                threshold=det_config["threshold"],
+                drift=det_config["cusum"].get("drift", 0.0),
+                startup_period=det_config["cusum"].get("startup_period", 20),
+                fixed_threshold=det_config["cusum"].get("fixed_threshold", False),
+                k=det_config["cusum"].get("k", 0.5),
+                h=det_config["cusum"].get("h", 5.0),
+                enable_adaptive=det_config["cusum"].get("enable_adaptive", True),
+                method=self.config["model"]["type"],  # single_view or multiview
+                batch_size=det_config["batch_size"],
+                history_size=self.config["model"]["predictor"]["config"]["n_history"],
+                reset=det_config["reset"],
+                distance_measure=det_config["distance"]["measure"],
+                distance_p=det_config["distance"]["p"],
+                random_state=random_state,
+            )
+
+            return CUSUMDetector(cusum_config)
+
+        elif detection_method == "ewma":
+            # Create EWMA config
+            ewma_config = EWMAConfig(
+                threshold=det_config["threshold"],
+                lambda_param=det_config["ewma"].get("lambda", 0.1),
+                L=det_config["ewma"].get("L", 3.0),
+                startup_period=det_config["ewma"].get("startup_period", 20),
+                use_var_adjust=det_config["ewma"].get("use_var_adjust", True),
+                robust=det_config["ewma"].get("robust", False),
+                method=self.config["model"]["type"],  # single_view or multiview
+                batch_size=det_config["batch_size"],
+                history_size=self.config["model"]["predictor"]["config"]["n_history"],
+                reset=det_config["reset"],
+                distance_measure=det_config["distance"]["measure"],
+                distance_p=det_config["distance"]["p"],
+                random_state=random_state,
+            )
+
+            return EWMADetector(ewma_config)
+
+        else:
+            raise ValueError(f"Unsupported detection method: {detection_method}")
 
     def _generate_sequence(self, generator):
         """Generate the graph sequence using model-specific configuration.

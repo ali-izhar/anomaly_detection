@@ -6,7 +6,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: true  # Whether to use prediction for enhanced detection
+  enable_prediction: false  # Whether to use prediction for enhanced detection
   enable_visualization: true  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
@@ -99,16 +99,17 @@ model:
 
 # Detection parameters
 detection:
-  threshold: 60.0  # Threshold
+  method: "martingale"  # Detection algorithm: "martingale", "cusum", or "ewma"
+  threshold: 60.0  # Threshold for detection
   batch_size: 1000  # Batch size for multiview processing
-  reset: true  # Reset martingales after detection
+  reset: true  # Reset after detection
   reset_on_traditional: true  # Whether to reset horizon martingales when traditional martingale detects a change
   max_window: null  # Maximum window size (null for adaptive)
   prediction_horizon: 5  # Number of steps to predict ahead
   enable_pvalue_dampening: true  # Whether to dampen p-values based on prediction error
-  cooldown_period: 10  # Minimum timesteps between consecutive detections
+  cooldown_period: 20  # Minimum timesteps between consecutive detections (increased from 10)
   
-  # Betting function configuration
+  # Betting function configuration (for martingale method)
   betting_func_config:
     name: "mixture"  # Using power betting function
     power:  # Parameters specific to the power betting function
@@ -124,6 +125,28 @@ detection:
     kernel:
       bandwidth: 0.1  # Bandwidth for Gaussian kernel
       past_pvalues: []  # List of past p-values (updated during runtime)
+
+  # CUSUM configuration (updated based on literature)
+  cusum:
+    drift: 0.0  # Expected drift under normal conditions
+    startup_period: 40  # Increased from 20 to establish more robust baseline
+    fixed_threshold: true  # Changed to true for more stable control limits
+    k: 0.25  # Reduced from 0.5 to decrease sensitivity to small shifts
+    h: 8.0  # Increased from 5.0 to reduce false positives (Hawkins & Wu recommend 4-8)
+    enable_adaptive: true  # Adaptive CUSUM for changing data characteristics
+    min_deviation: 1.5  # Minimum deviation required to count as anomaly
+    use_robust_scale: true  # Use robust statistics (median/MAD) for normalization
+    enforce_cooldown: true  # Enforce cooldown period after detection
+
+  # EWMA configuration (updated based on literature)
+  ewma:
+    lambda: 0.15  # Increased from 0.1 for smoother series (literature values: 0.1-0.3)
+    L: 4.5  # Increased from 3.0 to reduce false alarms (literature values: 3.0-4.5)
+    startup_period: 50  # Increased to establish more robust baseline
+    use_var_adjust: true  # Maintain variance adjustment for early samples
+    robust: true  # Changed to true to use median/MAD for more robust estimation
+    enforce_cooldown: true  # Enforce cooldown period after detection
+    min_deviation: 2.0  # Minimum standardized deviation to count as anomaly
 
   # Distance configuration
   distance:

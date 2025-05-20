@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Network Hyperparameter Analysis Plotting.
-This script creates concise, informative visualizations from hyperparameter analysis results."""
+This script creates concise, informative visualizations from hyperparameter analysis results.
+"""
 
 import os
 import argparse

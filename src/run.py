@@ -80,6 +80,11 @@ def apply_cli_overrides(
         updated_config["detection"]["threshold"] = args.threshold
         logger.info(f"Overriding threshold: {args.threshold}")
 
+    # Override detection method
+    if args.detection_method is not None:
+        updated_config["detection"]["method"] = args.detection_method
+        logger.info(f"Overriding detection method: {args.detection_method}")
+
     # Override betting function name
     if args.betting_func is not None:
         updated_config["detection"]["betting_func_config"]["name"] = args.betting_func
@@ -191,6 +196,14 @@ def main() -> None:
         type=float,
         help="Detection threshold value",
         dest="threshold",
+    )
+    parser.add_argument(
+        "--detection-method",
+        "-dm",
+        type=str,
+        choices=["martingale", "cusum", "ewma"],
+        help="Detection method to use (martingale, cusum, ewma)",
+        dest="detection_method",
     )
     parser.add_argument(
         "--betting-func",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Network Hyperparameter Analysis Sanity Check.
-This script validates the results of hyperparameter analysis and checks theoretical bounds."""
+This script validates the results of hyperparameter analysis and checks theoretical bounds.
+"""
 
 import os
 import argparse
