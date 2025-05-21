@@ -1,0 +1,278 @@
+# src/configs/table_iv_comparison.yaml
+
+# Configuration for running the Traditional vs Horizon martingale comparison
+# experiments from Table IV, including CUSUM and EWMA methods
+
+# Base template for all experiments
+base_config:
+  execution:
+    enable_prediction: true
+    enable_visualization: false
+    save_csv: true
+  
+  trials:
+    n_trials: 10
+    random_seeds: [42, 142, 242, 342, 442, 542, 642, 742, 842, 1042]
+  
+  detection:
+    batch_size: 1000
+    reset: true
+    reset_on_traditional: true
+    max_window: null
+    prediction_horizon: 5
+    enable_pvalue_dampening: true
+    cooldown_period: 30
+  
+  features:
+    - mean_degree
+    - density
+    - mean_clustering
+    - mean_betweenness
+    - mean_eigenvector
+    - mean_closeness
+    - max_singular_value
+    - min_nonzero_laplacian
+  
+  model:
+    type: "multiview"
+    predictor:
+      type: "graph"
+      config:
+        n_history: 10
+        enforce_connectivity: true
+        threshold: 0.5
+  
+  output:
+    directory: "results/method_comparison"
+    save_predictions: true
+    save_features: true
+    save_martingales: true
+
+# Experiments for specific change scenarios across network types
+experiments:
+  # SBM experiments
+  sbm:
+    # Community Merge scenario
+    - name: "sbm_community_merge_martingale"
+      network: "sbm"
+      change_scenario: "community_merge"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2  # Optimal from Table III
+        distance:
+          measure: "mahalanobis"  # Optimal from Table III
+    
+    - name: "sbm_community_merge_cusum"
+      network: "sbm"
+      change_scenario: "community_merge"
+      detection:
+        method: "cusum"
+        threshold: 50.0
+        cusum:
+          startup_period: 40
+          fixed_threshold: true
+          k: 0.25
+          h: 8.0
+          enable_adaptive: true
+        distance:
+          measure: "mahalanobis"
+    
+    - name: "sbm_community_merge_ewma"
+      network: "sbm"
+      change_scenario: "community_merge"
+      detection:
+        method: "ewma"
+        threshold: 50.0
+        ewma:
+          lambda: 0.15
+          L: 4.5
+          startup_period: 50
+          use_var_adjust: true
+          robust: true
+        distance:
+          measure: "mahalanobis"
+    
+    # Density Change scenario
+    - name: "sbm_density_change_martingale"
+      network: "sbm"
+      change_scenario: "density_change"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+    
+    # Mixed Changes scenario 
+    - name: "sbm_mixed_changes_martingale"
+      network: "sbm"
+      change_scenario: "mixed_changes"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+  
+  # ER experiments
+  er:
+    # Density Increase scenario
+    - name: "er_density_increase_martingale"
+      network: "er"
+      change_scenario: "density_increase"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2  # Optimal from Table III
+        distance:
+          measure: "euclidean"  # Optimal from Table III
+    
+    # Density Decrease scenario
+    - name: "er_density_decrease_martingale"
+      network: "er"
+      change_scenario: "density_decrease"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "euclidean"
+  
+  # BA experiments
+  ba:
+    # Parameter Shift scenario
+    - name: "ba_parameter_shift_martingale"
+      network: "ba"
+      change_scenario: "parameter_shift"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.7  # Optimal from Table III (0.7-0.9 range)
+        distance:
+          measure: "chebyshev"  # Optimal from Table III
+    
+    # Hub Addition scenario
+    - name: "ba_hub_addition_martingale"
+      network: "ba"
+      change_scenario: "hub_addition"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.7
+        distance:
+          measure: "chebyshev"
+  
+  # NWS experiments
+  nws:
+    # Rewiring Increase scenario
+    - name: "nws_rewiring_increase_martingale"
+      network: "nws"
+      change_scenario: "rewiring_increase"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.9  # Optimal from Table III
+        distance:
+          measure: "cosine"  # Optimal from Table III
+    
+    # K Parameter Shift scenario
+    - name: "nws_k_parameter_shift_martingale"
+      network: "nws"
+      change_scenario: "k_parameter_shift"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.9
+        distance:
+          measure: "cosine"
+  
+  # MIT Reality Dataset experiments
+  mit_reality:
+    # Academic Events scenario
+    - name: "mit_reality_academic_events_martingale"
+      network: "mit_reality"
+      change_scenario: "academic_events"
+      detection:
+        method: "martingale"
+        threshold: 50.0
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.7  # Optimal from Table III
+        distance:
+          measure: "mahalanobis"  # Optimal from Table III
+
+# Threshold comparison experiments for each network type
+threshold_experiments:
+  # Testing different threshold values across network types
+  - name: "sbm_threshold_20"
+    network: "sbm"
+    change_scenario: "mixed_changes"
+    detection:
+      method: "martingale"
+      threshold: 20.0
+      betting_func_config:
+        name: "power"
+        power:
+          epsilon: 0.2
+      distance:
+        measure: "mahalanobis"
+  
+  - name: "sbm_threshold_50"
+    network: "sbm"
+    change_scenario: "mixed_changes"
+    detection:
+      method: "martingale"
+      threshold: 50.0
+      betting_func_config:
+        name: "power"
+        power:
+          epsilon: 0.2
+      distance:
+        measure: "mahalanobis"
+  
+  - name: "sbm_threshold_100"
+    network: "sbm"
+    change_scenario: "mixed_changes"
+    detection:
+      method: "martingale"
+      threshold: 100.0
+      betting_func_config:
+        name: "power"
+        power:
+          epsilon: 0.2
+      distance:
+        measure: "mahalanobis"
+  
+  # Repeat for each network type with their optimal parameters
+
+# To run all experiments, this script will merge the base_config with each experiment configuration
+# and execute them sequentially, saving results in the specified output directory. 

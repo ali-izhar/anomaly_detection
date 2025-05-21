@@ -1,0 +1,244 @@
+# src/configs/table_iii_sensitivity.yaml
+
+# Configuration for running the parameter sensitivity experiments from Table III
+# Values represent relative performance (1.0 = best) for each parameter choice
+
+# Base template for all experiments
+base_config:
+  execution:
+    enable_prediction: true
+    enable_visualization: false
+    save_csv: true
+  
+  trials:
+    n_trials: 10
+    random_seeds: [42, 142, 242, 342, 442, 542, 642, 742, 842, 1042]
+  
+  detection:
+    method: "martingale"
+    batch_size: 1000
+    reset: true
+    reset_on_traditional: true
+    max_window: null
+    prediction_horizon: 5
+    enable_pvalue_dampening: true
+    cooldown_period: 30
+  
+  features:
+    - mean_degree
+    - density
+    - mean_clustering
+    - mean_betweenness
+    - mean_eigenvector
+    - mean_closeness
+    - max_singular_value
+    - min_nonzero_laplacian
+  
+  model:
+    type: "multiview"
+    predictor:
+      type: "graph"
+      config:
+        n_history: 10
+        enforce_connectivity: true
+        threshold: 0.5
+  
+  output:
+    directory: "results/sensitivity_analysis"
+    save_predictions: true
+    save_features: true
+    save_martingales: true
+
+# Experiment batches for each parameter combination
+experiments:
+  # Power Betting Function experiments
+  power_betting:
+    - name: "sbm_power_0.2"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_power_0.5"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.5
+        distance:
+          measure: "mahalanobis" 
+        threshold: 50.0
+    
+    - name: "sbm_power_0.7"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.7
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_power_0.9"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.9
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    # Repeat for each network type: ER, BA, NWS, MIT Reality
+    # (Additional configurations similar to above, adjusted for each network type)
+  
+  # Mixture Betting Function experiments
+  mixture_betting:
+    - name: "sbm_mixture"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "mixture"
+          mixture:
+            epsilons: [0.7, 0.8, 0.9]
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    # Repeat for each network type
+  
+  # Beta Betting Function experiments
+  beta_betting:
+    - name: "sbm_beta_0.3"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "beta"
+          beta:
+            a: 0.3
+            b: 1.5
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_beta_0.5"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "beta"
+          beta:
+            a: 0.5
+            b: 1.5
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_beta_0.7"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "beta"
+          beta:
+            a: 0.7
+            b: 1.5
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    # Repeat for each network type
+  
+  # Distance Metric experiments
+  distance_metrics:
+    - name: "sbm_euclidean"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "euclidean"
+        threshold: 50.0
+    
+    - name: "sbm_mahalanobis"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_cosine"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "cosine"
+        threshold: 50.0
+    
+    - name: "sbm_chebyshev"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "chebyshev"
+        threshold: 50.0
+    
+    # Repeat for each network type
+  
+  # Threshold experiments
+  thresholds:
+    - name: "sbm_threshold_20"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+        threshold: 20.0
+    
+    - name: "sbm_threshold_50"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+        threshold: 50.0
+    
+    - name: "sbm_threshold_100"
+      network: "sbm"
+      detection:
+        betting_func_config:
+          name: "power"
+          power:
+            epsilon: 0.2
+        distance:
+          measure: "mahalanobis"
+        threshold: 100.0
+    
+    # Repeat for each network type
+
+# To run all experiments, this script will merge the base_config with each experiment configuration
+# and execute them sequentially, saving results in the specified output directory. 
