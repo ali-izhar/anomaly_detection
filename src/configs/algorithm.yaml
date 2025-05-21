@@ -6,7 +6,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: false  # Whether to use prediction for enhanced detection
+  enable_prediction: true  # Whether to use prediction for enhanced detection
   enable_visualization: true  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
@@ -14,88 +14,6 @@ execution:
 trials:
   n_trials: 1  # Number of times to run the detector
   random_seeds: 42 # Random seeds for reproducibility
-
-# Model configuration
-model:
-  type: "multiview"  # or "single_view"
-  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
-  predictor:
-    # type: "arima"
-    # config:
-    #   order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
-    #   seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s), null to disable seasonality
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-    #   max_iter: 100  # Maximum iterations for ARIMA fitting
-    #   method: "powell"  # Optimization method - 'powell' often works well for convergence
-    #   force_posparams: true  # Force positive parameters to help with convergence
-    #   auto_order: true  # Automatically determine best ARIMA order for each feature
-    #   enable_preprocessing: true  # Apply preprocessing to time series for better convergence
-    
-    # Graph predictor configuration
-    type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
-    config:
-      alpha: 0.8
-      gamma: 0.5
-      omega: null
-      beta_init: 0.5
-      enforce_connectivity: true
-      adaptive: true
-      optimization_iterations: 3
-      threshold: 0.5
-      n_history: 10
-
-    # # GRNN forecaster configuration
-    # type: "grnn"
-    # config:
-    #   hidden_layer_sizes: [100, 50]  # Size of hidden layers in neural network
-    #   activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
-    #   solver: "adam"  # Solver for weight optimization
-    #   alpha: 0.0001  # L2 regularization parameter
-    #   batch_size: 32  # Size of minibatches for stochastic optimizers
-    #   learning_rate: "constant"  # Learning rate schedule for weight updates
-    #   max_iter: 200  # Maximum number of iterations
-    #   random_state: 42  # Random seed for reproducibility
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-    
-    # # Hybrid ARIMA-GRNN forecaster configuration
-    # type: "hybrid"
-    # config:
-    #   arima_order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
-    #   arima_seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s)
-    #   grnn_hidden_layers: [100, 50]  # Size of hidden layers in neural network
-    #   grnn_activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
-    #   grnn_solver: "adam"  # Solver for weight optimization
-    #   grnn_alpha: 0.0001  # L2 regularization parameter
-    #   grnn_batch_size: 32  # Size of minibatches for stochastic optimizers
-    #   grnn_learning_rate: "constant"  # Learning rate schedule for weight updates
-    #   grnn_max_iter: 200  # Maximum number of iterations
-    #   random_state: 42  # Random seed for reproducibility
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-
-    # type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
-    # config:
-    #   # AdaptiveDistributionAwarePredictor configuration
-    #   n_history: 10  # Increase from 5 to 10 for better pattern detection
-    #   adaptive: true  
-    #   enforce_connectivity: true  
-    #   binary: true  
-    #   spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
-    #   community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
-    #   n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
-    #   temporal_window: 15  # Increase from 10 to 15 for better trend detection
-    #   min_edges_per_component: 2  # Lower threshold for connectivity constraints
-    #   degree_reg: 0.2  # Reduce degree regularization (if present) 
-    #   change_threshold: 0.15  # Lower the threshold to detect changes earlier
-    #   smoothing_window: 5  # Add/increase smoothing window if not already present
-    #   min_weight: 0.05  # Lower minimum weight for more adaptivity
-    #   distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing
-    
 
 # Detection parameters
 detection:
@@ -106,8 +24,8 @@ detection:
   reset_on_traditional: true  # Whether to reset horizon martingales when traditional martingale detects a change
   max_window: null  # Maximum window size (null for adaptive)
   prediction_horizon: 5  # Number of steps to predict ahead
-  enable_pvalue_dampening: true  # Whether to dampen p-values based on prediction error
-  cooldown_period: 20  # Minimum timesteps between consecutive detections (increased from 10)
+  enable_pvalue_dampening: false  # Whether to dampen p-values based on prediction error
+  cooldown_period: 30  # Minimum timesteps between consecutive detections (increased from 10)
   
   # Betting function configuration (for martingale method)
   betting_func_config:
@@ -163,6 +81,89 @@ features:
   - mean_closeness        # Average closeness centrality
   - max_singular_value    # Largest singular value
   - min_nonzero_laplacian # Smallest non-zero Laplacian eigenvalue
+
+# Model configuration
+model:
+  type: "multiview"  # or "single_view"
+  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
+  predictor:
+    # Graph predictor configuration
+    type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
+    config:
+      alpha: 0.8
+      gamma: 0.5
+      omega: null
+      beta_init: 0.5
+      enforce_connectivity: true
+      adaptive: true
+      optimization_iterations: 3
+      threshold: 0.5
+      n_history: 10
+
+    # type: "arima"
+    # config:
+    #   order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
+    #   seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s), null to disable seasonality
+    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
+    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
+    #   n_history: 10  # Number of historical points to use
+    #   max_iter: 100  # Maximum iterations for ARIMA fitting
+    #   method: "powell"  # Optimization method - 'powell' often works well for convergence
+    #   force_posparams: true  # Force positive parameters to help with convergence
+    #   auto_order: true  # Automatically determine best ARIMA order for each feature
+    #   enable_preprocessing: true  # Apply preprocessing to time series for better convergence
+
+    # # GRNN forecaster configuration
+    # type: "grnn"
+    # config:
+    #   hidden_layer_sizes: [100, 50]  # Size of hidden layers in neural network
+    #   activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
+    #   solver: "adam"  # Solver for weight optimization
+    #   alpha: 0.0001  # L2 regularization parameter
+    #   batch_size: 32  # Size of minibatches for stochastic optimizers
+    #   learning_rate: "constant"  # Learning rate schedule for weight updates
+    #   max_iter: 200  # Maximum number of iterations
+    #   random_state: 42  # Random seed for reproducibility
+    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
+    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
+    #   n_history: 10  # Number of historical points to use
+    
+    # # Hybrid ARIMA-GRNN forecaster configuration
+    # type: "hybrid"
+    # config:
+    #   arima_order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
+    #   arima_seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s)
+    #   grnn_hidden_layers: [100, 50]  # Size of hidden layers in neural network
+    #   grnn_activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
+    #   grnn_solver: "adam"  # Solver for weight optimization
+    #   grnn_alpha: 0.0001  # L2 regularization parameter
+    #   grnn_batch_size: 32  # Size of minibatches for stochastic optimizers
+    #   grnn_learning_rate: "constant"  # Learning rate schedule for weight updates
+    #   grnn_max_iter: 200  # Maximum number of iterations
+    #   random_state: 42  # Random seed for reproducibility
+    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
+    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
+    #   n_history: 10  # Number of historical points to use
+
+    # type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
+    # config:
+    #   # AdaptiveDistributionAwarePredictor configuration
+    #   n_history: 10  # Increase from 5 to 10 for better pattern detection
+    #   adaptive: true  
+    #   enforce_connectivity: true  
+    #   binary: true  
+    #   spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
+    #   community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
+    #   n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
+    #   temporal_window: 15  # Increase from 10 to 15 for better trend detection
+    #   min_edges_per_component: 2  # Lower threshold for connectivity constraints
+    #   degree_reg: 0.2  # Reduce degree regularization (if present) 
+    #   change_threshold: 0.15  # Lower the threshold to detect changes earlier
+    #   smoothing_window: 5  # Add/increase smoothing window if not already present
+    #   min_weight: 0.05  # Lower minimum weight for more adaptivity
+    #   distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing    
+
+
 
 # Output configuration
 output:

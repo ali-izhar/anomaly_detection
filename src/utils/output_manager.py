@@ -191,7 +191,7 @@ class OutputManager:
                             "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
-                            "Is Within 10 Steps": abs(distance) <= 10,
+                            "Is Within 20 Steps": abs(distance) <= 20,
                         }
                     )
 
@@ -214,7 +214,7 @@ class OutputManager:
                             "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
-                            "Is Within 10 Steps": abs(distance) <= 10,
+                            "Is Within 20 Steps": abs(distance) <= 20,
                         }
                     )
 
@@ -232,7 +232,7 @@ class OutputManager:
                     "Detection Index",
                     "Nearest True CP",
                     "Distance to CP",
-                    "Is Within 10 Steps",
+                    "Is Within 20 Steps",
                 ]
             )
             df_details.to_excel(writer, sheet_name="Detection Details", index=False)
