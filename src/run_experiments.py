@@ -57,25 +57,27 @@ def setup_output_dir(base_dir: str, experiment_name: str) -> str:
     return exp_output_dir
 
 
-def save_results_robust(results_df: pd.DataFrame, base_output_dir: str, filename_prefix: str) -> None:
+def save_results_robust(
+    results_df: pd.DataFrame, base_output_dir: str, filename_prefix: str
+) -> None:
     """Robustly save results to both CSV and Excel formats with error handling."""
     try:
         # Ensure output directory exists
         os.makedirs(base_output_dir, exist_ok=True)
-        
+
         # Save as CSV (fallback)
         csv_path = os.path.join(base_output_dir, f"{filename_prefix}.csv")
         results_df.to_csv(csv_path, index=False)
         logger.info(f"Results saved to CSV: {csv_path}")
-        
+
         # Save as Excel (preferred)
         try:
             excel_path = os.path.join(base_output_dir, f"{filename_prefix}.xlsx")
-            with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-                results_df.to_excel(writer, sheet_name='Results', index=False)
-                
+            with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+                results_df.to_excel(writer, sheet_name="Results", index=False)
+
                 # Auto-adjust column widths
-                worksheet = writer.sheets['Results']
+                worksheet = writer.sheets["Results"]
                 for column in worksheet.columns:
                     max_length = 0
                     column_letter = column[0].column_letter
@@ -87,37 +89,43 @@ def save_results_robust(results_df: pd.DataFrame, base_output_dir: str, filename
                             pass
                     adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
                     worksheet.column_dimensions[column_letter].width = adjusted_width
-                    
+
             logger.info(f"Results saved to Excel: {excel_path}")
         except ImportError:
-            logger.warning("openpyxl not available, only CSV file saved. Install with: pip install openpyxl")
+            logger.warning(
+                "openpyxl not available, only CSV file saved. Install with: pip install openpyxl"
+            )
         except Exception as e:
-            logger.error(f"Error saving Excel file: {str(e)}, CSV file available as backup")
-            
+            logger.error(
+                f"Error saving Excel file: {str(e)}, CSV file available as backup"
+            )
+
     except Exception as e:
         logger.error(f"Error saving results: {str(e)}")
         raise
 
 
-def standardize_metrics(metrics: Dict[str, Any], experiment_type: str) -> Dict[str, Any]:
+def standardize_metrics(
+    metrics: Dict[str, Any], experiment_type: str
+) -> Dict[str, Any]:
     """Standardize metrics dictionary to ensure consistent structure across all experiment types."""
     standardized = {
-        'name': metrics.get('name', 'unknown'),
-        'experiment_type': experiment_type,
-        'network': metrics.get('network', ''),
-        'TPR': float(metrics.get('TPR', metrics.get('tpr', 0))),
-        'FPR': float(metrics.get('FPR', 0)),
-        'ADD': float(metrics.get('ADD', 0)),
-        'TPR_horizon': float(metrics.get('TPR_horizon', 0)),
-        'ADD_horizon': float(metrics.get('ADD_horizon', 0)),
-        'delay_reduction': float(metrics.get('delay_reduction', 0)),
+        "name": metrics.get("name", "unknown"),
+        "experiment_type": experiment_type,
+        "network": metrics.get("network", ""),
+        "TPR": float(metrics.get("TPR", metrics.get("tpr", 0))),
+        "FPR": float(metrics.get("FPR", 0)),
+        "ADD": float(metrics.get("ADD", 0)),
+        "TPR_horizon": float(metrics.get("TPR_horizon", 0)),
+        "ADD_horizon": float(metrics.get("ADD_horizon", 0)),
+        "delay_reduction": float(metrics.get("delay_reduction", 0)),
     }
-    
+
     # Add experiment-specific fields while maintaining structure
     for key, value in metrics.items():
         if key not in standardized:
             standardized[key] = value
-            
+
     return standardized
 
 
@@ -323,7 +331,7 @@ def run_experiment(exp_config: Dict[str, Any]) -> Dict[str, Any]:
                 "delay_reduction": result.get("delay_reduction_percent", 0),
             }
 
-        # Standardize metrics based on experiment type
+            # Standardize metrics based on experiment type
         experiment_type = "unknown"
         if "group" in exp_config:
             experiment_type = "sensitivity"
@@ -333,15 +341,66 @@ def run_experiment(exp_config: Dict[str, Any]) -> Dict[str, Any]:
             experiment_type = "comparison"
         elif "threshold_experiment" in exp_config:
             experiment_type = "threshold"
-            
+
         standardized_metrics = standardize_metrics(metrics, experiment_type)
-        
+
+        # Save individual experiment results to its own folder (alongside config.yaml)
+        try:
+            individual_results_df = pd.DataFrame([standardized_metrics])
+            save_results_robust(
+                individual_results_df, output_dir, f"{exp_name}_results"
+            )
+
+            # Create a summary file for this experiment
+            summary_content = f"""# Experiment: {exp_name}
+
+## Files in this directory:
+- `config.yaml`: Complete configuration used for this experiment
+- `{exp_name}_results.xlsx`: Results in Excel format
+- `{exp_name}_results.csv`: Results in CSV format (backup)
+- `experiment_summary.txt`: This summary file
+
+## Experiment Details:
+- **Experiment Name**: {exp_name}
+- **Experiment Type**: {experiment_type}
+- **Network**: {standardized_metrics.get('network', 'N/A')}
+- **Completion Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **Duration**: {duration:.2f} seconds
+
+## Key Results:
+- **TPR (True Positive Rate)**: {standardized_metrics.get('TPR', 0):.4f}
+- **FPR (False Positive Rate)**: {standardized_metrics.get('FPR', 0):.4f}
+- **ADD (Average Detection Delay)**: {standardized_metrics.get('ADD', 0):.4f}
+- **TPR Horizon**: {standardized_metrics.get('TPR_horizon', 0):.4f}
+- **ADD Horizon**: {standardized_metrics.get('ADD_horizon', 0):.4f}
+- **Delay Reduction**: {standardized_metrics.get('delay_reduction', 0):.4f}%
+
+## Reproducibility:
+To reproduce this experiment, use the `config.yaml` file in this directory with the main experiment runner.
+"""
+
+            with open(os.path.join(output_dir, "experiment_summary.txt"), "w") as f:
+                f.write(summary_content)
+
+            logger.info(f"Individual results saved to: {output_dir}")
+        except Exception as e:
+            logger.warning(
+                f"Could not save individual results for {exp_name}: {str(e)}"
+            )
+
         logger.info(f"Experiment {exp_name} completed successfully")
         return {"success": True, "metrics": standardized_metrics, "exp_name": exp_name}
     except Exception as e:
-        error_details = f"Error running experiment {exp_name}: {str(e)}\n{traceback.format_exc()}"
+        error_details = (
+            f"Error running experiment {exp_name}: {str(e)}\n{traceback.format_exc()}"
+        )
         logger.error(error_details)
-        return {"success": False, "error": str(e), "exp_name": exp_name, "error_details": error_details}
+        return {
+            "success": False,
+            "error": str(e),
+            "exp_name": exp_name,
+            "error_details": error_details,
+        }
 
 
 def run_sensitivity_experiments(max_workers: int = 4) -> pd.DataFrame:
@@ -598,39 +657,45 @@ def run_sensitivity_experiments(max_workers: int = 4) -> pd.DataFrame:
         if not all_results:
             logger.warning("No successful results to save")
             return pd.DataFrame()
-            
+
         results_df = pd.DataFrame(all_results)
-        
+
         # Add summary statistics
         total_experiments = len(all_experiments)
         successful_experiments = completed
         failed_experiments = failed
-        success_rate = (successful_experiments / total_experiments) * 100 if total_experiments > 0 else 0
-        
+        success_rate = (
+            (successful_experiments / total_experiments) * 100
+            if total_experiments > 0
+            else 0
+        )
+
         logger.info(f"===== SENSITIVITY EXPERIMENTS SUMMARY =====")
         logger.info(f"Total experiments: {total_experiments}")
         logger.info(f"Successful: {successful_experiments}")
         logger.info(f"Failed: {failed_experiments}")
         logger.info(f"Success rate: {success_rate:.1f}%")
         logger.info(f"============================================")
-        
+
         # Save results using robust function
         save_results_robust(results_df, base_output_dir, "sensitivity_results")
-        
+
         # Save experiment summary
         summary_data = {
-            'total_experiments': [total_experiments],
-            'successful_experiments': [successful_experiments],
-            'failed_experiments': [failed_experiments],
-            'success_rate_percent': [success_rate],
-            'timestamp': [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+            "total_experiments": [total_experiments],
+            "successful_experiments": [successful_experiments],
+            "failed_experiments": [failed_experiments],
+            "success_rate_percent": [success_rate],
+            "timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         }
         summary_df = pd.DataFrame(summary_data)
         save_results_robust(summary_df, base_output_dir, "sensitivity_summary")
-        
-        logger.info(f"All sensitivity experiments completed. Results saved to {base_output_dir}")
+
+        logger.info(
+            f"All sensitivity experiments completed. Results saved to {base_output_dir}"
+        )
         return results_df
-        
+
     except Exception as e:
         logger.error(f"Error saving sensitivity results: {str(e)}")
         logger.error(traceback.format_exc())
@@ -1200,15 +1265,15 @@ def run_comparison_experiments(max_workers: int = 4) -> pd.DataFrame:
         if not all_results:
             logger.warning("No successful comparison results to save")
             return pd.DataFrame()
-            
+
         results_df = pd.DataFrame(all_results)
-        
+
         # Calculate totals for summary
         param_total = len(param_exp_configs) + len(epsilon_exp_configs)
         comparison_total = len(comparison_exp_configs)
         threshold_total = len(threshold_exp_configs)
         total_experiments = param_total + comparison_total + threshold_total
-        
+
         logger.info(f"===== COMPARISON EXPERIMENTS SUMMARY =====")
         logger.info(f"Parameter determination experiments: {param_total}")
         logger.info(f"Method comparison experiments: {comparison_total}")
@@ -1216,48 +1281,62 @@ def run_comparison_experiments(max_workers: int = 4) -> pd.DataFrame:
         logger.info(f"Total experiments: {total_experiments}")
         logger.info(f"Successful results: {len(all_results)}")
         logger.info(f"==========================================")
-        
+
         # Save results using robust function
         save_results_robust(results_df, base_output_dir, "comparison_results")
-        
+
         # Save separate files for different experiment types for easier analysis
         try:
             # Separate parameter determination results
-            param_results = [r for r in all_results if r.get('experiment_type') == 'parameter_test']
+            param_results = [
+                r for r in all_results if r.get("experiment_type") == "parameter_test"
+            ]
             if param_results:
                 param_df = pd.DataFrame(param_results)
-                save_results_robust(param_df, base_output_dir, "parameter_determination_results")
-                
+                save_results_robust(
+                    param_df, base_output_dir, "parameter_determination_results"
+                )
+
             # Separate comparison results
-            comparison_results = [r for r in all_results if r.get('experiment_type') == 'comparison']
+            comparison_results = [
+                r for r in all_results if r.get("experiment_type") == "comparison"
+            ]
             if comparison_results:
                 comparison_df = pd.DataFrame(comparison_results)
-                save_results_robust(comparison_df, base_output_dir, "method_comparison_results")
-                
+                save_results_robust(
+                    comparison_df, base_output_dir, "method_comparison_results"
+                )
+
             # Separate threshold results
-            threshold_results = [r for r in all_results if r.get('experiment_type') == 'threshold']
+            threshold_results = [
+                r for r in all_results if r.get("experiment_type") == "threshold"
+            ]
             if threshold_results:
                 threshold_df = pd.DataFrame(threshold_results)
-                save_results_robust(threshold_df, base_output_dir, "threshold_analysis_results")
-                
+                save_results_robust(
+                    threshold_df, base_output_dir, "threshold_analysis_results"
+                )
+
         except Exception as e:
             logger.warning(f"Could not create separate result files: {str(e)}")
-        
+
         # Save experiment summary
         summary_data = {
-            'parameter_experiments': [param_total],
-            'comparison_experiments': [comparison_total],
-            'threshold_experiments': [threshold_total],
-            'total_experiments': [total_experiments],
-            'successful_results': [len(all_results)],
-            'timestamp': [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+            "parameter_experiments": [param_total],
+            "comparison_experiments": [comparison_total],
+            "threshold_experiments": [threshold_total],
+            "total_experiments": [total_experiments],
+            "successful_results": [len(all_results)],
+            "timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
         }
         summary_df = pd.DataFrame(summary_data)
         save_results_robust(summary_df, base_output_dir, "comparison_summary")
-        
-        logger.info(f"All comparison experiments completed. Results saved to {base_output_dir}")
+
+        logger.info(
+            f"All comparison experiments completed. Results saved to {base_output_dir}"
+        )
         return results_df
-        
+
     except Exception as e:
         logger.error(f"Error saving comparison results: {str(e)}")
         logger.error(traceback.format_exc())
@@ -1311,66 +1390,78 @@ def main():
     overall_start_time = datetime.now()
     all_experiment_results = []
     experiment_summaries = []
-    
+
     # Run requested experiments
     try:
         if args.all or args.sensitivity:
             logger.info("=" * 60)
             logger.info("STARTING SENSITIVITY EXPERIMENTS (Table III)")
             logger.info("=" * 60)
-            
+
             try:
                 sensitivity_df = run_sensitivity_experiments(max_workers=args.workers)
                 if not sensitivity_df.empty:
-                    all_experiment_results.append(('sensitivity', sensitivity_df))
-                    experiment_summaries.append({
-                        'experiment_type': 'sensitivity',
-                        'total_results': len(sensitivity_df),
-                        'status': 'completed'
-                    })
+                    all_experiment_results.append(("sensitivity", sensitivity_df))
+                    experiment_summaries.append(
+                        {
+                            "experiment_type": "sensitivity",
+                            "total_results": len(sensitivity_df),
+                            "status": "completed",
+                        }
+                    )
                 else:
-                    experiment_summaries.append({
-                        'experiment_type': 'sensitivity',
-                        'total_results': 0,
-                        'status': 'failed_no_results'
-                    })
+                    experiment_summaries.append(
+                        {
+                            "experiment_type": "sensitivity",
+                            "total_results": 0,
+                            "status": "failed_no_results",
+                        }
+                    )
             except Exception as e:
                 logger.error(f"Sensitivity experiments failed: {str(e)}")
-                experiment_summaries.append({
-                    'experiment_type': 'sensitivity',
-                    'total_results': 0,
-                    'status': 'failed_with_error',
-                    'error': str(e)
-                })
+                experiment_summaries.append(
+                    {
+                        "experiment_type": "sensitivity",
+                        "total_results": 0,
+                        "status": "failed_with_error",
+                        "error": str(e),
+                    }
+                )
 
         if args.all or args.comparison:
             logger.info("=" * 60)
             logger.info("STARTING COMPARISON EXPERIMENTS (Table IV)")
             logger.info("=" * 60)
-            
+
             try:
                 comparison_df = run_comparison_experiments(max_workers=args.workers)
                 if not comparison_df.empty:
-                    all_experiment_results.append(('comparison', comparison_df))
-                    experiment_summaries.append({
-                        'experiment_type': 'comparison',
-                        'total_results': len(comparison_df),
-                        'status': 'completed'
-                    })
+                    all_experiment_results.append(("comparison", comparison_df))
+                    experiment_summaries.append(
+                        {
+                            "experiment_type": "comparison",
+                            "total_results": len(comparison_df),
+                            "status": "completed",
+                        }
+                    )
                 else:
-                    experiment_summaries.append({
-                        'experiment_type': 'comparison',
-                        'total_results': 0,
-                        'status': 'failed_no_results'
-                    })
+                    experiment_summaries.append(
+                        {
+                            "experiment_type": "comparison",
+                            "total_results": 0,
+                            "status": "failed_no_results",
+                        }
+                    )
             except Exception as e:
                 logger.error(f"Comparison experiments failed: {str(e)}")
-                experiment_summaries.append({
-                    'experiment_type': 'comparison',
-                    'total_results': 0,
-                    'status': 'failed_with_error',
-                    'error': str(e)
-                })
+                experiment_summaries.append(
+                    {
+                        "experiment_type": "comparison",
+                        "total_results": 0,
+                        "status": "failed_with_error",
+                        "error": str(e),
+                    }
+                )
 
         # Create consolidated results file if we have any results
         if all_experiment_results:
@@ -1378,47 +1469,61 @@ def main():
                 logger.info("=" * 60)
                 logger.info("CREATING CONSOLIDATED RESULTS")
                 logger.info("=" * 60)
-                
+
                 consolidated_output_dir = "results/consolidated"
                 os.makedirs(consolidated_output_dir, exist_ok=True)
-                
+
                 # Create consolidated DataFrame
                 all_dfs = []
                 for exp_type, df in all_experiment_results:
                     df_copy = df.copy()
-                    df_copy['source_experiment'] = exp_type
+                    df_copy["source_experiment"] = exp_type
                     all_dfs.append(df_copy)
-                
+
                 if all_dfs:
                     consolidated_df = pd.concat(all_dfs, ignore_index=True, sort=False)
-                    save_results_robust(consolidated_df, consolidated_output_dir, "all_experiments_consolidated")
-                    
-                    logger.info(f"Consolidated results saved with {len(consolidated_df)} total experiment results")
-                
+                    save_results_robust(
+                        consolidated_df,
+                        consolidated_output_dir,
+                        "all_experiments_consolidated",
+                    )
+
+                    logger.info(
+                        f"Consolidated results saved with {len(consolidated_df)} total experiment results"
+                    )
+
                 # Save overall summary
                 overall_end_time = datetime.now()
-                overall_duration = (overall_end_time - overall_start_time).total_seconds() / 60.0
-                
+                overall_duration = (
+                    overall_end_time - overall_start_time
+                ).total_seconds() / 60.0
+
                 summary_df = pd.DataFrame(experiment_summaries)
-                summary_df['overall_duration_minutes'] = overall_duration
-                summary_df['overall_start_time'] = overall_start_time.strftime("%Y-%m-%d %H:%M:%S")
-                summary_df['overall_end_time'] = overall_end_time.strftime("%Y-%m-%d %H:%M:%S")
-                
-                save_results_robust(summary_df, consolidated_output_dir, "overall_experiment_summary")
-                
+                summary_df["overall_duration_minutes"] = overall_duration
+                summary_df["overall_start_time"] = overall_start_time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                summary_df["overall_end_time"] = overall_end_time.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+
+                save_results_robust(
+                    summary_df, consolidated_output_dir, "overall_experiment_summary"
+                )
+
                 logger.info("=" * 60)
                 logger.info("ALL EXPERIMENTS COMPLETED")
                 logger.info(f"Total duration: {overall_duration:.1f} minutes")
                 logger.info(f"Results saved in: {consolidated_output_dir}")
                 logger.info("=" * 60)
-                
+
             except Exception as e:
                 logger.error(f"Error creating consolidated results: {str(e)}")
                 logger.error(traceback.format_exc())
-        
+
         if not (args.all or args.sensitivity or args.comparison):
             parser.print_help()
-            
+
     except KeyboardInterrupt:
         logger.info("Experiments interrupted by user")
         # Still try to save any partial results
@@ -1427,20 +1532,22 @@ def main():
                 logger.info("Saving partial results before exit...")
                 consolidated_output_dir = "results/consolidated_partial"
                 os.makedirs(consolidated_output_dir, exist_ok=True)
-                
+
                 all_dfs = []
                 for exp_type, df in all_experiment_results:
                     df_copy = df.copy()
-                    df_copy['source_experiment'] = exp_type
+                    df_copy["source_experiment"] = exp_type
                     all_dfs.append(df_copy)
-                
+
                 if all_dfs:
                     consolidated_df = pd.concat(all_dfs, ignore_index=True, sort=False)
-                    save_results_robust(consolidated_df, consolidated_output_dir, "partial_results")
+                    save_results_robust(
+                        consolidated_df, consolidated_output_dir, "partial_results"
+                    )
                     logger.info(f"Partial results saved to {consolidated_output_dir}")
             except Exception as e:
                 logger.error(f"Could not save partial results: {str(e)}")
-        
+
         sys.exit(1)
     except Exception as e:
         logger.error(f"Unexpected error in main execution: {str(e)}")

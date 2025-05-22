@@ -6,14 +6,14 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: false  # Whether to use prediction for enhanced detection
+  enable_prediction: true  # Whether to use prediction for enhanced detection
   enable_visualization: true  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 
 # Trial configuration
 trials:
   n_trials: 10  # Number of times to run the detector
-  random_seeds: [42, 142, 242, 342, 442, 542, 642, 742, 842, 1042]  # Fixed set of seeds for consistent detection
+  random_seeds: [42, 142, 241, 342, 441, 542, 642, 741, 842, 1041]  # Fixed set of seeds for consistent detection
 
 # Detection parameters
 detection:
