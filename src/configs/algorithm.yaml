@@ -85,7 +85,7 @@ features:
 # Model configuration
 model:
   type: "multiview"  # or "single_view"
-  network: "sbm"  # choices: ["ba", "ws", "er", "sbm"]
+  network: "er"  # choices: ["ba", "ws", "er", "sbm"]
   predictor:
     # Graph predictor configuration
     type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
