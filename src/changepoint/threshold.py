@@ -135,6 +135,7 @@ class ShapConfig:
         random_state: Random seed for reproducibility.
         use_probabilities: Whether to analyze probability outputs (via predict_proba).
         positive_class: Whether to analyze positive class predictions.
+        normalize: Whether to use normalized SHAP values (probability-based) or raw values (linear).
     """
 
     window_size: int = 5
@@ -144,6 +145,7 @@ class ShapConfig:
         True  # Changed default to True for better probability estimates
     )
     positive_class: bool = True
+    normalize: bool = False  # Default to raw SHAP values (not normalized)
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -392,6 +394,7 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
         change_points: Optional[List[int]] = None,
         timesteps: Optional[np.ndarray] = None,
         detection_index: Optional[int] = None,
+        normalize: bool = False,
     ) -> Tuple[np.ndarray, List[str]]:
         """Compute SHAP values directly from a pandas DataFrame containing martingale data.
 
@@ -401,6 +404,7 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
             change_points: Optional indices of true change points
             timesteps: Optional array of timesteps (if not provided, uses range(len(df)))
             detection_index: Optional index where detection occurred
+            normalize: Whether to use normalized SHAP values (probability-based) or raw values
 
         Returns:
             Tuple of (SHAP values, feature names)
@@ -422,19 +426,59 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
         # Get feature matrix
         X = df[feature_cols].values
 
-        # Set up config
-        config = ShapConfig(window_size=5, test_size=0.2, use_probabilities=True)
+        if normalize:
+            # Use the original SHAP approach with threshold model (normalized)
+            logger.info("Computing normalized SHAP values using threshold model...")
+            config = ShapConfig(
+                window_size=5, test_size=0.2, use_probabilities=True, normalize=True
+            )
 
-        # Create binary labels for SHAP analysis
-        sequence_length = len(df)
+            # Create binary labels for SHAP analysis
+            sequence_length = len(df)
 
-        # Compute SHAP values
-        shap_values = self.compute_shap_values(
-            X=X,
-            change_points=change_points,
-            sequence_length=sequence_length,
-            config=config,
-        )
+            # Compute SHAP values using threshold model
+            shap_values = self.compute_shap_values(
+                X=X,
+                change_points=change_points,
+                sequence_length=sequence_length,
+                config=config,
+            )
+        else:
+            # Use raw linear regression approach (not normalized)
+            logger.info("Computing raw SHAP values using linear regression...")
+
+            # Check if sum column exists
+            sum_col = "traditional_sum_martingales"
+            if sum_col not in df.columns:
+                # If no sum column, manually compute it
+                y = np.sum(X, axis=1)
+                logger.info("No sum column found, using manual sum of features")
+            else:
+                y = df[sum_col].values
+
+            # Use linear regression to get raw SHAP values
+            from sklearn.linear_model import LinearRegression
+
+            model_lr = LinearRegression(fit_intercept=False)
+            model_lr.fit(X, y)
+
+            # Raw SHAP values = feature_value * coefficient
+            shap_values = np.zeros(X.shape)
+            for i in range(len(feature_cols)):
+                shap_values[:, i] = X[:, i] * model_lr.coef_[i]
+
+            # Log diagnostic information
+            logger.info(f"Linear regression coefficients: {model_lr.coef_}")
+            y_pred = model_lr.predict(X)
+            from sklearn.metrics import r2_score
+
+            r2 = r2_score(y, y_pred)
+            logger.info(f"Linear model R²: {r2:.6f}")
+
+            # Verify sum equivalence
+            shap_sum = np.sum(shap_values, axis=1)
+            max_diff = np.max(np.abs(shap_sum - y))
+            logger.info(f"SHAP sum validation: max difference = {max_diff:.10f}")
 
         return shap_values, feature_cols
 
@@ -1168,6 +1212,7 @@ class CustomThresholdModel(BaseEstimator, ClassifierMixin):
                 change_points=change_points,
                 timesteps=timesteps,
                 detection_index=detection_idx,
+                normalize=False,
             )
 
             # Visualize
