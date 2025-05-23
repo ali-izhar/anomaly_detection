@@ -8,30 +8,27 @@ import numpy as np
 
 
 def setup_plot_style():
-    """Set up consistent plotting style for research visualizations optimized for 2-column layout."""
+    """Set up consistent plotting style for research visualizations."""
     plt.style.use("seaborn-v0_8-paper")
     rcParams.update(
         {
             "font.family": "serif",
             "font.serif": ["Computer Modern Roman", "Times New Roman"],
-            "font.size": 16,  # Increased from 13
-            "axes.labelsize": 18,  # Increased from 14
-            "axes.titlesize": 20,  # Increased from 16
-            "figure.titlesize": 22,  # Increased from 18
-            "xtick.labelsize": 14,  # Increased from 12
-            "ytick.labelsize": 14,  # Increased from 12
-            "legend.fontsize": 14,  # Increased from 12
-            "figure.figsize": (
-                3.5,
-                2.5,
-            ),  # Much smaller from (12, 7) - single column width
+            "font.size": 14,
+            "axes.labelsize": 15,
+            "axes.titlesize": 17,
+            "figure.titlesize": 19,
+            "xtick.labelsize": 13,
+            "ytick.labelsize": 13,
+            "legend.fontsize": 13,
+            "figure.figsize": (6, 4),
             "figure.dpi": 300,
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
             "axes.grid": True,
-            "grid.alpha": 0.3,  # Slightly more visible
+            "grid.alpha": 0.2,
             "axes.axisbelow": True,
-            "lines.linewidth": 2.5,  # Slightly thicker from 2
+            "lines.linewidth": 2,
             "axes.spines.top": False,
             "axes.spines.right": False,
         }
@@ -74,86 +71,6 @@ def load_data(file_path, sheet_name="Aggregate"):
     except Exception as e:
         print(f"Error reading file: {str(e)}")
         return None, []
-
-
-def calculate_correct_detection_delays(
-    trial_dfs, change_points, threshold=50.0, max_delay=50
-):
-    """Calculate correct detection delays from trial data, filtering out false positives.
-
-    Args:
-        trial_dfs: List of trial DataFrames
-        change_points: List of change points
-        threshold: Detection threshold
-        max_delay: Maximum reasonable delay to consider (filters out false positives)
-
-    Returns:
-        dict: Dictionary with corrected delays for each change point
-    """
-    if not trial_dfs or not change_points:
-        return {}
-
-    corrected_delays = {}
-
-    for cp in change_points:
-        trad_delays = []
-        hor_delays = []
-
-        for trial_df in trial_dfs:
-            if "traditional_sum_martingales" not in trial_df.columns:
-                continue
-
-            # Find first detection after change point (within reasonable range)
-            post_cp_data = trial_df[trial_df["timestep"] >= cp].copy()
-
-            # Traditional detection: first time threshold is crossed
-            trad_detections = post_cp_data[
-                post_cp_data["traditional_sum_martingales"] >= threshold
-            ]
-            if not trad_detections.empty:
-                first_trad_detection = trad_detections.iloc[0]["timestep"]
-                trad_delay = first_trad_detection - cp
-                # Only include if delay is reasonable (filter out false positives)
-                if 0 <= trad_delay <= max_delay:
-                    trad_delays.append(trad_delay)
-
-            # Horizon detection: first time threshold is crossed
-            if "horizon_sum_martingales" in trial_df.columns:
-                hor_detections = post_cp_data[
-                    post_cp_data["horizon_sum_martingales"] >= threshold
-                ]
-                if not hor_detections.empty:
-                    first_hor_detection = hor_detections.iloc[0]["timestep"]
-                    hor_delay = first_hor_detection - cp
-                    # Only include if delay is reasonable (filter out false positives)
-                    if 0 <= hor_delay <= max_delay:
-                        hor_delays.append(hor_delay)
-
-        # Calculate average delays for this change point
-        if trad_delays and hor_delays:
-            avg_trad_delay = sum(trad_delays) / len(trad_delays)
-            avg_hor_delay = sum(hor_delays) / len(hor_delays)
-            reduction = (
-                (avg_trad_delay - avg_hor_delay) / avg_trad_delay
-                if avg_trad_delay > 0
-                else 0
-            )
-
-            corrected_delays[cp] = {
-                "traditional_avg_delay": avg_trad_delay,
-                "horizon_avg_delay": avg_hor_delay,
-                "delay_reduction": reduction,
-                "trad_count": len(trad_delays),
-                "hor_count": len(hor_delays),
-            }
-
-            print(
-                f"Corrected CP {cp}: Trad delay={avg_trad_delay:.2f} (n={len(trad_delays)}), "
-                f"Horizon delay={avg_hor_delay:.2f} (n={len(hor_delays)}), "
-                f"Reduction={reduction:.2%}"
-            )
-
-    return corrected_delays
 
 
 def load_trial_data(file_path):
@@ -246,10 +163,8 @@ def plot_individual_martingales(
     n_cols = min(4, n_features)
     n_rows = (n_features + n_cols - 1) // n_cols
 
-    # Create figure - optimized for 2-column research layout
-    fig, axes = plt.subplots(
-        n_rows, n_cols, figsize=(7, 1.8 * n_rows), sharex=True
-    )  # Much smaller from (12, 2.8 * n_rows)
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 2.8 * n_rows), sharex=True)
     axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
 
     x = df["timestep"].values
@@ -257,11 +172,14 @@ def plot_individual_martingales(
     # Determine full data range for consistent x-axis limits
     x_min, x_max = min(x), max(x)
 
-    # Use cleaner tick marks - only to 200 to reduce clutter
-    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+    # # Use 40 instead of 20 as the tick spacing
+    # tick_spacing = max(40, (x_max - x_min) // 5)
 
-    # Set proper x-axis limits to include the last tick mark at 200 with small margin
-    x_limits = (x_min, 210)  # Reduced from 285
+    # Generate ticks from 0 to 200 by 40s, including 10 for prediction start
+    x_ticks = np.array([0, 40, 80, 120, 160, 200, 240, 280])
+
+    # Explicitly set the x-axis limits to show just a little beyond 200
+    x_limits = (x_min, 285)
 
     # Find global maximum for consistent y-axis limits
     y_max = 0
@@ -392,12 +310,8 @@ def plot_individual_martingales(
                         boxprops=dict(
                             facecolor="#ADD8E6", color="#0000CD", alpha=0.7
                         ),  # Improved colors
-                        whiskerprops=dict(
-                            color="#0000CD", linewidth=1.5
-                        ),  # Increased from 1.0
-                        medianprops=dict(
-                            color="#00008B", linewidth=2.0
-                        ),  # Increased from 1.5
+                        whiskerprops=dict(color="#0000CD", linewidth=1.0),
+                        medianprops=dict(color="#00008B", linewidth=1.5),
                         showfliers=False,
                         zorder=3,
                     )
@@ -411,19 +325,31 @@ def plot_individual_martingales(
                         boxprops=dict(
                             facecolor="#FFD580", color="#FF8C00", alpha=0.7
                         ),  # Improved colors
-                        whiskerprops=dict(
-                            color="#FF8C00", linewidth=1.5
-                        ),  # Increased from 1.0
-                        medianprops=dict(
-                            color="#FF4500", linewidth=2.0
-                        ),  # Increased from 1.5
+                        whiskerprops=dict(color="#FF8C00", linewidth=1.0),
+                        medianprops=dict(color="#FF4500", linewidth=1.5),
                         showfliers=False,
                         zorder=2,
                     )
 
                 # Also plot the means from the aggregate data as a line
                 ax.plot(
-                    x, df[col].values, "#0000CD", linewidth=1.5, alpha=0.5, zorder=1
+                    x, df[col].values, "#0000CD", linewidth=1.0, alpha=0.5, zorder=1
+                )
+
+                horizon_col = col.replace("traditional", "horizon")
+                if horizon_col in df.columns:
+                    ax.plot(
+                        x,
+                        df[horizon_col].values,
+                        "#FF8C00",
+                        linewidth=1.0,
+                        alpha=0.5,
+                        zorder=1,
+                    )
+            else:
+                # Regular line plot (original behavior)
+                ax.plot(
+                    x, df[col].values, "#0000CD", linewidth=1.5, label="Traditional"
                 )
 
                 horizon_col = col.replace("traditional", "horizon")
@@ -433,22 +359,6 @@ def plot_individual_martingales(
                         df[horizon_col].values,
                         "#FF8C00",
                         linewidth=1.5,
-                        alpha=0.5,
-                        zorder=1,
-                    )
-            else:
-                # Regular line plot (original behavior)
-                ax.plot(
-                    x, df[col].values, "#0000CD", linewidth=2.0, label="Traditional"
-                )
-
-                horizon_col = col.replace("traditional", "horizon")
-                if horizon_col in df.columns:
-                    ax.plot(
-                        x,
-                        df[horizon_col].values,
-                        "#FF8C00",
-                        linewidth=2.0,
                         label="Horizon",
                     )
 
@@ -458,20 +368,20 @@ def plot_individual_martingales(
                     # Add subtle background shading to highlight change points
                     ax.axvspan(cp - 1, cp + 1, color="gray", alpha=0.15, zorder=0)
                     ax.axvline(
-                        x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=2.0
+                        x=cp, color="gray", linestyle="--", alpha=0.8, linewidth=1.2
                     )
 
             # Set title and labels
             ax.set_title(
                 feature_name,
-                fontsize=16,  # Increased from 13
+                fontsize=13,
                 fontweight=title_fontweight,
                 color="#444444" if not is_important else "#000066",
             )
             if i % n_cols == 0:
-                ax.set_ylabel("Martingale Value", fontsize=15)  # Increased from 12
+                ax.set_ylabel("Martingale Value", fontsize=12)
             if i >= n_features - n_cols:
-                ax.set_xlabel("Time", fontsize=15)  # Increased from 12
+                ax.set_xlabel("Time", fontsize=12)
 
             ax.set_ylim(0, y_max)
             ax.set_yticks(range(0, int(y_max) + 1, int(threshold)))
@@ -483,7 +393,6 @@ def plot_individual_martingales(
             if i == 0:
                 if has_trial_data:
                     from matplotlib.patches import Patch
-                    from matplotlib.lines import Line2D
 
                     legend_elements = [
                         Patch(
@@ -498,48 +407,10 @@ def plot_individual_martingales(
                             alpha=0.7,
                             label="Horizon",
                         ),
-                        Line2D(
-                            [0],
-                            [0],
-                            color="red",
-                            linestyle="--",
-                            alpha=0.8,
-                            label="Threshold",
-                        ),
-                        Line2D(
-                            [0],
-                            [0],
-                            color="green",
-                            linestyle="--",
-                            alpha=0.7,
-                            label="Prediction",
-                        ),
                     ]
-                    ax.legend(
-                        handles=legend_elements,
-                        loc="upper left",
-                        fontsize=8,
-                        framealpha=0.9,
-                        bbox_to_anchor=(0.02, 0.98),
-                        ncol=2,
-                    )  # 2 columns with smaller text
+                    ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
                 else:
-                    # For non-trial data, create a simplified legend
-                    from matplotlib.lines import Line2D
-
-                    legend_elements = [
-                        Line2D(
-                            [0],
-                            [0],
-                            color="#0000CD",
-                            linewidth=2.0,
-                            label="Traditional",
-                        ),
-                        Line2D(
-                            [0], [0], color="#FF8C00", linewidth=2.0, label="Horizon"
-                        ),
-                    ]
-                    ax.legend(handles=legend_elements, loc="upper right", fontsize=13)
+                    ax.legend(loc="upper right", fontsize=10)
 
     # Hide unused subplots
     for i in range(n_features, len(axes)):
@@ -601,19 +472,21 @@ def plot_sum_martingales(
         print("Traditional sum martingale column not found")
         return
 
-    # Create figure - optimized for 2-column research layout
-    fig, ax = plt.subplots(figsize=(3.5, 2.5))  # Much smaller from (10, 6)
+    # Create figure
+    fig, ax = plt.subplots(
+        figsize=(6, 4)
+    )  # Further reduced from (9, 5.5) for single column
 
     x = df["timestep"].values
 
     # Clean up x-axis ticks - use fewer ticks to reduce clutter
     x_min, x_max = min(x), max(x)
 
-    # Use cleaner tick marks - only to 200 to reduce clutter
-    x_ticks = np.array([0, 40, 80, 120, 160, 200])
+    # Use same fixed tick marks as in individual plot, but add 10 for prediction start
+    x_ticks = np.array([0, 10, 40, 80, 120, 160, 200, 240, 280])
 
     # Set proper x-axis limits to include the last tick mark at 200 with small margin
-    x_limits = (x_min, 210)  # Reduced from 285
+    x_limits = (x_min, 285)
 
     # Check if we have trial data for box plots
     has_trial_data = trial_dfs is not None and len(trial_dfs) > 0
@@ -624,29 +497,42 @@ def plot_sum_martingales(
             # Add light shading after change point to highlight detection region
             ax.axvspan(cp, min(cp + 10, x_max), color="#f5f5f5", zorder=0)
 
-    # Add prediction start line back for legend
+    # Add prediction start line at t=10
     ax.axvline(
         x=10,
         color="green",
         linestyle="--",
         alpha=0.7,
-        linewidth=1.5,
+        linewidth=0.5,
         zorder=0,
     )
 
+    # Add annotation for prediction start directly at the line
+    ax.annotate(
+        "Prediction\nstarts",
+        xy=(10, 20),  # Position at t=10, y=20
+        xytext=(10, 20),  # Text directly at the point
+        color="green",
+        fontweight="bold",
+        fontsize=11,
+        ha="center",
+        va="bottom",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8, ec="green"),
+    )
+
     if has_trial_data:
-        # Reduce sample points for box plots to reduce clutter
+        # Sample points for box plots (plotting at every timestep would be too crowded)
         sample_points = []
         if change_points:
-            window = 3  # Reduced from 5 - fewer points before and after change points
+            window = 5  # Points before and after change points
             for cp in change_points:
                 for i in range(max(0, cp - window), min(max(x) + 1, cp + window + 1)):
                     if i in x:
                         sample_points.append(i)
 
-        # Add fewer regular samples to reduce clutter
+        # Add regular samples (about 10-15 points total)
         if len(x) > 0:
-            step = max(1, len(x) // 8)  # Reduced from 15 to 8 - fewer sample points
+            step = max(1, len(x) // 15)
             regular_points = list(range(int(min(x)), int(max(x)) + 1, step))
             sample_points.extend(regular_points)
 
@@ -695,8 +581,8 @@ def plot_sum_martingales(
                 widths=box_width,
                 patch_artist=True,
                 boxprops=dict(facecolor="#ADD8E6", color="#0000CD", alpha=0.7),
-                whiskerprops=dict(color="#0000CD", linewidth=1.5),  # Increased from 1.0
-                medianprops=dict(color="#00008B", linewidth=2.0),  # Increased from 1.5
+                whiskerprops=dict(color="#0000CD", linewidth=1.0),
+                medianprops=dict(color="#00008B", linewidth=1.5),
                 showfliers=False,
                 zorder=3,
             )
@@ -708,8 +594,8 @@ def plot_sum_martingales(
                 widths=box_width,
                 patch_artist=True,
                 boxprops=dict(facecolor="#FFD580", color="#FF8C00", alpha=0.7),
-                whiskerprops=dict(color="#FF8C00", linewidth=1.5),  # Increased from 1.0
-                medianprops=dict(color="#FF4500", linewidth=2.0),  # Increased from 1.5
+                whiskerprops=dict(color="#FF8C00", linewidth=1.0),
+                medianprops=dict(color="#FF4500", linewidth=1.5),
                 showfliers=False,
                 zorder=2,
             )
@@ -719,7 +605,7 @@ def plot_sum_martingales(
             x,
             df[trad_sum_col].values,
             "#0000CD",
-            linewidth=2.5,  # Increased from 2.0
+            linewidth=1.0,
             alpha=0.5,
             zorder=1,
         )
@@ -729,33 +615,23 @@ def plot_sum_martingales(
                 x,
                 df[hor_sum_col].values,
                 "#FF8C00",
-                linewidth=2.5,  # Increased from 2.0
+                linewidth=1.0,
                 alpha=0.5,
                 zorder=1,
             )
 
-        # Add comprehensive legend with 2 columns and smaller text
+        # Add legend with improved appearance
         from matplotlib.patches import Patch
-        from matplotlib.lines import Line2D
 
         legend_elements = [
             Patch(
                 facecolor="#ADD8E6", edgecolor="#0000CD", alpha=0.7, label="Traditional"
             ),
             Patch(facecolor="#FFD580", edgecolor="#FF8C00", alpha=0.7, label="Horizon"),
-            Line2D([0], [0], color="red", linestyle="--", alpha=0.8, label="Threshold"),
-            Line2D(
-                [0], [0], color="green", linestyle="--", alpha=0.7, label="Prediction"
-            ),
+            Patch(facecolor="red", edgecolor="red", alpha=0.5, label="Threshold"),
+            Patch(facecolor="gray", edgecolor="gray", alpha=0.5, label="Change Points"),
         ]
-        ax.legend(
-            handles=legend_elements,
-            loc="upper left",
-            fontsize=8,
-            framealpha=0.9,
-            bbox_to_anchor=(0.02, 0.98),
-            ncol=2,
-        )  # 2 columns with smaller text
+        ax.legend(handles=legend_elements, loc="upper right", fontsize=12)
 
     else:
         # Standard line plots (original behavior)
@@ -763,7 +639,7 @@ def plot_sum_martingales(
             x,
             df[trad_sum_col].values,
             "#0000CD",
-            linewidth=2.5,  # Increased from 2.0
+            linewidth=2.0,
             label="Traditional Sum",
             zorder=5,
         )
@@ -773,33 +649,13 @@ def plot_sum_martingales(
                 x,
                 df[hor_sum_col].values,
                 "#FF8C00",
-                linewidth=2.5,  # Increased from 2.0
+                linewidth=2.0,
                 label="Horizon Sum",
                 zorder=3,
             )
 
-        # Add comprehensive legend with 2 columns and smaller text
-        from matplotlib.patches import Patch
-        from matplotlib.lines import Line2D
-
-        legend_elements = [
-            Patch(
-                facecolor="#ADD8E6", edgecolor="#0000CD", alpha=0.7, label="Traditional"
-            ),
-            Patch(facecolor="#FFD580", edgecolor="#FF8C00", alpha=0.7, label="Horizon"),
-            Line2D([0], [0], color="red", linestyle="--", alpha=0.8, label="Threshold"),
-            Line2D(
-                [0], [0], color="green", linestyle="--", alpha=0.7, label="Prediction"
-            ),
-        ]
-        ax.legend(
-            handles=legend_elements,
-            loc="upper left",
-            fontsize=8,
-            framealpha=0.9,
-            bbox_to_anchor=(0.02, 0.98),
-            ncol=2,
-        )  # 2 columns with smaller text
+        # Add legend
+        ax.legend(loc="upper right", fontsize=12)
 
     # Add threshold line
     ax.axhline(
@@ -808,18 +664,11 @@ def plot_sum_martingales(
         linestyle="--",
         label="Threshold",
         alpha=0.8,
-        linewidth=2.0,  # Increased from 1.5
+        linewidth=1.5,
     )
 
     # Mark change points and add detection delay annotations if available
     if change_points:
-        # Calculate corrected delays to filter out false positives
-        corrected_delays = {}
-        if trial_dfs:
-            corrected_delays = calculate_correct_detection_delays(
-                trial_dfs, change_points, threshold
-            )
-
         for i, cp in enumerate(change_points):
             # Add vertical line for change point
             ax.axvline(
@@ -827,76 +676,95 @@ def plot_sum_martingales(
                 color="gray",
                 linestyle="--",
                 alpha=0.8,
-                linewidth=2.0,  # Increased from 1.2
+                linewidth=1.5,
                 label="Change Point" if i == 0 else "",
             )
 
-            # Use corrected delays if available, otherwise fall back to metadata
-            if cp in corrected_delays:
-                delay_data = corrected_delays[cp]
-                trad_delay = delay_data["traditional_avg_delay"]
-                hor_delay = delay_data["horizon_avg_delay"]
-                reduction = delay_data["delay_reduction"]
-            elif metadata_df is not None and i < len(metadata_df):
-                trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
-                hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
-                reduction = metadata_df.iloc[i].get(
-                    "delay_reduction", 1 - hor_delay / trad_delay
-                )
-            else:
-                continue  # Skip if no delay data available
+            # Add detection delay annotations if metadata is available
+            if metadata_df is not None and i < len(metadata_df):
+                try:
+                    trad_delay = metadata_df.iloc[i]["traditional_avg_delay"]
+                    hor_delay = metadata_df.iloc[i]["horizon_avg_delay"]
 
-            # Find detection points (where lines cross threshold)
-            trad_detection = cp + trad_delay
-            hor_detection = cp + hor_delay
+                    # Find detection points (where lines cross threshold)
+                    trad_detection = cp + trad_delay
+                    hor_detection = cp + hor_delay
 
-            # Add detection points and annotations only if enabled
-            if enable_annot:
-                # Add detection points only - remove detailed text annotations to reduce clutter
-                ax.scatter(
-                    [trad_detection],
-                    [threshold],
-                    color="#0000CD",
-                    s=30,  # Much smaller from 100
-                    zorder=10,
-                    marker="o",
-                )
-                ax.scatter(
-                    [hor_detection],
-                    [threshold],
-                    color="#FF8C00",
-                    s=30,  # Much smaller from 100
-                    zorder=10,
-                    marker="o",
-                )
+                    # Add detection points and annotations only if enabled
+                    if enable_annot:
+                        # Mark detection points
+                        ax.scatter(
+                            [trad_detection],
+                            [threshold],
+                            color="#0000CD",
+                            s=80,
+                            zorder=10,
+                            marker="o",
+                        )
+                        ax.scatter(
+                            [hor_detection],
+                            [threshold],
+                            color="#FF8C00",
+                            s=80,
+                            zorder=10,
+                            marker="o",
+                        )
 
-                # Only add the delay reduction annotation (most important info)
-                mid_point = (trad_detection + hor_detection) / 2
-                ax.annotate(
-                    f"{reduction:.0%} faster",  # Simplified format
-                    xy=(mid_point, threshold),
-                    xytext=(mid_point, threshold * 1.2),  # Reduced from 1.3
-                    color="#006400",
-                    fontweight="bold",
-                    fontsize=9,  # Further reduced from 11
-                    ha="center",
-                    bbox=dict(
-                        boxstyle="round,pad=0.15",
-                        fc="#E8F8E8",
-                        alpha=0.8,  # Smaller padding
-                    ),
-                )
+                        # Add traditional delay annotation
+                        ax.annotate(
+                            f"Traditional: {trad_delay:.1f}",
+                            xy=(trad_detection, threshold),
+                            xytext=(trad_detection + 2, threshold * 1.1),
+                            color="#00008B",
+                            fontweight="bold",
+                            fontsize=11,
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                        )
+
+                        # Add horizon delay annotation
+                        ax.annotate(
+                            f"Horizon: {hor_delay:.1f}",
+                            xy=(hor_detection, threshold),
+                            xytext=(hor_detection - 2, threshold * 0.9),
+                            color="#FF4500",
+                            fontweight="bold",
+                            fontsize=11,
+                            ha="right",
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                        )
+
+                        # Add delay reduction info between arrows
+                        reduction = metadata_df.iloc[i].get(
+                            "delay_reduction", 1 - hor_delay / trad_delay
+                        )
+                        mid_point = (trad_detection + hor_detection) / 2
+                        ax.annotate(
+                            f"{reduction:.1%} faster",
+                            xy=(mid_point, threshold),
+                            xytext=(mid_point, threshold * 1.3),
+                            color="#006400",
+                            fontweight="bold",
+                            fontsize=11,
+                            ha="center",
+                            bbox=dict(
+                                boxstyle="round,pad=0.3", fc="#E8F8E8", alpha=0.9
+                            ),
+                        )
+                except Exception as e:
+                    print(f"Error adding delay annotations: {e}")
 
     ax.set_xticks(x_ticks)
     tick_labels = [str(int(tick)) for tick in x_ticks]
     ax.set_xticklabels(tick_labels)
+    for tick in ax.get_xticklabels():
+        if tick.get_text() == "10":
+            tick.set_color("green")
+            tick.set_weight("bold")
 
     ax.set_xlim(x_limits)
     plt.setp(ax.get_xticklabels(), rotation=0)
-    ax.set_xlabel("Time", fontsize=16, fontweight="bold")  # Increased from 14
-    ax.set_ylabel(
-        "Martingale Value", fontsize=16, fontweight="bold"
-    )  # Increased from 14
+    ax.set_xlabel("Time", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Martingale Value", fontsize=14, fontweight="bold")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
