@@ -85,29 +85,55 @@ class GraphChangeDetection:
 
     def _setup_output_directory(self):
         """Create timestamped output directory with descriptive name."""
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        network_type = self.config["model"]["network"]
-        detection_method = self.config["detection"]["method"]
-        predictor_type = self.config["model"]["predictor"]["type"]
-        distance_measure = self.config["detection"]["distance"]["measure"]
+        # Check if a specific output directory is already set (e.g., by parameter sweep)
+        # If so, use it as-is without creating additional subdirectories
+        if "directory" in self.config.get("output", {}):
+            output_dir = self.config["output"]["directory"]
+            # Only create subdirectory if it looks like a base directory (not experiment-specific)
+            # Base directories typically don't have timestamps or complex naming
+            if not any(char.isdigit() for char in os.path.basename(output_dir)):
+                # Looks like a base directory, create experiment-specific subdirectory
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                network_type = self.config["model"]["network"]
+                detection_method = self.config["detection"]["method"]
+                predictor_type = self.config["model"]["predictor"]["type"]
+                distance_measure = self.config["detection"]["distance"]["measure"]
 
-        # For martingale method, include betting function in directory name
-        if detection_method == "martingale":
-            betting_function = self.config["detection"]["betting_func_config"]["name"]
-            dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}"
+                # For martingale method, include betting function in directory name
+                if detection_method == "martingale":
+                    betting_function = self.config["detection"]["betting_func_config"][
+                        "name"
+                    ]
+                    dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}"
+                else:
+                    dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{timestamp}"
+
+                self.config["output"]["directory"] = os.path.join(output_dir, dir_name)
+            # else: directory already specific, use as-is
         else:
-            dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{timestamp}"
+            # No directory specified, use default with timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            network_type = self.config["model"]["network"]
+            detection_method = self.config["detection"]["method"]
+            predictor_type = self.config["model"]["predictor"]["type"]
+            distance_measure = self.config["detection"]["distance"]["measure"]
 
-        self.config["output"]["directory"] = os.path.join(
-            self.config["output"]["directory"],
-            dir_name,
-        )
+            # For martingale method, include betting function in directory name
+            if detection_method == "martingale":
+                betting_function = self.config["detection"]["betting_func_config"][
+                    "name"
+                ]
+                dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{betting_function}_{timestamp}"
+            else:
+                dir_name = f"{network_type}_{detection_method}_{predictor_type}_{distance_measure}_{timestamp}"
+
+            self.config["output"]["directory"] = os.path.join("results", dir_name)
 
         os.makedirs(
             self.config["output"]["directory"],
             exist_ok=True,
         )
-        logger.debug(f"Created output directory: {self.config['output']['directory']}")
+        logger.debug(f"Using output directory: {self.config['output']['directory']}")
 
     def _init_generator(self):
         """Initialize the graph sequence generator.

@@ -41,8 +41,8 @@ def get_base_config() -> Dict[str, Any]:
             "save_csv": True,
         },
         "trials": {
-            "n_trials": 5,
-            "random_seeds": [42, 142, 242, 342, 442],
+            "n_trials": 1,
+            "random_seeds": [42],
         },
         "detection": {
             "method": "martingale",
@@ -150,21 +150,7 @@ def run_single_experiment(
         # Verify detection results file exists
         detection_file = os.path.join(output_dir, "detection_results.xlsx")
         if not os.path.exists(detection_file):
-            # Try alternative names and rename
-            alt_files = [
-                os.path.join(output_dir, "detection_results.csv"),
-                os.path.join(output_dir, f"{exp_name}_detection_results.xlsx"),
-                os.path.join(output_dir, "results.xlsx"),
-            ]
-
-            for alt_file in alt_files:
-                if os.path.exists(alt_file):
-                    os.rename(alt_file, detection_file)
-                    break
-            else:
-                raise FileNotFoundError(
-                    f"No detection results file found in {output_dir}"
-                )
+            raise FileNotFoundError(f"Detection results file missing: {detection_file}")
 
         # Verify required files exist
         if not os.path.exists(config_path):
