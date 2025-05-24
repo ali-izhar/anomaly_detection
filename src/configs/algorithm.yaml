@@ -6,7 +6,7 @@ description: "Forecast-based Graph Structural Change Detection using Martingale 
 
 # Algorithm execution mode
 execution:
-  enable_prediction: true  # Whether to use prediction for enhanced detection
+  enable_prediction: false  # Whether to use prediction for enhanced detection
   enable_visualization: true  # Whether to create visualizations
   save_csv: true  # Whether to export results to CSV files
 

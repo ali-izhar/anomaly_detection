@@ -183,17 +183,17 @@ def get_base_config() -> Dict[str, Any]:
     """Return the base configuration for all experiments."""
     return {
         "execution": {
-            "enable_prediction": True,
+            "enable_prediction": False,
             "enable_visualization": False,
             "save_csv": True,
         },
         "trials": {
-            "n_trials": 1,
-            "random_seeds": [42],
+            "n_trials": 10,
+            "random_seeds": [42, 142, 241, 342, 441, 542, 642, 741, 842, 1041],
         },
         "detection": {
             "method": "martingale",
-            "threshold": 50.0,
+            "threshold": 60.0,
             "batch_size": 1000,
             "reset": True,
             "reset_on_traditional": True,
