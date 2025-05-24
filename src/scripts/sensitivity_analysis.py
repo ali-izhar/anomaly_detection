@@ -35,13 +35,13 @@ def find_experiment_directories(base_dir: str) -> List[Path]:
     if not base_path.exists():
         logger.error(f"Base directory doesn't exist: {base_dir}")
         return []
-    
+
     experiment_dirs = []
     for item in base_path.iterdir():
         if item.is_dir():
             config_file = item / "config.yaml"
             results_file = item / "detection_results.xlsx"
-            
+
             if config_file.exists() and results_file.exists():
                 experiment_dirs.append(item)
             else:
@@ -50,7 +50,7 @@ def find_experiment_directories(base_dir: str) -> List[Path]:
                     logger.warning(f"  Missing: config.yaml")
                 if not results_file.exists():
                     logger.warning(f"  Missing: detection_results.xlsx")
-    
+
     logger.info(f"Found {len(experiment_dirs)} complete experiments")
     return experiment_dirs
 
@@ -105,14 +105,14 @@ def extract_actual_changepoints(metadata_df: pd.DataFrame) -> List[int]:
     if "change_point" in metadata_df.columns:
         changepoints = metadata_df["change_point"].dropna().unique().tolist()
         return [int(cp) for cp in changepoints if pd.notna(cp)]
-    
+
     # Try other possible column names
     possible_columns = ["changepoint", "cp", "actual_cp", "true_cp"]
     for col in possible_columns:
         if col in metadata_df.columns:
             changepoints = metadata_df[col].dropna().unique().tolist()
             return [int(cp) for cp in changepoints if pd.notna(cp)]
-    
+
     logger.error("Could not find actual changepoints in metadata")
     return []
 
@@ -122,7 +122,7 @@ def calculate_metrics(
 ) -> Dict[str, Dict[str, float]]:
     """
     Calculate TPR, FPR, and ADD based on detection details.
-    
+
     Criteria:
     - True Positive: Detection within 30 timesteps AFTER actual changepoint
     - False Positive: Detection not matching any actual changepoint within criteria
@@ -218,17 +218,17 @@ def calculate_metrics(
 
     logger.info(f"Processing {n_trials} trials with detection types: {detection_types}")
     logger.info(f"Actual changepoints: {actual_changepoints}")
-    
+
     results = {}
-    
+
     for det_type in detection_types:
         type_data = details_df[details_df["Type"] == det_type].copy()
-        
+
         true_positives = 0
         false_positives = 0
         total_actual_changes = len(actual_changepoints) * n_trials
         detection_delays = []
-        
+
         # Process each detection
         for _, detection in type_data.iterrows():
             detection_index = detection["Detection Index"]
@@ -241,7 +241,7 @@ def calculate_metrics(
             # Check if this is a true positive based on distance criteria
             if pd.notna(nearest_cp) and pd.notna(distance_to_cp):
                 distance_to_cp = int(distance_to_cp)
-                
+
                 # True positive: within 30 steps AFTER the changepoint
                 if distance_to_cp >= 0 and distance_to_cp <= 30:
                     true_positives += 1
@@ -259,10 +259,10 @@ def calculate_metrics(
                 logger.debug(
                     f"FP: {det_type} detection at {detection_index}, no valid CP match"
                 )
-        
+
         # Calculate metrics
         tpr = true_positives / total_actual_changes if total_actual_changes > 0 else 0.0
-        
+
         # For FPR calculation - use total possible false positive opportunities
         # Assuming 200 timesteps total minus actual changepoints
         total_timesteps = 200
@@ -285,7 +285,7 @@ def calculate_metrics(
                 metadata_add = metadata_df[add_col].dropna()
                 if len(metadata_add) > 0:
                     add = np.mean(metadata_add)
-        
+
         results[det_type] = {
             "TPR": tpr,
             "FPR": fpr,
@@ -298,7 +298,7 @@ def calculate_metrics(
 
         add_str = f"{add:.2f}" if add != float("inf") else "inf"
         logger.info(f"{det_type} - TPR: {tpr:.3f}, FPR: {fpr:.6f}, ADD: {add_str}")
-    
+
     return results
 
 
@@ -343,13 +343,13 @@ def group_experiments_by_parameters(
     for exp_dir, exp_data in all_results.items():
         if "config" not in exp_data or "results" not in exp_data:
             continue
-            
+
         params = exp_data["config"]
         results = exp_data["results"]
 
         if "metrics" not in results:
             continue
-            
+
         network = params.get("network", "unknown").upper()
 
         # Create parameter key based on betting type and specific parameters
@@ -475,7 +475,7 @@ def create_sensitivity_table(
                 row_data = {"Network": network, "Metric": metric}
                 table_data.append(row_data)
             continue
-            
+
         # Process each metric type
         for metric in metrics:
             row_data = {"Network": network, "Metric": metric}
@@ -613,16 +613,16 @@ def analyze_all_experiments(
 ) -> Dict[str, Any]:
     """Analyze all experiments and return results"""
     experiment_dirs = find_experiment_directories(base_dir)
-    
+
     if not experiment_dirs:
         logger.error("No experiments found")
         return {}
-    
+
     all_results = {}
-    
+
     for exp_dir in experiment_dirs:
         logger.info(f"Analyzing {exp_dir.name}")
-        
+
         # Load config
         config = load_experiment_config(exp_dir / "config.yaml")
         if not config:
@@ -630,15 +630,15 @@ def analyze_all_experiments(
 
         # Extract parameters
         params = extract_parameters_from_config(config)
-        
+
         # Analyze detection results
         results = analyze_detection_results(exp_dir / "detection_results.xlsx")
-        
+
         if results:
             all_results[exp_dir.name] = {"config": params, "results": results}
         else:
             logger.warning(f"Failed to analyze {exp_dir.name}")
-    
+
     logger.info(f"Successfully processed {len(all_results)} experiments")
     return all_results
 
@@ -944,16 +944,16 @@ def save_results(
 def main():
     """Main entry point"""
     logger.info("Starting sensitivity analysis")
-    
+
     # Check if results directory exists
     results_dir = "results/sensitivity_analysis_5"
     if not os.path.exists(results_dir):
         logger.error(f"Results directory not found: {results_dir}")
         return
-    
+
     # Analyze all experiments
     all_results = analyze_all_experiments(results_dir)
-    
+
     if not all_results:
         logger.error("No results to analyze")
         return
@@ -962,7 +962,7 @@ def main():
     print(f"SENSITIVITY ANALYSIS SUMMARY")
     print(f"{'='*60}")
     print(f"Total experiments analyzed: {len(all_results)}")
-        
+
     # Group results by parameters
     grouped_results = group_experiments_by_parameters(all_results)
     print(f"Networks found: {list(grouped_results.keys())}")
