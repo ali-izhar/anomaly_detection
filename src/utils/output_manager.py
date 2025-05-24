@@ -191,7 +191,7 @@ class OutputManager:
                             "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
-                            "Is Within 20 Steps": abs(distance) <= 20,
+                            "Is Within 30 Steps": abs(distance) <= 30,
                         }
                     )
 
@@ -214,7 +214,7 @@ class OutputManager:
                             "Detection Index": detection_point,
                             "Nearest True CP": nearest_cp,
                             "Distance to CP": distance,
-                            "Is Within 20 Steps": abs(distance) <= 20,
+                            "Is Within 30 Steps": abs(distance) <= 30,
                         }
                     )
 
@@ -232,13 +232,13 @@ class OutputManager:
                     "Detection Index",
                     "Nearest True CP",
                     "Distance to CP",
-                    "Is Within 20 Steps",
+                    "Is Within 30 Steps",
                 ]
             )
             df_details.to_excel(writer, sheet_name="Detection Details", index=False)
 
     def _count_detections_near_cp(
-        self, detections: List[int], change_point: int, window: int = 10
+        self, detections: List[int], change_point: int, window: int = 30
     ) -> int:
         """Count detections that occur within a window of a change point.
 
@@ -253,7 +253,7 @@ class OutputManager:
         return sum(1 for d in detections if abs(d - change_point) <= window)
 
     def _calc_detection_latency(
-        self, detections: List[int], change_point: int, window: int = 20
+        self, detections: List[int], change_point: int, window: int = 30
     ) -> int:
         """Calculate detection latency (time from change point to first detection).
 

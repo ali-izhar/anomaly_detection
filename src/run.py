@@ -90,6 +90,39 @@ def apply_cli_overrides(
         updated_config["detection"]["betting_func_config"]["name"] = args.betting_func
         logger.info(f"Overriding betting function: {args.betting_func}")
 
+    # Override epsilon for power betting
+    if args.epsilon is not None:
+        if "power" not in updated_config["detection"]["betting_func_config"]:
+            updated_config["detection"]["betting_func_config"]["power"] = {}
+        updated_config["detection"]["betting_func_config"]["power"][
+            "epsilon"
+        ] = args.epsilon
+        logger.info(f"Overriding power betting epsilon: {args.epsilon}")
+
+    # Override beta parameters for beta betting
+    if args.beta_a is not None:
+        if "beta" not in updated_config["detection"]["betting_func_config"]:
+            updated_config["detection"]["betting_func_config"]["beta"] = {}
+        updated_config["detection"]["betting_func_config"]["beta"]["a"] = args.beta_a
+        logger.info(f"Overriding beta betting alpha: {args.beta_a}")
+
+    if args.beta_b is not None:
+        if "beta" not in updated_config["detection"]["betting_func_config"]:
+            updated_config["detection"]["betting_func_config"]["beta"] = {}
+        updated_config["detection"]["betting_func_config"]["beta"]["b"] = args.beta_b
+        logger.info(f"Overriding beta betting beta: {args.beta_b}")
+
+    # Override mixture epsilons
+    if args.mixture_epsilons is not None:
+        if "mixture" not in updated_config["detection"]["betting_func_config"]:
+            updated_config["detection"]["betting_func_config"]["mixture"] = {}
+        # Parse comma-separated epsilon values
+        epsilons = [float(x.strip()) for x in args.mixture_epsilons.split(",")]
+        updated_config["detection"]["betting_func_config"]["mixture"][
+            "epsilons"
+        ] = epsilons
+        logger.info(f"Overriding mixture betting epsilons: {epsilons}")
+
     # Override distance measure
     if args.distance is not None:
         updated_config["detection"]["distance"]["measure"] = args.distance
@@ -99,6 +132,23 @@ def apply_cli_overrides(
     if args.reset_on_traditional is not None:
         updated_config["detection"]["reset_on_traditional"] = args.reset_on_traditional
         logger.info(f"Overriding reset_on_traditional: {args.reset_on_traditional}")
+
+    # Override dataset path for real datasets
+    if args.dataset is not None:
+        # For real datasets, we might need to adjust the model configuration
+        updated_config["model"]["network"] = "real_dataset"
+        updated_config["model"]["dataset_path"] = args.dataset
+        logger.info(f"Overriding dataset path: {args.dataset}")
+
+    # Override prediction horizon
+    if args.prediction_horizon is not None:
+        updated_config["detection"]["prediction_horizon"] = args.prediction_horizon
+        logger.info(f"Overriding prediction horizon: {args.prediction_horizon}")
+
+    # Override cooldown period
+    if args.cooldown_period is not None:
+        updated_config["detection"]["cooldown_period"] = args.cooldown_period
+        logger.info(f"Overriding cooldown period: {args.cooldown_period}")
 
     return updated_config
 
@@ -169,7 +219,7 @@ def main() -> None:
         help="Path to Excel file with detection results for visualization only",
     )
 
-    # Add new CLI parameters to override config values
+    # Basic experiment parameters
     parser.add_argument(
         "-n",
         "--n-trials",
@@ -187,8 +237,13 @@ def main() -> None:
         "--network",
         "-net",
         type=str,
-        choices=["sbm", "ba", "ws", "er"],
-        help="Network type (sbm: Stochastic Block Model, ba: Barabási–Albert, ws: Watts-Strogatz, er: Erdős–Rényi)",
+        choices=["sbm", "ba", "ws", "er", "real_dataset"],
+        help="Network type (sbm: Stochastic Block Model, ba: Barabási–Albert, ws: Watts-Strogatz, er: Erdős–Rényi, real_dataset: Real dataset)",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        help="Path to real dataset (when using --network real_dataset)",
     )
     parser.add_argument(
         "--threshold",
@@ -197,6 +252,8 @@ def main() -> None:
         help="Detection threshold value",
         dest="threshold",
     )
+
+    # Detection method parameters
     parser.add_argument(
         "--detection-method",
         "-dm",
@@ -205,6 +262,8 @@ def main() -> None:
         help="Detection method to use (martingale, cusum, ewma)",
         dest="detection_method",
     )
+
+    # Betting function parameters (for martingale method)
     parser.add_argument(
         "--betting-func",
         "-bf",
@@ -213,12 +272,43 @@ def main() -> None:
         help="Betting function type",
     )
     parser.add_argument(
+        "--epsilon",
+        type=float,
+        help="Epsilon parameter for power betting function (e.g., 0.2, 0.5, 0.7, 0.9)",
+    )
+    parser.add_argument(
+        "--beta-a",
+        type=float,
+        help="Alpha parameter for beta betting function",
+    )
+    parser.add_argument(
+        "--beta-b",
+        type=float,
+        help="Beta parameter for beta betting function",
+    )
+    parser.add_argument(
+        "--mixture-epsilons",
+        type=str,
+        help="Comma-separated epsilon values for mixture betting (e.g., '0.2,0.5,0.7,0.9')",
+    )
+
+    # Distance measure parameters
+    parser.add_argument(
         "--distance",
         "-d",
         type=str,
-        choices=["euclidean", "mahalanobis", "manhattan", "minkowski", "cosine"],
+        choices=[
+            "euclidean",
+            "mahalanobis",
+            "manhattan",
+            "minkowski",
+            "cosine",
+            "chebyshev",
+        ],
         help="Distance measure for detection",
     )
+
+    # Additional detection parameters
     parser.add_argument(
         "--reset-on-traditional",
         "-r",
@@ -226,6 +316,18 @@ def main() -> None:
         choices=[True, False],
         help="Reset on traditional change detection",
     )
+    parser.add_argument(
+        "--prediction-horizon",
+        type=int,
+        help="Number of steps to predict ahead for horizon martingales",
+    )
+    parser.add_argument(
+        "--cooldown-period",
+        type=int,
+        help="Minimum timesteps between consecutive detections",
+    )
+
+    # Output parameters
     parser.add_argument(
         "--output-dir",
         "-o",
