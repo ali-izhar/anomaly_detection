@@ -143,27 +143,25 @@ def compute_metrics_for_changepoint(
             "false_negatives": n_trials,
         }
 
-    # Count unique trials that had detections for this changepoint
-    trials_with_detections = cp_detections["Trial"].nunique()
+    # CORRECTED LOGIC:
+    # TPR = (Number of trials with at least one TP detection) / Total trials
+    # FPR = (Number of FP detections) / Total trials  
+    # ADD = Average delay of TP detections only
 
-    # True Positives: detections within window_size steps after changepoint
-    true_positives = len(cp_detections[cp_detections["Is Within 30 Steps"] == True])
-
-    # False Positives: detections outside the window (either too early or too late)
-    false_positives = len(cp_detections[cp_detections["Is Within 30 Steps"] == False])
-
-    # False Negatives: trials with no detection within window
-    # This includes trials with no detections at all + trials with only FP detections
-    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True][
-        "Trial"
-    ].nunique()
+    # Get trials that had at least one TRUE POSITIVE detection (within 30 steps)
+    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True]["Trial"].nunique()
+    
+    # Count total FALSE POSITIVE detections (outside 30 steps)
+    total_fp_detections = len(cp_detections[cp_detections["Is Within 30 Steps"] == False])
+    
+    # False Negatives: trials with no TP detection
     false_negatives = n_trials - trials_with_tp
 
     # Calculate TPR and FPR
     tpr = trials_with_tp / n_trials if n_trials > 0 else 0.0
-    fpr = false_positives / n_trials if n_trials > 0 else 0.0
+    fpr = total_fp_detections / n_trials if n_trials > 0 else 0.0
 
-    # Calculate ADD (Average Detection Delay) for true positives only
+    # Calculate ADD (Average Detection Delay) for TRUE POSITIVE detections only
     tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
     if len(tp_detections) > 0:
         add = tp_detections["Distance to CP"].mean()
@@ -177,10 +175,150 @@ def compute_metrics_for_changepoint(
         "fpr": fpr,
         "add": add,
         "true_positives": trials_with_tp,
-        "false_positives": false_positives,
+        "false_positives": total_fp_detections,
         "false_negatives": false_negatives,
-        "trials_with_detections": trials_with_detections,
+        "trials_with_detections": cp_detections["Trial"].nunique(),
     }
+
+
+def verify_metrics_calculation(detection_df: pd.DataFrame, changepoint: int, n_trials: int = 10) -> Dict:
+    """
+    Detailed verification of metrics calculation with step-by-step breakdown.
+    
+    Args:
+        detection_df: DataFrame with detection details
+        changepoint: The true changepoint location
+        n_trials: Total number of trials
+        
+    Returns:
+        Dictionary with detailed breakdown of calculations
+    """
+    print(f"\n=== VERIFYING METRICS FOR CHANGEPOINT {changepoint} ===")
+    
+    # Filter detections for this changepoint
+    cp_detections = detection_df[detection_df["Nearest True CP"] == changepoint].copy()
+    
+    print(f"Total trials: {n_trials}")
+    print(f"Total detections for CP {changepoint}: {len(cp_detections)}")
+    
+    if len(cp_detections) == 0:
+        print("❌ NO DETECTIONS FOUND")
+        print(f"TPR: 0/{n_trials} = 0.0")
+        print(f"FPR: 0/{n_trials} = 0.0") 
+        print(f"ADD: ∞ (no detections)")
+        return {
+            "tpr": 0.0, "fpr": 0.0, "add": float("inf"),
+            "tp_trials": 0, "fp_detections": 0, "fn_trials": n_trials
+        }
+    
+    # Show detection details
+    print("\nDETECTION BREAKDOWN:")
+    print(cp_detections[["Trial", "Detection Index", "Distance to CP", "Is Within 30 Steps"]].to_string())
+    
+    # True Positives: trials with at least one detection within 30 steps
+    tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
+    trials_with_tp = tp_detections["Trial"].nunique() if len(tp_detections) > 0 else 0
+    
+    # False Positives: detections outside 30 steps  
+    fp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == False]
+    total_fp_detections = len(fp_detections)
+    
+    # False Negatives: trials with no TP detection
+    fn_trials = n_trials - trials_with_tp
+    
+    print(f"\n✅ TRUE POSITIVE TRIALS: {trials_with_tp}")
+    if len(tp_detections) > 0:
+        print(f"   Trials with TP: {sorted(tp_detections['Trial'].unique())}")
+        print(f"   TP detection delays: {tp_detections['Distance to CP'].tolist()}")
+    
+    print(f"❌ FALSE POSITIVE DETECTIONS: {total_fp_detections}")
+    if len(fp_detections) > 0:
+        print(f"   FP trials: {sorted(fp_detections['Trial'].unique())}")
+        print(f"   FP detection delays: {fp_detections['Distance to CP'].tolist()}")
+    
+    print(f"⭕ FALSE NEGATIVE TRIALS: {fn_trials}")
+    
+    # Calculate metrics
+    tpr = trials_with_tp / n_trials
+    fpr = total_fp_detections / n_trials
+    add = tp_detections["Distance to CP"].mean() if len(tp_detections) > 0 else float("inf")
+    
+    print(f"\nFINAL METRICS:")
+    print(f"TPR = {trials_with_tp}/{n_trials} = {tpr:.3f}")
+    print(f"FPR = {total_fp_detections}/{n_trials} = {fpr:.3f}")
+    print(f"ADD = {add:.2f}" + (" (∞)" if add == float("inf") else ""))
+    
+    return {
+        "tpr": tpr, "fpr": fpr, "add": add,
+        "tp_trials": trials_with_tp, "fp_detections": total_fp_detections, "fn_trials": fn_trials
+    }
+
+
+def test_metrics_on_sample_experiment():
+    """
+    Test our metrics calculation on a sample experiment to verify correctness.
+    """
+    print("🧪 TESTING METRICS CALCULATION ON SAMPLE EXPERIMENT")
+    print("=" * 80)
+    
+    # Get first experiment directory
+    base_dir = "results/sensitivity_analysis"
+    all_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+    
+    if not all_dirs:
+        print("No experiment directories found!")
+        return
+    
+    # Find an experiment with actual detections
+    for dirname in all_dirs[:10]:  # Check first 10
+        folder_path = os.path.join(base_dir, dirname)
+        results_path = os.path.join(folder_path, "detection_results.xlsx")
+        
+        if not os.path.exists(results_path):
+            continue
+            
+        try:
+            # Load detection details
+            detection_details = pd.read_excel(results_path, sheet_name="Detection Details")
+            changepoint_metadata = pd.read_excel(results_path, sheet_name="ChangePointMetadata")
+            
+            if len(detection_details) > 0:  # Found experiment with detections
+                print(f"📁 Analyzing: {dirname}")
+                
+                changepoints = changepoint_metadata["change_point"].tolist()
+                print(f"📍 Changepoints: {changepoints}")
+                
+                for cp in changepoints:
+                    # Verify our calculation
+                    verified_metrics = verify_metrics_calculation(detection_details, cp, n_trials=10)
+                    
+                    # Compare with our function
+                    computed_metrics = compute_metrics_for_changepoint(detection_details, cp, n_trials=10)
+                    
+                    print(f"\n🔍 COMPARISON:")
+                    print(f"   Verified TPR: {verified_metrics['tpr']:.3f} | Computed TPR: {computed_metrics['tpr']:.3f}")
+                    print(f"   Verified FPR: {verified_metrics['fpr']:.3f} | Computed FPR: {computed_metrics['fpr']:.3f}")
+                    print(f"   Verified ADD: {verified_metrics['add']:.2f} | Computed ADD: {computed_metrics['add']:.2f}")
+                    
+                    # Check if they match
+                    tpr_match = abs(verified_metrics['tpr'] - computed_metrics['tpr']) < 0.001
+                    fpr_match = abs(verified_metrics['fpr'] - computed_metrics['fpr']) < 0.001
+                    add_match = (verified_metrics['add'] == computed_metrics['add']) or \
+                               (verified_metrics['add'] != float("inf") and computed_metrics['add'] != float("inf") and \
+                                abs(verified_metrics['add'] - computed_metrics['add']) < 0.001)
+                    
+                    if tpr_match and fpr_match and add_match:
+                        print("✅ METRICS MATCH - Calculation is correct!")
+                    else:
+                        print("❌ METRICS MISMATCH - Need to fix calculation!")
+                
+                return  # Only test first experiment with detections
+                
+        except Exception as e:
+            print(f"Error processing {dirname}: {e}")
+            continue
+    
+    print("No experiments with detections found in first 10 directories")
 
 
 def analyze_experiment_folder(folder_path: str) -> Optional[Dict]:
@@ -836,20 +974,24 @@ def main():
     """Main function to create parameter sensitivity analysis."""
     print("Creating Parameter Sensitivity Analysis Table...")
     print("=" * 80)
-
+    
+    # First, test our metrics calculation
+    print("Step 0: Verifying metrics calculation...")
+    test_metrics_on_sample_experiment()
+    
     # Collect all experiment data
-    print("Step 1: Collecting data from all experiments...")
+    print("\nStep 1: Collecting data from all experiments...")
     experiment_data = collect_all_experiment_data()
-
+    
     if not experiment_data:
         print("No experiment data found!")
         return
-
+    
     # Create the sensitivity table
     print("\nStep 2: Creating parameter sensitivity table...")
     sensitivity_df = create_parameter_sensitivity_table(experiment_data)
-
-        # Format and display the table
+    
+    # Format and display the table
     print("\nStep 3: Formatting results...")
     formatted_table = format_sensitivity_table_for_paper(sensitivity_df)
     latex_table = create_latex_sensitivity_table(sensitivity_df)
