@@ -145,15 +145,19 @@ def compute_metrics_for_changepoint(
 
     # CORRECTED LOGIC:
     # TPR = (Number of trials with at least one TP detection) / Total trials
-    # FPR = (Number of FP detections) / Total trials  
+    # FPR = (Number of FP detections) / Total trials
     # ADD = Average delay of TP detections only
 
     # Get trials that had at least one TRUE POSITIVE detection (within 30 steps)
-    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True]["Trial"].nunique()
-    
+    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True][
+        "Trial"
+    ].nunique()
+
     # Count total FALSE POSITIVE detections (outside 30 steps)
-    total_fp_detections = len(cp_detections[cp_detections["Is Within 30 Steps"] == False])
-    
+    total_fp_detections = len(
+        cp_detections[cp_detections["Is Within 30 Steps"] == False]
+    )
+
     # False Negatives: trials with no TP detection
     false_negatives = n_trials - trials_with_tp
 
@@ -181,76 +185,94 @@ def compute_metrics_for_changepoint(
     }
 
 
-def verify_metrics_calculation(detection_df: pd.DataFrame, changepoint: int, n_trials: int = 10) -> Dict:
+def verify_metrics_calculation(
+    detection_df: pd.DataFrame, changepoint: int, n_trials: int = 10
+) -> Dict:
     """
     Detailed verification of metrics calculation with step-by-step breakdown.
-    
+
     Args:
         detection_df: DataFrame with detection details
         changepoint: The true changepoint location
         n_trials: Total number of trials
-        
+
     Returns:
         Dictionary with detailed breakdown of calculations
     """
     print(f"\n=== VERIFYING METRICS FOR CHANGEPOINT {changepoint} ===")
-    
+
     # Filter detections for this changepoint
     cp_detections = detection_df[detection_df["Nearest True CP"] == changepoint].copy()
-    
+
     print(f"Total trials: {n_trials}")
     print(f"Total detections for CP {changepoint}: {len(cp_detections)}")
-    
+
     if len(cp_detections) == 0:
         print("❌ NO DETECTIONS FOUND")
         print(f"TPR: 0/{n_trials} = 0.0")
-        print(f"FPR: 0/{n_trials} = 0.0") 
+        print(f"FPR: 0/{n_trials} = 0.0")
         print(f"ADD: ∞ (no detections)")
         return {
-            "tpr": 0.0, "fpr": 0.0, "add": float("inf"),
-            "tp_trials": 0, "fp_detections": 0, "fn_trials": n_trials
+            "tpr": 0.0,
+            "fpr": 0.0,
+            "add": float("inf"),
+            "tp_trials": 0,
+            "fp_detections": 0,
+            "fn_trials": n_trials,
         }
-    
+
     # Show detection details
     print("\nDETECTION BREAKDOWN:")
-    print(cp_detections[["Trial", "Detection Index", "Distance to CP", "Is Within 30 Steps"]].to_string())
-    
+    print(
+        cp_detections[
+            ["Trial", "Detection Index", "Distance to CP", "Is Within 30 Steps"]
+        ].to_string()
+    )
+
     # True Positives: trials with at least one detection within 30 steps
     tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
     trials_with_tp = tp_detections["Trial"].nunique() if len(tp_detections) > 0 else 0
-    
-    # False Positives: detections outside 30 steps  
+
+    # False Positives: detections outside 30 steps
     fp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == False]
     total_fp_detections = len(fp_detections)
-    
+
     # False Negatives: trials with no TP detection
     fn_trials = n_trials - trials_with_tp
-    
+
     print(f"\n✅ TRUE POSITIVE TRIALS: {trials_with_tp}")
     if len(tp_detections) > 0:
         print(f"   Trials with TP: {sorted(tp_detections['Trial'].unique())}")
         print(f"   TP detection delays: {tp_detections['Distance to CP'].tolist()}")
-    
+
     print(f"❌ FALSE POSITIVE DETECTIONS: {total_fp_detections}")
     if len(fp_detections) > 0:
         print(f"   FP trials: {sorted(fp_detections['Trial'].unique())}")
         print(f"   FP detection delays: {fp_detections['Distance to CP'].tolist()}")
-    
+
     print(f"⭕ FALSE NEGATIVE TRIALS: {fn_trials}")
-    
+
     # Calculate metrics
     tpr = trials_with_tp / n_trials
     fpr = total_fp_detections / n_trials
-    add = tp_detections["Distance to CP"].mean() if len(tp_detections) > 0 else float("inf")
-    
+    add = (
+        tp_detections["Distance to CP"].mean()
+        if len(tp_detections) > 0
+        else float("inf")
+    )
+
     print(f"\nFINAL METRICS:")
     print(f"TPR = {trials_with_tp}/{n_trials} = {tpr:.3f}")
     print(f"FPR = {total_fp_detections}/{n_trials} = {fpr:.3f}")
     print(f"ADD = {add:.2f}" + (" (∞)" if add == float("inf") else ""))
-    
+
     return {
-        "tpr": tpr, "fpr": fpr, "add": add,
-        "tp_trials": trials_with_tp, "fp_detections": total_fp_detections, "fn_trials": fn_trials
+        "tpr": tpr,
+        "fpr": fpr,
+        "add": add,
+        "tp_trials": trials_with_tp,
+        "fp_detections": total_fp_detections,
+        "fn_trials": fn_trials,
     }
 
 
@@ -260,64 +282,89 @@ def test_metrics_on_sample_experiment():
     """
     print("🧪 TESTING METRICS CALCULATION ON SAMPLE EXPERIMENT")
     print("=" * 80)
-    
+
     # Get first experiment directory
     base_dir = "results/sensitivity_analysis"
-    all_dirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-    
+    all_dirs = [
+        d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))
+    ]
+
     if not all_dirs:
         print("No experiment directories found!")
         return
-    
+
     # Find an experiment with actual detections
     for dirname in all_dirs[:10]:  # Check first 10
         folder_path = os.path.join(base_dir, dirname)
         results_path = os.path.join(folder_path, "detection_results.xlsx")
-        
+
         if not os.path.exists(results_path):
             continue
-            
+
         try:
             # Load detection details
-            detection_details = pd.read_excel(results_path, sheet_name="Detection Details")
-            changepoint_metadata = pd.read_excel(results_path, sheet_name="ChangePointMetadata")
-            
+            detection_details = pd.read_excel(
+                results_path, sheet_name="Detection Details"
+            )
+            changepoint_metadata = pd.read_excel(
+                results_path, sheet_name="ChangePointMetadata"
+            )
+
             if len(detection_details) > 0:  # Found experiment with detections
                 print(f"📁 Analyzing: {dirname}")
-                
+
                 changepoints = changepoint_metadata["change_point"].tolist()
                 print(f"📍 Changepoints: {changepoints}")
-                
+
                 for cp in changepoints:
                     # Verify our calculation
-                    verified_metrics = verify_metrics_calculation(detection_details, cp, n_trials=10)
-                    
+                    verified_metrics = verify_metrics_calculation(
+                        detection_details, cp, n_trials=10
+                    )
+
                     # Compare with our function
-                    computed_metrics = compute_metrics_for_changepoint(detection_details, cp, n_trials=10)
-                    
+                    computed_metrics = compute_metrics_for_changepoint(
+                        detection_details, cp, n_trials=10
+                    )
+
                     print(f"\n🔍 COMPARISON:")
-                    print(f"   Verified TPR: {verified_metrics['tpr']:.3f} | Computed TPR: {computed_metrics['tpr']:.3f}")
-                    print(f"   Verified FPR: {verified_metrics['fpr']:.3f} | Computed FPR: {computed_metrics['fpr']:.3f}")
-                    print(f"   Verified ADD: {verified_metrics['add']:.2f} | Computed ADD: {computed_metrics['add']:.2f}")
-                    
+                    print(
+                        f"   Verified TPR: {verified_metrics['tpr']:.3f} | Computed TPR: {computed_metrics['tpr']:.3f}"
+                    )
+                    print(
+                        f"   Verified FPR: {verified_metrics['fpr']:.3f} | Computed FPR: {computed_metrics['fpr']:.3f}"
+                    )
+                    print(
+                        f"   Verified ADD: {verified_metrics['add']:.2f} | Computed ADD: {computed_metrics['add']:.2f}"
+                    )
+
                     # Check if they match
-                    tpr_match = abs(verified_metrics['tpr'] - computed_metrics['tpr']) < 0.001
-                    fpr_match = abs(verified_metrics['fpr'] - computed_metrics['fpr']) < 0.001
-                    add_match = (verified_metrics['add'] == computed_metrics['add']) or \
-                               (verified_metrics['add'] != float("inf") and computed_metrics['add'] != float("inf") and \
-                                abs(verified_metrics['add'] - computed_metrics['add']) < 0.001)
-                    
+                    tpr_match = (
+                        abs(verified_metrics["tpr"] - computed_metrics["tpr"]) < 0.001
+                    )
+                    fpr_match = (
+                        abs(verified_metrics["fpr"] - computed_metrics["fpr"]) < 0.001
+                    )
+                    add_match = (
+                        verified_metrics["add"] == computed_metrics["add"]
+                    ) or (
+                        verified_metrics["add"] != float("inf")
+                        and computed_metrics["add"] != float("inf")
+                        and abs(verified_metrics["add"] - computed_metrics["add"])
+                        < 0.001
+                    )
+
                     if tpr_match and fpr_match and add_match:
                         print("✅ METRICS MATCH - Calculation is correct!")
                     else:
                         print("❌ METRICS MISMATCH - Need to fix calculation!")
-                
+
                 return  # Only test first experiment with detections
-                
+
         except Exception as e:
             print(f"Error processing {dirname}: {e}")
             continue
-    
+
     print("No experiments with detections found in first 10 directories")
 
 
@@ -646,10 +693,10 @@ def create_parameter_sensitivity_table(experiment_data: Dict) -> pd.DataFrame:
 def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
     """
     Format the sensitivity table for LaTeX/paper presentation.
-    
+
     Args:
         df: DataFrame with sensitivity analysis results
-        
+
     Returns:
         Formatted string for paper presentation
     """
@@ -657,23 +704,23 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
     output.append("PARAMETER SENSITIVITY ANALYSIS")
     output.append("=" * 80)
     output.append("")
-    
+
     networks = df["Network"].unique()
-    
+
     for network in networks:
         network_data = df[df["Network"] == network]
-        
+
         output.append(f"{network} NETWORK:")
         output.append("-" * 40)
-        
+
         # Create formatted table for this network
         metrics = ["TPR", "FPR", "ADD"]
-        
+
         for metric in metrics:
             metric_row = network_data[network_data["Metric"] == metric].iloc[0]
-            
+
             output.append(f"{metric}:")
-            
+
             # Power Betting
             power_values = []
             for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
@@ -688,7 +735,7 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
                         power_values.append(f"{value:.1f}")
                 else:
                     power_values.append("--")
-            
+
             mixture_val = metric_row.get("Mixture", 0.0)
             if metric == "ADD" and mixture_val == 0.0:
                 mixture_str = "--"
@@ -696,11 +743,11 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
                 mixture_str = f"{mixture_val:.3f}"
             else:
                 mixture_str = f"{mixture_val:.1f}"
-            
+
             output.append(
                 f"  Power Betting: e=0.2:{power_values[0]} | e=0.5:{power_values[1]} | e=0.7:{power_values[2]} | e=0.9:{power_values[3]} | Mixture:{mixture_str}"
             )
-            
+
             # Beta Betting
             beta_values = []
             for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
@@ -715,16 +762,16 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
                         beta_values.append(f"{value:.1f}")
                 else:
                     beta_values.append("--")
-            
+
             output.append(
                 f"  Beta Betting: (0.2,2.5):{beta_values[0]} | (0.4,1.8):{beta_values[1]} | (0.6,1.2):{beta_values[2]}"
             )
-            
+
             # Distance Metrics
             dist_values = []
             dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
             dist_abbrev = ["Euc", "Mah", "Cos", "Cheb"]
-            
+
             for dist in dist_names:
                 col = f"Dist_{dist}"
                 if col in metric_row:
@@ -737,11 +784,11 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
                         dist_values.append(f"{value:.1f}")
                 else:
                     dist_values.append("--")
-            
+
             output.append(
                 f"  Distance: {dist_abbrev[0]}:{dist_values[0]} | {dist_abbrev[1]}:{dist_values[1]} | {dist_abbrev[2]}:{dist_values[2]} | {dist_abbrev[3]}:{dist_values[3]}"
             )
-            
+
             # Thresholds
             thresh_values = []
             for threshold in ["20", "50", "100"]:
@@ -756,72 +803,80 @@ def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
                         thresh_values.append(f"{value:.1f}")
                 else:
                     thresh_values.append("--")
-            
+
             output.append(
                 f"  Threshold: L=20:{thresh_values[0]} | L=50:{thresh_values[1]} | L=100:{thresh_values[2]}"
             )
             output.append("")
-        
+
         output.append("")
-    
+
     return "\n".join(output)
 
 
 def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
     """
     Create LaTeX table matching Table III format in the paper.
-    
+
     Args:
         df: DataFrame with sensitivity analysis results
-        
+
     Returns:
         LaTeX table string
     """
     latex_lines = []
-    
+
     # Table header
     latex_lines.append("\\begin{table*}[t]")
     latex_lines.append("\\centering")
-    latex_lines.append("\\caption{Parameter sensitivity analysis showing relative effectiveness of different configurations across network types. Values represent relative performance (1.0 = best) for each parameter choice within each network type.}")
+    latex_lines.append(
+        "\\caption{Parameter sensitivity analysis showing relative effectiveness of different configurations across network types. Values represent relative performance (1.0 = best) for each parameter choice within each network type.}"
+    )
     latex_lines.append("\\label{tab:parameter_sensitivity}")
     latex_lines.append("\\scriptsize")
-    
+
     # Column specification
-    latex_lines.append("\\begin{tabular}{|l|c|cccc>{\\columncolor{blue!5}}c|ccc|c>{\\columncolor{green!5}}ccc|ccc|}")
+    latex_lines.append(
+        "\\begin{tabular}{|l|c|cccc>{\\columncolor{blue!5}}c|ccc|c>{\\columncolor{green!5}}ccc|ccc|}"
+    )
     latex_lines.append("\\hline")
-    
+
     # Multi-row header
-    latex_lines.append("\\multirow{2}{*}{\\textbf{Network}} & \\multirow{2}{*}{\\textbf{Metric}} & \\multicolumn{5}{c|}{\\textbf{Power Betting}} & \\multicolumn{3}{c|}{\\textbf{Beta Betting $(a,b)$}} & \\multicolumn{4}{c|}{\\textbf{Distance Metric}} & \\multicolumn{3}{c|}{\\textbf{Threshold ($\\lambda$)}} \\\\")
+    latex_lines.append(
+        "\\multirow{2}{*}{\\textbf{Network}} & \\multirow{2}{*}{\\textbf{Metric}} & \\multicolumn{5}{c|}{\\textbf{Power Betting}} & \\multicolumn{3}{c|}{\\textbf{Beta Betting $(a,b)$}} & \\multicolumn{4}{c|}{\\textbf{Distance Metric}} & \\multicolumn{3}{c|}{\\textbf{Threshold ($\\lambda$)}} \\\\"
+    )
     latex_lines.append("\\cline{3-17}")
-    latex_lines.append(" & & $\\epsilon$=0.2 & $\\epsilon$=0.5 & $\\epsilon$=0.7 & $\\epsilon$=0.9 & \\textbf{Mixture} & (0.2,2.5) & (0.4,1.8) & (0.6,1.2) & \\textbf{Euc.} & \\textbf{Mah.} & \\textbf{Cos.} & \\textbf{Cheb.} & \\textbf{20} & \\textbf{50} & \\textbf{100} \\\\")
+    latex_lines.append(
+        " & & $\\epsilon$=0.2 & $\\epsilon$=0.5 & $\\epsilon$=0.7 & $\\epsilon$=0.9 & \\textbf{Mixture} & (0.2,2.5) & (0.4,1.8) & (0.6,1.2) & \\textbf{Euc.} & \\textbf{Mah.} & \\textbf{Cos.} & \\textbf{Cheb.} & \\textbf{20} & \\textbf{50} & \\textbf{100} \\\\"
+    )
     latex_lines.append("\\hline")
-    
+
     # Process each network
     networks = ["SBM", "ER", "BA", "WS"]
-    
+
     for network in networks:
         network_data = df[df["Network"] == network]
-        
+
         if len(network_data) == 0:
             continue
-            
+
         # Process each metric
         metrics = ["TPR", "FPR", "ADD"]
-        
+
         for i, metric in enumerate(metrics):
             metric_row = network_data[network_data["Metric"] == metric]
-            
+
             if len(metric_row) == 0:
                 continue
-                
+
             metric_row = metric_row.iloc[0]
-            
+
             # Start row with network name (only for first metric)
             if i == 0:
                 row_start = f"\\multirow{{3}}{{*}}{{{network}}} & {metric}"
             else:
                 row_start = f" & {metric}"
-            
+
             # Power Betting columns
             power_values = []
             for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
@@ -836,7 +891,7 @@ def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
                         power_values.append(f"{value:.1f}")
                 else:
                     power_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-            
+
             # Mixture value
             mixture_val = metric_row.get("Mixture", 0.0)
             if metric == "ADD" and mixture_val == 0.0:
@@ -845,7 +900,7 @@ def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
                 mixture_str = f"{mixture_val:.3f}"
             else:
                 mixture_str = f"{mixture_val:.1f}"
-            
+
             # Beta Betting columns
             beta_values = []
             for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
@@ -860,11 +915,11 @@ def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
                         beta_values.append(f"{value:.1f}")
                 else:
                     beta_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-            
+
             # Distance Metric columns
             dist_values = []
             dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
-            
+
             for dist in dist_names:
                 col = f"Dist_{dist}"
                 if col in metric_row:
@@ -877,7 +932,7 @@ def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
                         dist_values.append(f"{value:.1f}")
                 else:
                     dist_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-            
+
             # Threshold columns
             thresh_values = []
             for threshold in ["20", "50", "100"]:
@@ -892,18 +947,18 @@ def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
                         thresh_values.append(f"{value:.1f}")
                 else:
                     thresh_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-            
+
             # Construct the complete row
             row = f"{row_start} & {power_values[0]} & {power_values[1]} & {power_values[2]} & {power_values[3]} & {mixture_str} & {beta_values[0]} & {beta_values[1]} & {beta_values[2]} & {dist_values[0]} & {dist_values[1]} & {dist_values[2]} & {dist_values[3]} & {thresh_values[0]} & {thresh_values[1]} & {thresh_values[2]} \\\\"
-            
+
             latex_lines.append(row)
-        
+
         latex_lines.append("\\hline")
-    
+
     # Table footer
     latex_lines.append("\\end{tabular}")
     latex_lines.append("\\end{table*}")
-    
+
     return "\n".join(latex_lines)
 
 
@@ -970,51 +1025,248 @@ def analyze_single_experiment_demo(base_dir: str = "results/sensitivity_analysis
     print(f"  Number of changepoints: {overall['num_changepoints']}")
 
 
+def verify_villes_inequality(experiment_data: Dict):
+    """
+    Verify that False Positive Rates respect Ville's inequality: FPR ≤ 1/λ
+    where λ is the detection threshold.
+
+    Args:
+        experiment_data: Dictionary with all experiment results
+    """
+    print("\n" + "=" * 80)
+    print("VERIFYING VILLE'S INEQUALITY: FPR ≤ 1/λ")
+    print("=" * 80)
+
+    # Define thresholds used in experiments
+    thresholds = [20.0, 50.0, 100.0]
+    networks = ["sbm", "er", "ba", "ws"]
+
+    violations = []
+    total_checks = 0
+
+    for network in networks:
+        if network not in experiment_data:
+            continue
+
+        print(f"\n{network.upper()} NETWORK:")
+        print("-" * 40)
+
+        network_data = experiment_data[network]
+
+        # Check threshold experiments specifically
+        threshold_experiments = network_data.get("threshold_analysis", [])
+
+        for exp in threshold_experiments:
+            threshold = float(exp["parameters"]["threshold"])
+            metrics = exp["analysis"]["overall_metrics"]
+            fpr = metrics["fpr"]
+
+            # Ville's inequality bound
+            ville_bound = 1.0 / threshold
+
+            total_checks += 1
+
+            # Check if FPR violates the bound
+            if fpr > ville_bound:
+                violations.append(
+                    {
+                        "network": network,
+                        "threshold": threshold,
+                        "fpr": fpr,
+                        "ville_bound": ville_bound,
+                        "violation": fpr - ville_bound,
+                    }
+                )
+                status = "❌ VIOLATION"
+            else:
+                status = "✅ SATISFIED"
+
+            print(
+                f"  λ={threshold:3.0f}: FPR={fpr:.4f} ≤ 1/λ={ville_bound:.4f} {status}"
+            )
+
+        # Also check other experiment types with default threshold (60.0)
+        default_threshold = 60.0
+        ville_bound_default = 1.0 / default_threshold
+
+        for group_name, group_experiments in network_data.items():
+            if group_name == "threshold_analysis":
+                continue  # Already checked above
+
+            if group_experiments:
+                # Average FPR for this group
+                fprs = [
+                    exp["analysis"]["overall_metrics"]["fpr"]
+                    for exp in group_experiments
+                ]
+                avg_fpr = sum(fprs) / len(fprs)
+
+                total_checks += 1
+
+                if avg_fpr > ville_bound_default:
+                    violations.append(
+                        {
+                            "network": network,
+                            "group": group_name,
+                            "threshold": default_threshold,
+                            "fpr": avg_fpr,
+                            "ville_bound": ville_bound_default,
+                            "violation": avg_fpr - ville_bound_default,
+                        }
+                    )
+                    status = "❌ VIOLATION"
+                else:
+                    status = "✅ SATISFIED"
+
+                print(
+                    f"  {group_name} (λ=60): FPR={avg_fpr:.4f} ≤ 1/λ={ville_bound_default:.4f} {status}"
+                )
+
+    # Summary
+    print("\n" + "=" * 80)
+    print("VILLE'S INEQUALITY VERIFICATION SUMMARY")
+    print("=" * 80)
+
+    print(f"Total checks performed: {total_checks}")
+    print(f"Violations found: {len(violations)}")
+    print(
+        f"Compliance rate: {((total_checks - len(violations)) / total_checks * 100):.1f}%"
+    )
+
+    if violations:
+        print(f"\n❌ VIOLATIONS DETECTED:")
+        print("-" * 50)
+        for v in violations:
+            if "group" in v:
+                print(
+                    f"  {v['network'].upper()} - {v['group']}: FPR={v['fpr']:.4f} > 1/λ={v['ville_bound']:.4f} (excess: {v['violation']:.4f})"
+                )
+            else:
+                print(
+                    f"  {v['network'].upper()} - λ={v['threshold']}: FPR={v['fpr']:.4f} > 1/λ={v['ville_bound']:.4f} (excess: {v['violation']:.4f})"
+                )
+
+        print(f"\n⚠️  NOTE: Violations may occur due to:")
+        print(f"    1. Finite sample effects (limited trials)")
+        print(f"    2. Multiple testing without correction")
+        print(f"    3. Approximation errors in p-value computation")
+        print(f"    4. Non-exchangeable data violating martingale assumptions")
+    else:
+        print(f"\n🎉 ALL CHECKS PASSED!")
+        print(
+            f"   False positive rates are well-controlled and respect Ville's inequality."
+        )
+        print(
+            f"   This confirms the theoretical guarantees of the martingale approach."
+        )
+
+    return violations
+
+
+def analyze_fpr_distribution(experiment_data: Dict):
+    """
+    Analyze the distribution of FPR values across all experiments.
+
+    Args:
+        experiment_data: Dictionary with all experiment results
+    """
+    print("\n" + "=" * 80)
+    print("FALSE POSITIVE RATE DISTRIBUTION ANALYSIS")
+    print("=" * 80)
+
+    all_fprs = []
+    fpr_by_threshold = {20.0: [], 50.0: [], 100.0: [], 60.0: []}  # 60.0 is default
+
+    for network, network_data in experiment_data.items():
+        for group_name, group_experiments in network_data.items():
+            for exp in group_experiments:
+                fpr = exp["analysis"]["overall_metrics"]["fpr"]
+                all_fprs.append(fpr)
+
+                # Categorize by threshold
+                if group_name == "threshold_analysis":
+                    threshold = float(exp["parameters"]["threshold"])
+                    if threshold in fpr_by_threshold:
+                        fpr_by_threshold[threshold].append(fpr)
+                else:
+                    # Default threshold for other experiments
+                    fpr_by_threshold[60.0].append(fpr)
+
+    print(f"Total experiments analyzed: {len(all_fprs)}")
+    print(f"Overall FPR statistics:")
+    print(f"  Mean: {sum(all_fprs)/len(all_fprs):.4f}")
+    print(f"  Min:  {min(all_fprs):.4f}")
+    print(f"  Max:  {max(all_fprs):.4f}")
+
+    # Count zero FPRs
+    zero_fprs = sum(1 for fpr in all_fprs if fpr == 0.0)
+    print(
+        f"  Zero FPR experiments: {zero_fprs}/{len(all_fprs)} ({zero_fprs/len(all_fprs)*100:.1f}%)"
+    )
+
+    print(f"\nFPR by threshold:")
+    for threshold, fprs in fpr_by_threshold.items():
+        if fprs:
+            ville_bound = 1.0 / threshold
+            mean_fpr = sum(fprs) / len(fprs)
+            max_fpr = max(fprs)
+            violations = sum(1 for fpr in fprs if fpr > ville_bound)
+
+            print(
+                f"  λ={threshold:3.0f}: n={len(fprs):3d}, mean={mean_fpr:.4f}, max={max_fpr:.4f}, bound={ville_bound:.4f}, violations={violations}"
+            )
+
+
 def main():
     """Main function to create parameter sensitivity analysis."""
     print("Creating Parameter Sensitivity Analysis Table...")
     print("=" * 80)
-    
+
     # First, test our metrics calculation
     print("Step 0: Verifying metrics calculation...")
     test_metrics_on_sample_experiment()
-    
+
     # Collect all experiment data
     print("\nStep 1: Collecting data from all experiments...")
     experiment_data = collect_all_experiment_data()
-    
+
     if not experiment_data:
         print("No experiment data found!")
         return
-    
+
+    # Verify Ville's inequality
+    print("\nStep 2: Verifying Ville's inequality (FPR ≤ 1/λ)...")
+    violations = verify_villes_inequality(experiment_data)
+    analyze_fpr_distribution(experiment_data)
+
     # Create the sensitivity table
-    print("\nStep 2: Creating parameter sensitivity table...")
+    print("\nStep 3: Creating parameter sensitivity table...")
     sensitivity_df = create_parameter_sensitivity_table(experiment_data)
-    
+
     # Format and display the table
-    print("\nStep 3: Formatting results...")
+    print("\nStep 4: Formatting results...")
     formatted_table = format_sensitivity_table_for_paper(sensitivity_df)
     latex_table = create_latex_sensitivity_table(sensitivity_df)
-    
+
     print("\n" + "=" * 80)
     print("PARAMETER SENSITIVITY ANALYSIS RESULTS")
     print("=" * 80)
     print(formatted_table)
-    
+
     # Save results to files
     output_dir = "results/sensitivity_analysis"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Save text version
     text_file = os.path.join(output_dir, "parameter_sensitivity_table.txt")
     with open(text_file, "w", encoding="utf-8") as f:
         f.write(formatted_table)
-    
+
     # Save LaTeX version
     latex_file = os.path.join(output_dir, "parameter_sensitivity_table.tex")
     with open(latex_file, "w", encoding="utf-8") as f:
         f.write(latex_table)
-    
+
     print(f"\nResults saved to:")
     print(f"  Text version: {text_file}")
     print(f"  LaTeX version: {latex_file}")
