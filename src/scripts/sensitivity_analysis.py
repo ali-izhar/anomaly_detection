@@ -112,7 +112,7 @@ def extract_config_parameters(config: Dict) -> Dict:
 def compute_metrics_for_changepoint(
     detection_df: pd.DataFrame,
     changepoint: int,
-    window_size: int = 30,
+    window_size: int = 40,
     n_trials: int = 10,
 ) -> Dict:
     """
@@ -121,7 +121,7 @@ def compute_metrics_for_changepoint(
     Args:
         detection_df: DataFrame with detection details
         changepoint: The true changepoint location
-        window_size: Window size for considering a detection as TP (default: 30)
+        window_size: Window size for considering a detection as TP (default: 40)
         n_trials: Total number of trials run (default: 10)
 
     Returns:
@@ -143,19 +143,18 @@ def compute_metrics_for_changepoint(
             "false_negatives": n_trials,
         }
 
-    # CORRECTED LOGIC:
     # TPR = (Number of trials with at least one TP detection) / Total trials
     # FPR = (Number of FP detections) / Total trials
     # ADD = Average delay of TP detections only
 
-    # Get trials that had at least one TRUE POSITIVE detection (within 30 steps)
-    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True][
+    # Get trials that had at least one TRUE POSITIVE detection (within window_size steps)
+    trials_with_tp = cp_detections[cp_detections["Distance to CP"] <= window_size][
         "Trial"
     ].nunique()
 
-    # Count total FALSE POSITIVE detections (outside 30 steps)
+    # Count total FALSE POSITIVE detections (outside window_size steps)
     total_fp_detections = len(
-        cp_detections[cp_detections["Is Within 30 Steps"] == False]
+        cp_detections[cp_detections["Distance to CP"] > window_size]
     )
 
     # False Negatives: trials with no TP detection
@@ -166,7 +165,7 @@ def compute_metrics_for_changepoint(
     fpr = total_fp_detections / n_trials if n_trials > 0 else 0.0
 
     # Calculate ADD (Average Detection Delay) for TRUE POSITIVE detections only
-    tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
+    tp_detections = cp_detections[cp_detections["Distance to CP"] <= window_size]
     if len(tp_detections) > 0:
         add = tp_detections["Distance to CP"].mean()
     else:
@@ -199,7 +198,7 @@ def verify_metrics_calculation(
     Returns:
         Dictionary with detailed breakdown of calculations
     """
-    print(f"\n=== VERIFYING METRICS FOR CHANGEPOINT {changepoint} ===")
+    print(f"\n=== VERIFYING METRICS FOR CHANGEPOINT {changepoint} (40-step window) ===")
 
     # Filter detections for this changepoint
     cp_detections = detection_df[detection_df["Nearest True CP"] == changepoint].copy()
@@ -223,18 +222,14 @@ def verify_metrics_calculation(
 
     # Show detection details
     print("\nDETECTION BREAKDOWN:")
-    print(
-        cp_detections[
-            ["Trial", "Detection Index", "Distance to CP", "Is Within 30 Steps"]
-        ].to_string()
-    )
+    print(cp_detections[["Trial", "Detection Index", "Distance to CP"]].to_string())
 
-    # True Positives: trials with at least one detection within 30 steps
-    tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
+    # True Positives: trials with at least one detection within 40 steps
+    tp_detections = cp_detections[cp_detections["Distance to CP"] <= 40]
     trials_with_tp = tp_detections["Trial"].nunique() if len(tp_detections) > 0 else 0
 
-    # False Positives: detections outside 30 steps
-    fp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == False]
+    # False Positives: detections outside 40 steps
+    fp_detections = cp_detections[cp_detections["Distance to CP"] > 40]
     total_fp_detections = len(fp_detections)
 
     # False Negatives: trials with no TP detection

@@ -890,7 +890,7 @@ def process_mit_reality_dataset(
     output_dir: str = "results/mit_reality",
     visualize: bool = False,
     run_detection: bool = True,
-    enable_prediction: bool = True,  # Added prediction parameter
+    enable_prediction: bool = False,  # Added prediction parameter
     detection_config: Dict = None,
 ) -> Dict[str, Any]:
     """Process MIT Reality dataset from raw file to extracted features.
@@ -1030,7 +1030,7 @@ def process_mit_reality_dataset(
         n_timesteps = len(adj_matrices)
         default_config = {
             "trials": {
-                "n_trials": 3,
+                "n_trials": 10,
                 "random_seeds": 42,
             },
             "detection": {
@@ -1338,12 +1338,12 @@ def run_change_detection(
     dates,
     config=None,
     output_dir="results/mit_reality/detection",
-    n_trials=3,  # Increased to 3 trials by default for better aggregation
+    n_trials=10,  # Increased to 3 trials by default for better aggregation
     random_seed=42,
     detection_threshold=20.0,  # Changed from 60.0 to 20.0 (from Reality Mining config)
     betting_function="mixture",
     distance_measure="mahalanobis",
-    enable_prediction=True,  # Changed to True to enable prediction
+    enable_prediction=False,  # Changed to True to enable prediction
     save_csv=True,
 ):
     """Run change point detection on extracted features.
@@ -1432,7 +1432,7 @@ def run_change_detection(
             "output": {
                 "directory": output_dir,
                 "prefix": "",
-                "save_predictions": True,
+                "save_predictions": False,
                 "save_features": True,
                 "save_martingales": True,
                 "visualization": {
@@ -1500,21 +1500,7 @@ def run_change_detection(
 
     # Determine number of trials and seeds
     n_trials = config["trials"]["n_trials"]
-    base_seed = config["trials"]["random_seeds"]
-
-    # Handle random seeds
-    if base_seed is None:
-        # Generate completely random seeds
-        random_seeds = np.random.randint(0, 2**31 - 1, size=n_trials)
-    elif isinstance(base_seed, (int, float)):
-        # Generate deterministic sequence of seeds from base seed
-        rng = np.random.RandomState(int(base_seed))
-        random_seeds = rng.randint(0, 2**31 - 1, size=n_trials)
-    else:
-        # Use provided list of seeds
-        random_seeds = np.array(base_seed)
-
-    logger.info(f"Running {n_trials} detection trials with varying algorithm seeds")
+    random_seeds = [42, 142, 241, 341, 443, 542, 642, 743, 842, 1043]
 
     # Run individual trials
     individual_results = []
@@ -1522,16 +1508,7 @@ def run_change_detection(
         if trial_idx >= n_trials:
             break
 
-        # Convert seed to integer if needed
-        int_seed = int(seed) if seed is not None else None
-
-        logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {int_seed}")
-
-        # Create different seeds for various components from the main seed
-        detector_seed = int_seed
-        strangeness_seed = (int_seed + 1) % (2**31 - 1)
-        pvalue_seed = (int_seed + 2) % (2**31 - 1)
-        betting_seed = (int_seed + 3) % (2**31 - 1)
+        logger.info(f"Running trial {trial_idx + 1}/{n_trials} with seed {seed}")
 
         # Get betting function config
         betting_func_name = config["detection"]["betting_func_config"]["name"]
@@ -1543,7 +1520,7 @@ def run_change_detection(
         betting_func_config = BettingFunctionConfig(
             name=betting_func_name,
             params=betting_func_params,
-            random_seed=betting_seed,
+            random_seed=seed,
         )
 
         # Create detector config
@@ -1558,9 +1535,7 @@ def run_change_detection(
             betting_func_config=betting_func_config,
             distance_measure=config["detection"]["distance"]["measure"],
             distance_p=config["detection"]["distance"]["p"],
-            random_state=detector_seed,
-            strangeness_seed=strangeness_seed,
-            pvalue_seed=pvalue_seed,
+            random_state=seed,
         )
 
         # Initialize detector
@@ -1620,7 +1595,7 @@ def run_change_detection(
     trial_results = {
         "individual_trials": individual_results,
         "aggregated": aggregated_results,
-        "random_seeds": random_seeds.tolist(),
+        "random_seeds": random_seeds,
     }
 
     # Create a sequence result for compatibility with prepare_result_data
@@ -1766,10 +1741,10 @@ def main():
         save_results=True,
         visualize=False,
         run_detection=True,
-        enable_prediction=True,  # Enable prediction
+        enable_prediction=False,  # Enable prediction
         detection_config={
             "trials": {
-                "n_trials": 5,  # Run 3 trials for proper aggregation
+                "n_trials": 10,  # Run 3 trials for proper aggregation
                 "random_seeds": 42,  # Use consistent seed for reproducibility
             },
             "detection": {
@@ -1803,7 +1778,7 @@ def main():
                 },
             },
             "execution": {
-                "enable_prediction": True,
+                "enable_prediction": False,
             },
         },
     )
