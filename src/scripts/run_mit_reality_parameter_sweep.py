@@ -164,7 +164,11 @@ def safe_file_write(file_path: str, content: Any, write_func) -> bool:
             # Write to temporary file first
             write_func(temp_file, content)
 
-            # Atomic move to final location
+            # Atomic move to final location (Windows-compatible)
+            if platform.system() == "Windows":
+                # On Windows, remove destination file first if it exists
+                if os.path.exists(file_path):
+                    os.remove(file_path)
             os.rename(temp_file, file_path)
             return True
 
