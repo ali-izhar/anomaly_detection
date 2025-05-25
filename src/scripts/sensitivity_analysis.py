@@ -1,1017 +1,882 @@
 #!/usr/bin/env python3
-"""
-Sensitivity Analysis Results Processor
-
-This script analyzes experiment results from the parameter sensitivity sweep,
-calculating TPR, FPR, and ADD metrics from detection Excel files and grouping
-by network type and parameter combinations.
-
-Key criteria:
-- True positive: Detection within 30 timesteps AFTER actual changepoint
-- False positive: Detection not matching any actual changepoint within criteria
-- ADD: Average detection delay for true positives only
-"""
+"""Sensitivity Analysis Script"""
 
 import os
-import pandas as pd
+import re
 import yaml
-import json
-from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
-import logging
+import pandas as pd
+from typing import Dict, Tuple, Optional
 from collections import defaultdict
-import numpy as np
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 
-def find_experiment_directories(base_dir: str) -> List[Path]:
-    """Find all experiment directories containing config.yaml and detection_results.xlsx"""
-    base_path = Path(base_dir)
-    if not base_path.exists():
-        logger.error(f"Base directory doesn't exist: {base_dir}")
-        return []
+def parse_experiment_name(exp_name: str) -> Tuple[str, Dict[str, str]]:
+    """
+    Parse experiment name to extract group and parameters.
 
-    experiment_dirs = []
-    for item in base_path.iterdir():
-        if item.is_dir():
-            config_file = item / "config.yaml"
-            results_file = item / "detection_results.xlsx"
+    Returns:
+        Tuple of (group, parameters_dict)
+    """
+    # Power betting: {network}_power_{epsilon}_{distance}
+    power_pattern = r"^(\w+)_power_([0-9.]+)_(\w+)$"
+    power_match = re.match(power_pattern, exp_name)
+    if power_match:
+        network, epsilon, distance = power_match.groups()
+        return "power_betting", {
+            "network": network,
+            "epsilon": epsilon,
+            "distance": distance,
+        }
 
-            if config_file.exists() and results_file.exists():
-                experiment_dirs.append(item)
-            else:
-                logger.warning(f"Incomplete experiment: {item.name}")
-                if not config_file.exists():
-                    logger.warning(f"  Missing: config.yaml")
-                if not results_file.exists():
-                    logger.warning(f"  Missing: detection_results.xlsx")
+    # Mixture betting: {network}_mixture_{distance}
+    mixture_pattern = r"^(\w+)_mixture_(\w+)$"
+    mixture_match = re.match(mixture_pattern, exp_name)
+    if mixture_match:
+        network, distance = mixture_match.groups()
+        return "mixture_betting", {"network": network, "distance": distance}
 
-    logger.info(f"Found {len(experiment_dirs)} complete experiments")
-    return experiment_dirs
+    # Beta betting: {network}_beta_{beta_a}_{beta_b}_{distance}
+    beta_pattern = r"^(\w+)_beta_([0-9.]+)_([0-9.]+)_(\w+)$"
+    beta_match = re.match(beta_pattern, exp_name)
+    if beta_match:
+        network, beta_a, beta_b, distance = beta_match.groups()
+        return "beta_betting", {
+            "network": network,
+            "beta_a": beta_a,
+            "beta_b": beta_b,
+            "distance": distance,
+        }
+
+    # Threshold analysis: {network}_threshold_{threshold}_{distance}
+    threshold_pattern = r"^(\w+)_threshold_(\d+)_(\w+)$"
+    threshold_match = re.match(threshold_pattern, exp_name)
+    if threshold_match:
+        network, threshold, distance = threshold_match.groups()
+        return "threshold_analysis", {
+            "network": network,
+            "threshold": threshold,
+            "distance": distance,
+        }
+
+    return "unknown", {}
 
 
-def extract_parameters_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract key parameters from experiment configuration"""
+def load_experiment_config(config_path: str) -> Optional[Dict]:
+    """Load and parse the experiment configuration file."""
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        return config
+    except Exception as e:
+        print(f"Error loading config from {config_path}: {e}")
+        return None
+
+
+def extract_config_parameters(config: Dict) -> Dict:
+    """Extract key parameters from the experiment configuration."""
     params = {}
 
     # Network type
-    params["network"] = config.get("model", {}).get("network", "unknown")
-
-    # Betting function configuration
-    betting_config = config.get("detection", {}).get("betting_func_config", {})
-    params["betting_type"] = betting_config.get("name", "unknown")
-
-    if params["betting_type"] == "power":
-        power_config = betting_config.get("power", {})
-        params["epsilon"] = power_config.get("epsilon")
-    elif params["betting_type"] == "beta":
-        beta_config = betting_config.get("beta", {})
-        params["beta_a"] = beta_config.get("a")
-        params["beta_b"] = beta_config.get("b")
-    elif params["betting_type"] == "mixture":
-        mixture_config = betting_config.get("mixture", {})
-        params["mixture_epsilons"] = mixture_config.get("epsilons", [])
+    if "model" in config and "network" in config["model"]:
+        params["network"] = config["model"]["network"]
 
     # Distance measure
-    distance_config = config.get("detection", {}).get("distance", {})
-    params["distance"] = distance_config.get("measure", "unknown")
+    if "detection" in config and "distance" in config["detection"]:
+        params["distance_measure"] = config["detection"]["distance"]["measure"]
+        params["distance_p"] = config["detection"]["distance"].get("p", 2.0)
 
-    # Threshold
-    params["threshold"] = config.get("detection", {}).get("threshold")
+    # Betting function configuration
+    if "detection" in config and "betting_func_config" in config["detection"]:
+        betting_config = config["detection"]["betting_func_config"]
+        params["betting_function"] = betting_config["name"]
 
-    # Number of trials
-    params["n_trials"] = config.get("trials", {}).get("n_trials", 1)
+        if betting_config["name"] == "power" and "power" in betting_config:
+            params["epsilon"] = betting_config["power"]["epsilon"]
+        elif betting_config["name"] == "beta" and "beta" in betting_config:
+            params["beta_a"] = betting_config["beta"]["a"]
+            params["beta_b"] = betting_config["beta"]["b"]
+        elif betting_config["name"] == "mixture" and "mixture" in betting_config:
+            params["mixture_epsilons"] = betting_config["mixture"]["epsilons"]
+
+    # Detection threshold
+    if "detection" in config and "threshold" in config["detection"]:
+        params["threshold"] = config["detection"]["threshold"]
+
+    # Other detection parameters
+    if "detection" in config:
+        params["batch_size"] = config["detection"].get("batch_size", None)
+        params["cooldown_period"] = config["detection"].get("cooldown_period", None)
 
     return params
 
 
-def load_experiment_config(config_path: Path) -> Dict[str, Any]:
-    """Load experiment configuration from YAML file"""
-    try:
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f)
-    except Exception as e:
-        logger.error(f"Failed to load config {config_path}: {e}")
-        return {}
-
-
-def extract_actual_changepoints(metadata_df: pd.DataFrame) -> List[int]:
-    """Extract actual changepoint locations from metadata"""
-    if "change_point" in metadata_df.columns:
-        changepoints = metadata_df["change_point"].dropna().unique().tolist()
-        return [int(cp) for cp in changepoints if pd.notna(cp)]
-
-    # Try other possible column names
-    possible_columns = ["changepoint", "cp", "actual_cp", "true_cp"]
-    for col in possible_columns:
-        if col in metadata_df.columns:
-            changepoints = metadata_df[col].dropna().unique().tolist()
-            return [int(cp) for cp in changepoints if pd.notna(cp)]
-
-    logger.error("Could not find actual changepoints in metadata")
-    return []
-
-
-def calculate_metrics(
-    details_df: pd.DataFrame, metadata_df: pd.DataFrame
-) -> Dict[str, Dict[str, float]]:
+def compute_metrics_for_changepoint(
+    detection_df: pd.DataFrame,
+    changepoint: int,
+    window_size: int = 30,
+    n_trials: int = 10,
+) -> Dict:
     """
-    Calculate TPR, FPR, and ADD based on detection details.
+    Compute TPR, FPR, and ADD for a specific changepoint.
 
-    Criteria:
-    - True Positive: Detection within 30 timesteps AFTER actual changepoint
-    - False Positive: Detection not matching any actual changepoint within criteria
-    - ADD: From metadata sheet for actual detected changepoints
-    - Handle missed detections: When no detections exist but changepoints do
+    Args:
+        detection_df: DataFrame with detection details
+        changepoint: The true changepoint location
+        window_size: Window size for considering a detection as TP (default: 30)
+        n_trials: Total number of trials run (default: 10)
+
+    Returns:
+        Dictionary with TPR, FPR, ADD metrics
     """
-    # Extract actual changepoints
-    actual_changepoints = extract_actual_changepoints(metadata_df)
+    # Filter detections for this changepoint
+    cp_detections = detection_df[detection_df["Nearest True CP"] == changepoint].copy()
 
-    if not actual_changepoints:
-        logger.error("No actual changepoints found")
-        return {}
-
-    # Handle case where no detections occurred at all (complete missed detection)
-    if details_df.empty:
-        logger.warning(
-            "No detection data found - treating as complete missed detection"
-        )
-        # Assume both Traditional and Horizon detection types were attempted
-        n_trials = (
-            metadata_df["change_point"].notna().sum()
-            if "change_point" in metadata_df.columns
-            else 1
-        )
-        total_actual_changes = len(actual_changepoints) * max(n_trials, 1)
-
-        # Create metrics for missed detection case
-        missed_detection_metrics = {
-            "TPR": 0.0,
-            "FPR": 0.0,  # No false positives if no detections
-            "ADD": float("inf"),  # Infinite delay since no detection occurred
+    # If no detections at all, all trials are false negatives
+    if len(cp_detections) == 0:
+        return {
+            "changepoint": changepoint,
+            "total_trials": n_trials,
+            "tpr": 0.0,
+            "fpr": 0.0,
+            "add": float("inf"),
             "true_positives": 0,
             "false_positives": 0,
-            "total_actual_changes": total_actual_changes,
-            "detection_delays": [],
+            "false_negatives": n_trials,
         }
 
-        results = {
-            "Traditional": missed_detection_metrics.copy(),
-            "Horizon": missed_detection_metrics.copy(),
-        }
+    # Count unique trials that had detections for this changepoint
+    trials_with_detections = cp_detections["Trial"].nunique()
 
-        logger.info(
-            f"Traditional - TPR: 0.000, FPR: 0.000000, ADD: inf (missed detection)"
+    # True Positives: detections within window_size steps after changepoint
+    true_positives = len(cp_detections[cp_detections["Is Within 30 Steps"] == True])
+
+    # False Positives: detections outside the window (either too early or too late)
+    false_positives = len(cp_detections[cp_detections["Is Within 30 Steps"] == False])
+
+    # False Negatives: trials with no detection within window
+    # This includes trials with no detections at all + trials with only FP detections
+    trials_with_tp = cp_detections[cp_detections["Is Within 30 Steps"] == True][
+        "Trial"
+    ].nunique()
+    false_negatives = n_trials - trials_with_tp
+
+    # Calculate TPR and FPR
+    tpr = trials_with_tp / n_trials if n_trials > 0 else 0.0
+    fpr = false_positives / n_trials if n_trials > 0 else 0.0
+
+    # Calculate ADD (Average Detection Delay) for true positives only
+    tp_detections = cp_detections[cp_detections["Is Within 30 Steps"] == True]
+    if len(tp_detections) > 0:
+        add = tp_detections["Distance to CP"].mean()
+    else:
+        add = float("inf")  # No true positives means infinite delay
+
+    return {
+        "changepoint": changepoint,
+        "total_trials": n_trials,
+        "tpr": tpr,
+        "fpr": fpr,
+        "add": add,
+        "true_positives": trials_with_tp,
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+        "trials_with_detections": trials_with_detections,
+    }
+
+
+def analyze_experiment_folder(folder_path: str) -> Optional[Dict]:
+    """
+    Analyze a single experiment folder and extract configuration and metrics.
+
+    Args:
+        folder_path: Path to the experiment folder
+
+    Returns:
+        Dictionary with experiment analysis results or None if failed
+    """
+    config_path = os.path.join(folder_path, "config.yaml")
+    results_path = os.path.join(folder_path, "detection_results.xlsx")
+
+    # Check if required files exist
+    if not os.path.exists(config_path):
+        print(f"Config file not found: {config_path}")
+        return None
+
+    if not os.path.exists(results_path):
+        print(f"Results file not found: {results_path}")
+        return None
+
+    try:
+        # Load configuration
+        config = load_experiment_config(config_path)
+        if config is None:
+            return None
+
+        # Extract configuration parameters
+        config_params = extract_config_parameters(config)
+
+        # Load Excel file
+        excel_file = pd.ExcelFile(results_path)
+
+        # Check if required sheets exist
+        required_sheets = ["ChangePointMetadata", "Detection Details"]
+        missing_sheets = [
+            sheet for sheet in required_sheets if sheet not in excel_file.sheet_names
+        ]
+
+        if missing_sheets:
+            print(f"Missing required sheets in {results_path}: {missing_sheets}")
+            return None
+
+        # Load the required sheets
+        changepoint_metadata = pd.read_excel(
+            results_path, sheet_name="ChangePointMetadata"
         )
-        logger.info(f"Horizon - TPR: 0.000, FPR: 0.000000, ADD: inf (missed detection)")
+        detection_details = pd.read_excel(results_path, sheet_name="Detection Details")
 
-        return results
+        # Get all changepoints
+        changepoints = changepoint_metadata["change_point"].tolist()
 
-    # Group detections by type
-    detection_types = (
-        details_df["Type"].unique() if "Type" in details_df.columns else []
-    )
-    trials = details_df["Trial"].unique() if "Trial" in details_df.columns else []
-    n_trials = len(trials)
+        # Get number of trials from config
+        n_trials = config.get("trials", {}).get("n_trials", 10)
 
-    # Handle case where DataFrame exists but has no valid detection types
-    if len(detection_types) == 0 or all(pd.isna(detection_types)):
-        logger.warning(
-            "No valid detection types found - treating as complete missed detection"
-        )
-        # Try to infer number of trials from the data
-        if n_trials == 0:
-            n_trials = (
-                metadata_df["change_point"].notna().sum()
-                if "change_point" in metadata_df.columns
-                else 1
+        # Compute metrics for each changepoint
+        changepoint_metrics = []
+        for cp in changepoints:
+            metrics = compute_metrics_for_changepoint(
+                detection_details, cp, n_trials=n_trials
             )
-        total_actual_changes = len(actual_changepoints) * max(n_trials, 1)
+            changepoint_metrics.append(metrics)
 
-        # Create metrics for missed detection case
-        missed_detection_metrics = {
-            "TPR": 0.0,
-            "FPR": 0.0,  # No false positives if no detections
-            "ADD": float("inf"),  # Infinite delay since no detection occurred
-            "true_positives": 0,
-            "false_positives": 0,
-            "total_actual_changes": total_actual_changes,
-            "detection_delays": [],
-        }
+        # Compute overall metrics (averaged across all changepoints)
+        if changepoint_metrics:
+            overall_tpr = sum(m["tpr"] for m in changepoint_metrics) / len(
+                changepoint_metrics
+            )
+            overall_fpr = sum(m["fpr"] for m in changepoint_metrics) / len(
+                changepoint_metrics
+            )
 
-        results = {
-            "Traditional": missed_detection_metrics.copy(),
-            "Horizon": missed_detection_metrics.copy(),
-        }
-
-        logger.info(
-            f"Traditional - TPR: 0.000, FPR: 0.000000, ADD: inf (missed detection)"
-        )
-        logger.info(f"Horizon - TPR: 0.000, FPR: 0.000000, ADD: inf (missed detection)")
-
-        return results
-
-    logger.info(f"Processing {n_trials} trials with detection types: {detection_types}")
-    logger.info(f"Actual changepoints: {actual_changepoints}")
-
-    results = {}
-
-    for det_type in detection_types:
-        type_data = details_df[details_df["Type"] == det_type].copy()
-
-        true_positives = 0
-        false_positives = 0
-        total_actual_changes = len(actual_changepoints) * n_trials
-        detection_delays = []
-
-        # Process each detection
-        for _, detection in type_data.iterrows():
-            detection_index = detection["Detection Index"]
-            nearest_cp = detection["Nearest True CP"]
-            distance_to_cp = detection["Distance to CP"]
-            is_within_30 = detection.get(
-                "Is Within 20 Steps", False
-            )  # May be named differently
-
-            # Check if this is a true positive based on distance criteria
-            if pd.notna(nearest_cp) and pd.notna(distance_to_cp):
-                distance_to_cp = int(distance_to_cp)
-
-                # True positive: within 30 steps AFTER the changepoint
-                if distance_to_cp >= 0 and distance_to_cp <= 30:
-                    true_positives += 1
-                    detection_delays.append(distance_to_cp)
-                    logger.debug(
-                        f"TP: {det_type} detection at {detection_index}, CP at {nearest_cp}, delay {distance_to_cp}"
-                    )
-                else:
-                    false_positives += 1
-                    logger.debug(
-                        f"FP: {det_type} detection at {detection_index}, CP at {nearest_cp}, distance {distance_to_cp}"
-                    )
-            else:
-                false_positives += 1
-                logger.debug(
-                    f"FP: {det_type} detection at {detection_index}, no valid CP match"
-                )
-
-        # Calculate metrics
-        tpr = true_positives / total_actual_changes if total_actual_changes > 0 else 0.0
-
-        # For FPR calculation - use total possible false positive opportunities
-        # Assuming 200 timesteps total minus actual changepoints
-        total_timesteps = 200
-        total_non_change_points = (
-            total_timesteps - len(actual_changepoints)
-        ) * n_trials
-        fpr = (
-            false_positives / total_non_change_points
-            if total_non_change_points > 0
-            else 0.0
-        )
-
-        # Average detection delay for true positives
-        add = np.mean(detection_delays) if detection_delays else float("inf")
-
-        # Try to get ADD from metadata if available
-        if not detection_delays and det_type in ["Traditional", "Horizon"]:
-            add_col = f"{det_type.lower()}_avg_delay"
-            if add_col in metadata_df.columns:
-                metadata_add = metadata_df[add_col].dropna()
-                if len(metadata_add) > 0:
-                    add = np.mean(metadata_add)
-
-        results[det_type] = {
-            "TPR": tpr,
-            "FPR": fpr,
-            "ADD": add if add != float("inf") else None,
-            "true_positives": true_positives,
-            "false_positives": false_positives,
-            "total_actual_changes": total_actual_changes,
-            "detection_delays": detection_delays,
-        }
-
-        add_str = f"{add:.2f}" if add != float("inf") else "inf"
-        logger.info(f"{det_type} - TPR: {tpr:.3f}, FPR: {fpr:.6f}, ADD: {add_str}")
-
-    return results
-
-
-def analyze_detection_results(excel_path: Path) -> Dict[str, Any]:
-    """Analyze detection results from Excel file"""
-    try:
-        # Read the Excel file
-        excel_data = pd.ExcelFile(excel_path)
-        logger.debug(f"Available sheets: {excel_data.sheet_names}")
-
-        # Read ChangePointMetadata sheet
-        metadata_df = pd.read_excel(excel_path, sheet_name="ChangePointMetadata")
-        logger.debug(f"ChangePointMetadata shape: {metadata_df.shape}")
-
-        # Read Detection Details sheet
-        details_df = pd.read_excel(excel_path, sheet_name="Detection Details")
-        logger.debug(f"Detection Details shape: {details_df.shape}")
-
-        # Calculate metrics
-        metrics = calculate_metrics(details_df, metadata_df)
+            # For ADD, exclude infinite values and compute mean
+            finite_adds = [
+                m["add"] for m in changepoint_metrics if m["add"] != float("inf")
+            ]
+            overall_add = (
+                sum(finite_adds) / len(finite_adds) if finite_adds else float("inf")
+            )
+        else:
+            overall_tpr = 0.0
+            overall_fpr = 0.0
+            overall_add = float("inf")
 
         return {
-            "metrics": metrics,
-            "actual_changepoints": extract_actual_changepoints(metadata_df),
-            "raw_data": {
-                "metadata": metadata_df.to_dict("records"),
-                "details": details_df.to_dict("records"),
+            "folder_path": folder_path,
+            "config_parameters": config_params,
+            "changepoints": changepoints,
+            "changepoint_metrics": changepoint_metrics,
+            "overall_metrics": {
+                "tpr": overall_tpr,
+                "fpr": overall_fpr,
+                "add": overall_add,
+                "num_changepoints": len(changepoints),
             },
         }
 
     except Exception as e:
-        logger.error(f"Failed to analyze {excel_path}: {e}")
+        print(f"Error analyzing folder {folder_path}: {e}")
+        return None
+
+
+def collect_all_experiment_data(base_dir: str = "results/sensitivity_analysis") -> Dict:
+    """
+    Collect and analyze data from all experiment folders.
+
+    Returns:
+        Dictionary with all experiment results organized by network and parameter type
+    """
+    if not os.path.exists(base_dir):
+        print(f"Base directory does not exist: {base_dir}")
         return {}
 
+    all_dirs = [
+        d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))
+    ]
 
-def group_experiments_by_parameters(
-    all_results: Dict[str, Any],
-) -> Dict[str, Dict[str, List[Dict]]]:
-    """Group experiments by network type and parameter combinations"""
-    grouped = defaultdict(lambda: defaultdict(list))
+    print(f"Found {len(all_dirs)} experiment directories")
 
-    for exp_dir, exp_data in all_results.items():
-        if "config" not in exp_data or "results" not in exp_data:
-            continue
+    # Organize results by network type and parameter configuration
+    results = defaultdict(lambda: defaultdict(list))
+    failed_experiments = []
 
-        params = exp_data["config"]
-        results = exp_data["results"]
+    for i, dirname in enumerate(all_dirs):
+        if (i + 1) % 50 == 0:
+            print(f"Processing experiment {i+1}/{len(all_dirs)}")
 
-        if "metrics" not in results:
-            continue
+        folder_path = os.path.join(base_dir, dirname)
 
-        network = params.get("network", "unknown").upper()
-
-        # Create parameter key based on betting type and specific parameters
-        param_key = create_parameter_key(params)
-
-        if param_key:
-            grouped[network][param_key].append(
-                {"params": params, "metrics": results["metrics"], "exp_dir": exp_dir}
-            )
-
-    return grouped
-
-
-def create_parameter_key(params: Dict[str, Any]) -> Optional[str]:
-    """Create a parameter key for grouping experiments"""
-    betting_type = params.get("betting_type", "unknown")
-    distance = params.get("distance", "unknown")
-    threshold = params.get("threshold", 50.0)
-
-    if betting_type == "power":
-        epsilon = params.get("epsilon")
-        if epsilon is not None:
-            return f"power_eps_{epsilon}_{distance}"
-    elif betting_type == "beta":
-        beta_a = params.get("beta_a")
-        if beta_a is not None:
-            return f"beta_a_{beta_a}_{distance}"
-    elif betting_type == "mixture":
-        return f"mixture_{distance}"
-
-    # Also group by threshold
-    return f"threshold_{int(threshold)}_{distance}"
-
-
-def debug_parameter_coverage(grouped_results: Dict[str, Dict[str, List[Dict]]]):
-    """Debug function to show parameter coverage for each network"""
-    print("\n" + "=" * 60)
-    print("PARAMETER COVERAGE ANALYSIS")
-    print("=" * 60)
-
-    for network, network_data in grouped_results.items():
-        print(f"\n{network} Network:")
-        print(f"  Total parameter combinations: {len(network_data)}")
-
-        # Check power betting coverage
-        power_coverage = {0.2: [], 0.5: [], 0.7: [], 0.9: []}
-        for param_key in network_data.keys():
-            for epsilon in [0.2, 0.5, 0.7, 0.9]:
-                if f"power_eps_{epsilon}" in param_key:
-                    power_coverage[epsilon].append(param_key)
-
-        print("  Power betting coverage:")
-        for epsilon, keys in power_coverage.items():
-            print(f"    ε={epsilon}: {len(keys)} combinations")
-            if not keys:
-                print(f"      → Missing!")
-            else:
-                # Check which of these actually have data
-                with_data = 0
-                for key in keys:
-                    if network_data[key]:  # Check if experiments list is not empty
-                        for exp in network_data[key]:
-                            if exp["metrics"]:  # Check if metrics exist
-                                with_data += 1
-                                break
-                if with_data < len(keys):
-                    print(
-                        f"      → {len(keys) - with_data} combinations have no detection data"
-                    )
-
-        # Check beta betting coverage
-        beta_coverage = {0.3: [], 0.5: [], 0.7: []}
-        for param_key in network_data.keys():
-            for beta_a in [0.3, 0.5, 0.7]:
-                if f"beta_a_{beta_a}" in param_key:
-                    beta_coverage[beta_a].append(param_key)
-
-        print("  Beta betting coverage:")
-        for beta_a, keys in beta_coverage.items():
-            print(f"    α={beta_a}: {len(keys)} combinations")
-            if not keys:
-                print(f"      → Missing!")
-
-        # Check threshold distribution
-        threshold_distribution = {20: 0, 50: 0, 100: 0}
-        for param_key, experiments in network_data.items():
-            for exp in experiments:
-                threshold = exp["params"].get("threshold", 50.0)
-                if int(threshold) in threshold_distribution:
-                    threshold_distribution[int(threshold)] += 1
-
-        print("  Threshold distribution:")
-        for threshold, count in threshold_distribution.items():
-            print(f"    {threshold}: {count} experiments")
-
-        # Show all parameter keys for this network
-        print("  All parameter keys:")
-        for key in sorted(network_data.keys()):
-            print(f"    {key}")
-
-
-def create_sensitivity_table(
-    grouped_results: Dict[str, Dict[str, List[Dict]]],
-) -> pd.DataFrame:
-    """Create the sensitivity analysis table matching the screenshot format"""
-    table_data = []
-
-    networks = ["SBM", "ER", "BA", "WS"]  # Using WS instead of NWS
-    metrics = ["TPR", "FPR", "ADD"]
-
-    for network in networks:
-        # Find network data (case insensitive)
-        network_data = None
-        for net_key in grouped_results.keys():
-            if net_key.upper() == network or net_key.lower() == network.lower():
-                network_data = grouped_results[net_key]
+        # Extract experiment name from directory name
+        parts = dirname.split("_")
+        timestamp_idx = None
+        for j, part in enumerate(parts):
+            if len(part) == 8 and part.isdigit() and part.startswith("20"):
+                timestamp_idx = j
                 break
 
-        if network_data is None:
-            logger.warning(f"No data found for network: {network}")
-            # Create empty rows for this network
-            for metric in metrics:
-                row_data = {"Network": network, "Metric": metric}
-                table_data.append(row_data)
+        if timestamp_idx is None:
+            failed_experiments.append(dirname)
             continue
 
-        # Process each metric type
-        for metric in metrics:
-            row_data = {"Network": network, "Metric": metric}
+        exp_name = "_".join(parts[:timestamp_idx])
+        group, params = parse_experiment_name(exp_name)
 
-            # Aggregate metrics by parameter categories
+        if group == "unknown":
+            failed_experiments.append(dirname)
+            continue
 
-            # 1. Power betting parameters (aggregate across distances)
-            for epsilon in [0.2, 0.5, 0.7, 0.9]:
-                power_values = []
-                matching_keys = []
-                for param_key, experiments in network_data.items():
-                    if f"power_eps_{epsilon}" in param_key:
-                        matching_keys.append(param_key)
-                        for exp in experiments:
-                            for det_type in ["Traditional", "Horizon"]:
-                                if det_type in exp["metrics"]:
-                                    val = exp["metrics"][det_type].get(metric)
-                                    if val is not None and val != float("inf"):
-                                        power_values.append(val)
+        # Analyze the experiment
+        analysis_result = analyze_experiment_folder(folder_path)
 
-                if power_values:
-                    row_data[f"ε={epsilon}"] = np.mean(power_values)
+        if analysis_result is None:
+            failed_experiments.append(dirname)
+            continue
 
-            # 2. Mixture betting (aggregate across distances)
-            mixture_values = []
-            for param_key, experiments in network_data.items():
-                if "mixture" in param_key:
-                    for exp in experiments:
-                        for det_type in ["Traditional", "Horizon"]:
-                            if det_type in exp["metrics"]:
-                                val = exp["metrics"][det_type].get(metric)
-                                if val is not None and val != float("inf"):
-                                    mixture_values.append(val)
-
-            if mixture_values:
-                row_data["Mixture"] = np.mean(mixture_values)
-
-            # 3. Beta betting parameters (aggregate across distances)
-            for beta_a in [0.3, 0.5, 0.7]:
-                beta_values = []
-                for param_key, experiments in network_data.items():
-                    if f"beta_a_{beta_a}" in param_key:
-                        for exp in experiments:
-                            for det_type in ["Traditional", "Horizon"]:
-                                if det_type in exp["metrics"]:
-                                    val = exp["metrics"][det_type].get(metric)
-                                    if val is not None and val != float("inf"):
-                                        beta_values.append(val)
-
-                if beta_values:
-                    row_data[f"α={beta_a}"] = np.mean(beta_values)
-
-            # 4. Distance measures (aggregate across betting functions)
-            distance_map = {
-                "euclidean": "Euc.",
-                "mahalanobis": "Mah.",
-                "cosine": "Cos.",
-                "chebyshev": "Cheb.",
+        # Store result organized by network and parameter configuration
+        network = params["network"]
+        results[network][group].append(
+            {
+                "exp_name": exp_name,
+                "dirname": dirname,
+                "group": group,
+                "parameters": params,
+                "analysis": analysis_result,
             }
+        )
 
-            for distance, col_name in distance_map.items():
-                distance_values = []
-                for param_key, experiments in network_data.items():
-                    if distance in param_key:
-                        for exp in experiments:
-                            for det_type in ["Traditional", "Horizon"]:
-                                if det_type in exp["metrics"]:
-                                    val = exp["metrics"][det_type].get(metric)
-                                    if val is not None and val != float("inf"):
-                                        distance_values.append(val)
+    print(
+        f"Successfully processed {sum(len(results[net][grp]) for net in results for grp in results[net])} experiments"
+    )
+    print(f"Failed to process {len(failed_experiments)} experiments")
 
-                if distance_values:
-                    row_data[col_name] = np.mean(distance_values)
+    return dict(results)
 
-            # 5. Threshold values (look for experiments with specific threshold values)
-            for threshold in [20, 50, 100]:
-                threshold_values = []
-                for param_key, experiments in network_data.items():
-                    for exp in experiments:
-                        # Check if this experiment has the specific threshold value
-                        exp_threshold = exp["params"].get("threshold", 50.0)
-                        if int(exp_threshold) == threshold:
-                            for det_type in ["Traditional", "Horizon"]:
-                                if det_type in exp["metrics"]:
-                                    val = exp["metrics"][det_type].get(metric)
-                                    if val is not None and val != float("inf"):
-                                        threshold_values.append(val)
 
-                if threshold_values:
-                    row_data[str(threshold)] = np.mean(threshold_values)
+def create_parameter_sensitivity_table(experiment_data: Dict) -> pd.DataFrame:
+    """
+    Create the parameter sensitivity table like Table III in the paper.
 
-            table_data.append(row_data)
+    Args:
+        experiment_data: Dictionary with all experiment results
+
+    Returns:
+        DataFrame with the sensitivity analysis table
+    """
+    # Define the networks and parameter configurations we expect
+    networks = ["sbm", "er", "ba", "ws"]
+
+    # Initialize results structure
+    table_data = []
+
+    for network in networks:
+        if network not in experiment_data:
+            print(f"Warning: No data found for network {network}")
+            continue
+
+        network_data = experiment_data[network]
+
+        # Initialize row for this network
+        row = {"Network": network.upper(), "Metric": None}
+
+        # Process Power Betting experiments
+        power_experiments = network_data.get("power_betting", [])
+        power_results = defaultdict(list)
+
+        for exp in power_experiments:
+            epsilon = exp["parameters"]["epsilon"]
+            distance = exp["parameters"]["distance"]
+            metrics = exp["analysis"]["overall_metrics"]
+
+            key = f"epsilon_{epsilon}"
+            power_results[key].append(metrics)
+
+        # Process Mixture Betting experiments
+        mixture_experiments = network_data.get("mixture_betting", [])
+        mixture_results = []
+
+        for exp in mixture_experiments:
+            metrics = exp["analysis"]["overall_metrics"]
+            mixture_results.append(metrics)
+
+        # Process Beta Betting experiments
+        beta_experiments = network_data.get("beta_betting", [])
+        beta_results = defaultdict(list)
+
+        for exp in beta_experiments:
+            beta_a = exp["parameters"]["beta_a"]
+            beta_b = exp["parameters"]["beta_b"]
+            metrics = exp["analysis"]["overall_metrics"]
+
+            key = f"beta_{beta_a}_{beta_b}"
+            beta_results[key].append(metrics)
+
+        # Process Threshold experiments
+        threshold_experiments = network_data.get("threshold_analysis", [])
+        threshold_results = defaultdict(list)
+
+        for exp in threshold_experiments:
+            threshold = exp["parameters"]["threshold"]
+            metrics = exp["analysis"]["overall_metrics"]
+
+            key = f"threshold_{threshold}"
+            threshold_results[key].append(metrics)
+
+        # Aggregate distance metric results across all experiment types
+        distance_results = defaultdict(list)
+
+        for group_name, group_data in network_data.items():
+            for exp in group_data:
+                distance = exp["parameters"]["distance"]
+                metrics = exp["analysis"]["overall_metrics"]
+                distance_results[distance].append(metrics)
+
+        # Create rows for TPR, FPR, ADD
+        for metric in ["TPR", "FPR", "ADD"]:
+            metric_row = row.copy()
+            metric_row["Metric"] = metric
+
+            # Power Betting columns
+            for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
+                key = f"epsilon_{epsilon}"
+                if key in power_results and power_results[key]:
+                    values = [m[metric.lower()] for m in power_results[key]]
+                    # Filter out infinite values for ADD
+                    if metric == "ADD":
+                        values = [v for v in values if v != float("inf")]
+                    avg_value = sum(values) / len(values) if values else 0.0
+                    metric_row[f"Power_ε={epsilon}"] = avg_value
+                else:
+                    metric_row[f"Power_ε={epsilon}"] = 0.0
+
+            # Mixture Betting column
+            if mixture_results:
+                values = [m[metric.lower()] for m in mixture_results]
+                if metric == "ADD":
+                    values = [v for v in values if v != float("inf")]
+                avg_value = sum(values) / len(values) if values else 0.0
+                metric_row["Mixture"] = avg_value
+            else:
+                metric_row["Mixture"] = 0.0
+
+            # Beta Betting columns
+            for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
+                key = f"beta_{beta_combo}"
+                if key in beta_results and beta_results[key]:
+                    values = [m[metric.lower()] for m in beta_results[key]]
+                    if metric == "ADD":
+                        values = [v for v in values if v != float("inf")]
+                    avg_value = sum(values) / len(values) if values else 0.0
+                    metric_row[f"Beta_{beta_combo}"] = avg_value
+                else:
+                    metric_row[f"Beta_{beta_combo}"] = 0.0
+
+            # Distance Metric columns
+            for distance in ["euclidean", "mahalanobis", "cosine", "chebyshev"]:
+                if distance in distance_results and distance_results[distance]:
+                    values = [m[metric.lower()] for m in distance_results[distance]]
+                    if metric == "ADD":
+                        values = [v for v in values if v != float("inf")]
+                    avg_value = sum(values) / len(values) if values else 0.0
+                    metric_row[f"Dist_{distance}"] = avg_value
+                else:
+                    metric_row[f"Dist_{distance}"] = 0.0
+
+            # Threshold columns
+            for threshold in ["20", "50", "100"]:
+                key = f"threshold_{threshold}"
+                if key in threshold_results and threshold_results[key]:
+                    values = [m[metric.lower()] for m in threshold_results[key]]
+                    if metric == "ADD":
+                        values = [v for v in values if v != float("inf")]
+                    avg_value = sum(values) / len(values) if values else 0.0
+                    metric_row[f"Threshold_{threshold}"] = avg_value
+                else:
+                    metric_row[f"Threshold_{threshold}"] = 0.0
+
+            table_data.append(metric_row)
 
     return pd.DataFrame(table_data)
 
 
-def map_param_to_column(param_key: str) -> Optional[str]:
-    """Map parameter key to column name in the output table"""
-    if "power_eps_0.2" in param_key:
-        return "ε=0.2"
-    elif "power_eps_0.5" in param_key:
-        return "ε=0.5"
-    elif "power_eps_0.7" in param_key:
-        return "ε=0.7"
-    elif "power_eps_0.9" in param_key:
-        return "ε=0.9"
-    elif "mixture" in param_key:
-        return "Mixture"
-    elif "beta_a_0.3" in param_key:
-        return "α=0.3"
-    elif "beta_a_0.5" in param_key:
-        return "α=0.5"
-    elif "beta_a_0.7" in param_key:
-        return "α=0.7"
-    elif "euclidean" in param_key:
-        return "Euc."
-    elif "mahalanobis" in param_key:
-        return "Mah."
-    elif "cosine" in param_key:
-        return "Cos."
-    elif "chebyshev" in param_key:
-        return "Cheb."
-    elif "threshold_20" in param_key:
-        return "20"
-    elif "threshold_50" in param_key:
-        return "50"
-    elif "threshold_100" in param_key:
-        return "100"
+def format_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
+    """
+    Format the sensitivity table for LaTeX/paper presentation.
+    
+    Args:
+        df: DataFrame with sensitivity analysis results
+        
+    Returns:
+        Formatted string for paper presentation
+    """
+    output = []
+    output.append("PARAMETER SENSITIVITY ANALYSIS")
+    output.append("=" * 80)
+    output.append("")
+    
+    networks = df["Network"].unique()
+    
+    for network in networks:
+        network_data = df[df["Network"] == network]
+        
+        output.append(f"{network} NETWORK:")
+        output.append("-" * 40)
+        
+        # Create formatted table for this network
+        metrics = ["TPR", "FPR", "ADD"]
+        
+        for metric in metrics:
+            metric_row = network_data[network_data["Metric"] == metric].iloc[0]
+            
+            output.append(f"{metric}:")
+            
+            # Power Betting
+            power_values = []
+            for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
+                col = f"Power_ε={epsilon}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        power_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        power_values.append(f"{value:.3f}")
+                    else:
+                        power_values.append(f"{value:.1f}")
+                else:
+                    power_values.append("--")
+            
+            mixture_val = metric_row.get("Mixture", 0.0)
+            if metric == "ADD" and mixture_val == 0.0:
+                mixture_str = "--"
+            elif metric in ["TPR", "FPR"]:
+                mixture_str = f"{mixture_val:.3f}"
+            else:
+                mixture_str = f"{mixture_val:.1f}"
+            
+            output.append(
+                f"  Power Betting: e=0.2:{power_values[0]} | e=0.5:{power_values[1]} | e=0.7:{power_values[2]} | e=0.9:{power_values[3]} | Mixture:{mixture_str}"
+            )
+            
+            # Beta Betting
+            beta_values = []
+            for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
+                col = f"Beta_{beta_combo}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        beta_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        beta_values.append(f"{value:.3f}")
+                    else:
+                        beta_values.append(f"{value:.1f}")
+                else:
+                    beta_values.append("--")
+            
+            output.append(
+                f"  Beta Betting: (0.2,2.5):{beta_values[0]} | (0.4,1.8):{beta_values[1]} | (0.6,1.2):{beta_values[2]}"
+            )
+            
+            # Distance Metrics
+            dist_values = []
+            dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
+            dist_abbrev = ["Euc", "Mah", "Cos", "Cheb"]
+            
+            for dist in dist_names:
+                col = f"Dist_{dist}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        dist_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        dist_values.append(f"{value:.3f}")
+                    else:
+                        dist_values.append(f"{value:.1f}")
+                else:
+                    dist_values.append("--")
+            
+            output.append(
+                f"  Distance: {dist_abbrev[0]}:{dist_values[0]} | {dist_abbrev[1]}:{dist_values[1]} | {dist_abbrev[2]}:{dist_values[2]} | {dist_abbrev[3]}:{dist_values[3]}"
+            )
+            
+            # Thresholds
+            thresh_values = []
+            for threshold in ["20", "50", "100"]:
+                col = f"Threshold_{threshold}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        thresh_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        thresh_values.append(f"{value:.3f}")
+                    else:
+                        thresh_values.append(f"{value:.1f}")
+                else:
+                    thresh_values.append("--")
+            
+            output.append(
+                f"  Threshold: L=20:{thresh_values[0]} | L=50:{thresh_values[1]} | L=100:{thresh_values[2]}"
+            )
+            output.append("")
+        
+        output.append("")
+    
+    return "\n".join(output)
 
-    return None
 
-
-def analyze_all_experiments(
-    base_dir: str = "results/sensitivity_analysis_5",
-) -> Dict[str, Any]:
-    """Analyze all experiments and return results"""
-    experiment_dirs = find_experiment_directories(base_dir)
-
-    if not experiment_dirs:
-        logger.error("No experiments found")
-        return {}
-
-    all_results = {}
-
-    for exp_dir in experiment_dirs:
-        logger.info(f"Analyzing {exp_dir.name}")
-
-        # Load config
-        config = load_experiment_config(exp_dir / "config.yaml")
-        if not config:
-            continue
-
-        # Extract parameters
-        params = extract_parameters_from_config(config)
-
-        # Analyze detection results
-        results = analyze_detection_results(exp_dir / "detection_results.xlsx")
-
-        if results:
-            all_results[exp_dir.name] = {"config": params, "results": results}
-        else:
-            logger.warning(f"Failed to analyze {exp_dir.name}")
-
-    logger.info(f"Successfully processed {len(all_results)} experiments")
-    return all_results
-
-
-def format_latex_table(sensitivity_table: pd.DataFrame) -> str:
-    """Generate LaTeX table from sensitivity analysis results"""
-    latex_rows = []
-
-    # Define column mappings for each section
-    power_columns = ["ε=0.2", "ε=0.5", "ε=0.7", "ε=0.9", "Mixture"]
-    beta_columns = ["α=0.3", "α=0.5", "α=0.7"]
-    distance_columns = ["Euc.", "Mah.", "Cos.", "Cheb."]
-    threshold_columns = ["20", "50", "100"]
-
-    def format_value(val, metric):
-        """Format value with appropriate precision"""
-        if pd.isna(val) or val == float("inf"):
-            return "--"
-        if metric == "FPR":
-            return f"{val:.3f}"
-        elif metric == "ADD":
-            return f"{val:.1f}"
-        else:  # TPR
-            return f"{val:.2f}"
-
-    def format_bold_value(val, metric):
-        """Format bold value with appropriate precision"""
-        if pd.isna(val) or val == float("inf"):
-            return "--"
-        if metric == "FPR":
-            return f"\\textbf{{{val:.3f}}}"
-        elif metric == "ADD":
-            return f"\\textbf{{{val:.1f}}}"
-        else:  # TPR
-            return f"\\textbf{{{val:.2f}}}"
-
+def create_latex_sensitivity_table(df: pd.DataFrame) -> str:
+    """
+    Create LaTeX table matching Table III format in the paper.
+    
+    Args:
+        df: DataFrame with sensitivity analysis results
+        
+    Returns:
+        LaTeX table string
+    """
+    latex_lines = []
+    
+    # Table header
+    latex_lines.append("\\begin{table*}[t]")
+    latex_lines.append("\\centering")
+    latex_lines.append("\\caption{Parameter sensitivity analysis showing relative effectiveness of different configurations across network types. Values represent relative performance (1.0 = best) for each parameter choice within each network type.}")
+    latex_lines.append("\\label{tab:parameter_sensitivity}")
+    latex_lines.append("\\scriptsize")
+    
+    # Column specification
+    latex_lines.append("\\begin{tabular}{|l|c|cccc>{\\columncolor{blue!5}}c|ccc|c>{\\columncolor{green!5}}ccc|ccc|}")
+    latex_lines.append("\\hline")
+    
+    # Multi-row header
+    latex_lines.append("\\multirow{2}{*}{\\textbf{Network}} & \\multirow{2}{*}{\\textbf{Metric}} & \\multicolumn{5}{c|}{\\textbf{Power Betting}} & \\multicolumn{3}{c|}{\\textbf{Beta Betting $(a,b)$}} & \\multicolumn{4}{c|}{\\textbf{Distance Metric}} & \\multicolumn{3}{c|}{\\textbf{Threshold ($\\lambda$)}} \\\\")
+    latex_lines.append("\\cline{3-17}")
+    latex_lines.append(" & & $\\epsilon$=0.2 & $\\epsilon$=0.5 & $\\epsilon$=0.7 & $\\epsilon$=0.9 & \\textbf{Mixture} & (0.2,2.5) & (0.4,1.8) & (0.6,1.2) & \\textbf{Euc.} & \\textbf{Mah.} & \\textbf{Cos.} & \\textbf{Cheb.} & \\textbf{20} & \\textbf{50} & \\textbf{100} \\\\")
+    latex_lines.append("\\hline")
+    
     # Process each network
     networks = ["SBM", "ER", "BA", "WS"]
-    metrics = ["TPR", "FPR", "ADD"]
-
+    
     for network in networks:
-        network_data = sensitivity_table[sensitivity_table["Network"] == network]
-
-        if network_data.empty:
-            logger.warning(f"No data found for network: {network}")
+        network_data = df[df["Network"] == network]
+        
+        if len(network_data) == 0:
             continue
-
+            
+        # Process each metric
+        metrics = ["TPR", "FPR", "ADD"]
+        
         for i, metric in enumerate(metrics):
-            metric_data = network_data[network_data["Metric"] == metric]
-
-            if metric_data.empty:
+            metric_row = network_data[network_data["Metric"] == metric]
+            
+            if len(metric_row) == 0:
                 continue
-
-            row = metric_data.iloc[
-                0
-            ]  # Should only be one row per network-metric combination
-            row_parts = []
-
-            # Add network name (only for first metric)
+                
+            metric_row = metric_row.iloc[0]
+            
+            # Start row with network name (only for first metric)
             if i == 0:
-                row_parts.append(f"\\multirow{{3}}{{*}}{{{network}}}")
+                row_start = f"\\multirow{{3}}{{*}}{{{network}}} & {metric}"
             else:
-                row_parts.append("")
-
-            row_parts.append(metric)
-
-            # Power betting values (ε + Mixture)
+                row_start = f" & {metric}"
+            
+            # Power Betting columns
             power_values = []
-            for col in power_columns:
-                if col in row and pd.notna(row[col]):
-                    power_values.append(row[col])
+            for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
+                col = f"Power_ε={epsilon}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        power_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        power_values.append(f"{value:.3f}")
+                    else:
+                        power_values.append(f"{value:.1f}")
                 else:
-                    power_values.append(None)
-
-            # Find best value among power betting section
-            valid_power_values = [
-                v
-                for v in power_values
-                if v is not None and not pd.isna(v) and v != float("inf")
-            ]
-            if valid_power_values:
-                if metric == "TPR":
-                    best_power = max(valid_power_values)
-                else:  # FPR and ADD - lower is better
-                    best_power = min(valid_power_values)
+                    power_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
+            
+            # Mixture value
+            mixture_val = metric_row.get("Mixture", 0.0)
+            if metric == "ADD" and mixture_val == 0.0:
+                mixture_str = "--"
+            elif metric in ["TPR", "FPR"]:
+                mixture_str = f"{mixture_val:.3f}"
             else:
-                best_power = None
-
-            # Format power values - bold only the single best in this section
-            for val in power_values:
-                if (
-                    val is not None
-                    and pd.notna(val)
-                    and val != float("inf")
-                    and best_power is not None
-                    and abs(val - best_power) < 0.001
-                ):
-                    row_parts.append(format_bold_value(val, metric))
-                else:
-                    row_parts.append(format_value(val, metric))
-
-            # Beta betting values (α)
+                mixture_str = f"{mixture_val:.1f}"
+            
+            # Beta Betting columns
             beta_values = []
-            for col in beta_columns:
-                if col in row and pd.notna(row[col]):
-                    beta_values.append(row[col])
+            for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
+                col = f"Beta_{beta_combo}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        beta_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        beta_values.append(f"{value:.3f}")
+                    else:
+                        beta_values.append(f"{value:.1f}")
                 else:
-                    beta_values.append(None)
-
-            # Find best value among beta betting section
-            valid_beta_values = [
-                v
-                for v in beta_values
-                if v is not None and not pd.isna(v) and v != float("inf")
-            ]
-            if valid_beta_values:
-                if metric == "TPR":
-                    best_beta = max(valid_beta_values)
-                else:  # FPR and ADD - lower is better
-                    best_beta = min(valid_beta_values)
-            else:
-                best_beta = None
-
-            # Format beta values - bold only the single best in this section
-            for val in beta_values:
-                if (
-                    val is not None
-                    and pd.notna(val)
-                    and val != float("inf")
-                    and best_beta is not None
-                    and abs(val - best_beta) < 0.001
-                ):
-                    row_parts.append(format_bold_value(val, metric))
+                    beta_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
+            
+            # Distance Metric columns
+            dist_values = []
+            dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
+            
+            for dist in dist_names:
+                col = f"Dist_{dist}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        dist_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        dist_values.append(f"{value:.3f}")
+                    else:
+                        dist_values.append(f"{value:.1f}")
                 else:
-                    row_parts.append(format_value(val, metric))
-
-            # Distance measure values
-            distance_values = []
-            for col in distance_columns:
-                if col in row and pd.notna(row[col]):
-                    distance_values.append(row[col])
+                    dist_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
+            
+            # Threshold columns
+            thresh_values = []
+            for threshold in ["20", "50", "100"]:
+                col = f"Threshold_{threshold}"
+                if col in metric_row:
+                    value = metric_row[col]
+                    if metric == "ADD" and value == 0.0:
+                        thresh_values.append("--")
+                    elif metric in ["TPR", "FPR"]:
+                        thresh_values.append(f"{value:.3f}")
+                    else:
+                        thresh_values.append(f"{value:.1f}")
                 else:
-                    distance_values.append(None)
-
-            # Find best distance value within distance measures section
-            valid_distance_values = [
-                v
-                for v in distance_values
-                if v is not None and not pd.isna(v) and v != float("inf")
-            ]
-            if valid_distance_values:
-                if metric == "TPR":
-                    best_distance = max(valid_distance_values)
-                else:  # FPR and ADD - lower is better
-                    best_distance = min(valid_distance_values)
-            else:
-                best_distance = None
-
-            # Format distance values - bold only the single best in this section
-            for val in distance_values:
-                if (
-                    val is not None
-                    and pd.notna(val)
-                    and val != float("inf")
-                    and best_distance is not None
-                    and abs(val - best_distance) < 0.001
-                ):
-                    row_parts.append(format_bold_value(val, metric))
-                else:
-                    row_parts.append(format_value(val, metric))
-
-            # Threshold values
-            threshold_values = []
-            for col in threshold_columns:
-                if col in row and pd.notna(row[col]):
-                    threshold_values.append(row[col])
-                else:
-                    threshold_values.append(None)
-
-            # Find best threshold value within threshold section
-            valid_threshold_values = [
-                v
-                for v in threshold_values
-                if v is not None and not pd.isna(v) and v != float("inf")
-            ]
-            if valid_threshold_values:
-                if metric == "TPR":
-                    best_threshold = max(valid_threshold_values)
-                else:  # FPR and ADD - lower is better
-                    best_threshold = min(valid_threshold_values)
-            else:
-                best_threshold = None
-
-            # Format threshold values - bold only the single best in this section
-            for val in threshold_values:
-                if (
-                    val is not None
-                    and pd.notna(val)
-                    and val != float("inf")
-                    and best_threshold is not None
-                    and abs(val - best_threshold) < 0.001
-                ):
-                    row_parts.append(format_bold_value(val, metric))
-                else:
-                    row_parts.append(format_value(val, metric))
-
-            # Join row parts
-            latex_row = " & ".join(row_parts) + " \\\\"
-            latex_rows.append(latex_row)
-
-        # Add horizontal line after each network (except the last one)
-        if network != networks[-1]:
-            latex_rows.append("\\hline")
-
-    # Create complete LaTeX table
-    latex_table = (
-        """\\begin{table}[htbp]
-\\centering
-\\caption{Parameter sensitivity analysis results across network types}
-\\label{tab:parameter_sensitivity}
-\\resizebox{\\textwidth}{!}{%
-\\begin{tabular}{|c|c|cccc|c|ccc|cccc|ccc|}
-\\hline
-\\multirow{2}{*}{Network} & \\multirow{2}{*}{Metric} & \\multicolumn{5}{c|}{Power \\& Mixture Betting} & \\multicolumn{3}{c|}{Beta Betting} & \\multicolumn{4}{c|}{Distance Measures} & \\multicolumn{3}{c|}{Thresholds} \\\\
-\\cline{3-16}
-& & $\\varepsilon=0.2$ & $\\varepsilon=0.5$ & $\\varepsilon=0.7$ & $\\varepsilon=0.9$ & Mix & $\\alpha=0.3$ & $\\alpha=0.5$ & $\\alpha=0.7$ & Euc. & Mah. & Cos. & Cheb. & 20 & 50 & 100 \\\\
-\\hline
-"""
-        + "\n".join(latex_rows)
-        + """
-\\hline
-\\end{tabular}%
-}
-\\end{table}"""
-    )
-
-    return latex_table
+                    thresh_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
+            
+            # Construct the complete row
+            row = f"{row_start} & {power_values[0]} & {power_values[1]} & {power_values[2]} & {power_values[3]} & {mixture_str} & {beta_values[0]} & {beta_values[1]} & {beta_values[2]} & {dist_values[0]} & {dist_values[1]} & {dist_values[2]} & {dist_values[3]} & {thresh_values[0]} & {thresh_values[1]} & {thresh_values[2]} \\\\"
+            
+            latex_lines.append(row)
+        
+        latex_lines.append("\\hline")
+    
+    # Table footer
+    latex_lines.append("\\end{tabular}")
+    latex_lines.append("\\end{table*}")
+    
+    return "\n".join(latex_lines)
 
 
-def save_results(
-    all_results: Dict[str, Any],
-    grouped_results: Dict,
-    sensitivity_table: pd.DataFrame,
-    output_dir: str = "results/sensitivity_analysis_5_summary",
-):
-    """Save all results to files"""
-    os.makedirs(output_dir, exist_ok=True)
+def analyze_single_experiment_demo(base_dir: str = "results/sensitivity_analysis"):
+    """
+    Demonstrate analysis of a single experiment folder.
+    """
+    if not os.path.exists(base_dir):
+        print(f"Base directory does not exist: {base_dir}")
+        return
 
-    # Save detailed results
-    detailed_data = []
-    for exp_name, exp_data in all_results.items():
-        config = exp_data.get("config", {})
-        results = exp_data.get("results", {})
+    # Get the first available experiment folder
+    all_dirs = [
+        d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))
+    ]
 
-        if "metrics" in results:
-            for det_type, metrics in results["metrics"].items():
-                row = {
-                    "experiment": exp_name,
-                    "network": config.get("network", "unknown"),
-                    "betting_type": config.get("betting_type", "unknown"),
-                    "detection_type": det_type,
-                    "TPR": metrics.get("TPR"),
-                    "FPR": metrics.get("FPR"),
-                    "ADD": metrics.get("ADD"),
-                    "true_positives": metrics.get("true_positives"),
-                    "false_positives": metrics.get("false_positives"),
-                    "total_actual_changes": metrics.get("total_actual_changes"),
-                }
+    if not all_dirs:
+        print("No experiment directories found")
+        return
 
-                # Add parameter-specific columns
-                for key, value in config.items():
-                    if key not in row:
-                        row[key] = value
+    # Analyze the first experiment folder
+    first_folder = all_dirs[0]
+    folder_path = os.path.join(base_dir, first_folder)
 
-                detailed_data.append(row)
+    print(f"Analyzing experiment folder: {first_folder}")
+    print("=" * 80)
 
-    detailed_df = pd.DataFrame(detailed_data)
-    detailed_path = os.path.join(output_dir, "detailed_results.csv")
-    detailed_df.to_csv(detailed_path, index=False)
-    logger.info(f"Saved detailed results to {detailed_path}")
+    result = analyze_experiment_folder(folder_path)
 
-    # Save sensitivity table
-    table_path = os.path.join(output_dir, "sensitivity_table.csv")
-    sensitivity_table.to_csv(table_path, index=False)
-    logger.info(f"Saved sensitivity table to {table_path}")
+    if result is None:
+        print("Failed to analyze experiment folder")
+        return
 
-    # Generate and save LaTeX table
-    latex_table = format_latex_table(sensitivity_table)
-    latex_path = os.path.join(output_dir, "sensitivity_table.tex")
-    with open(latex_path, "w") as f:
-        f.write(latex_table)
-    logger.info(f"Saved LaTeX table to {latex_path}")
+    # Print configuration parameters
+    print("CONFIGURATION PARAMETERS:")
+    print("-" * 40)
+    for key, value in result["config_parameters"].items():
+        print(f"  {key}: {value}")
 
-    # Save raw results as JSON
-    json_path = os.path.join(output_dir, "raw_results.json")
-    with open(json_path, "w") as f:
-        json.dump(all_results, f, indent=2, default=str)
-    logger.info(f"Saved raw results to {json_path}")
+    print(f"\nCHANGEPOINTS: {result['changepoints']}")
 
-    return detailed_path, table_path, json_path, latex_path
+    # Print metrics for each changepoint
+    print(f"\nCHANGEPOINT METRICS:")
+    print("-" * 40)
+    for metrics in result["changepoint_metrics"]:
+        cp = metrics["changepoint"]
+        print(f"  Changepoint {cp}:")
+        print(f"    TPR: {metrics['tpr']:.3f}")
+        print(f"    FPR: {metrics['fpr']:.3f}")
+        print(f"    ADD: {metrics['add']:.2f}")
+        print(f"    Trials: {metrics['total_trials']}")
+        print(
+            f"    TP/FP/FN: {metrics['true_positives']}/{metrics['false_positives']}/{metrics['false_negatives']}"
+        )
+        print()
+
+    # Print overall metrics
+    print("OVERALL METRICS:")
+    print("-" * 40)
+    overall = result["overall_metrics"]
+    print(f"  Average TPR: {overall['tpr']:.3f}")
+    print(f"  Average FPR: {overall['fpr']:.3f}")
+    print(f"  Average ADD: {overall['add']:.2f}")
+    print(f"  Number of changepoints: {overall['num_changepoints']}")
 
 
 def main():
-    """Main entry point"""
-    logger.info("Starting sensitivity analysis")
+    """Main function to create parameter sensitivity analysis."""
+    print("Creating Parameter Sensitivity Analysis Table...")
+    print("=" * 80)
 
-    # Check if results directory exists
-    results_dir = "results/sensitivity_analysis_5"
-    if not os.path.exists(results_dir):
-        logger.error(f"Results directory not found: {results_dir}")
+    # Collect all experiment data
+    print("Step 1: Collecting data from all experiments...")
+    experiment_data = collect_all_experiment_data()
+
+    if not experiment_data:
+        print("No experiment data found!")
         return
 
-    # Analyze all experiments
-    all_results = analyze_all_experiments(results_dir)
+    # Create the sensitivity table
+    print("\nStep 2: Creating parameter sensitivity table...")
+    sensitivity_df = create_parameter_sensitivity_table(experiment_data)
 
-    if not all_results:
-        logger.error("No results to analyze")
-        return
-
-    print(f"\n{'='*60}")
-    print(f"SENSITIVITY ANALYSIS SUMMARY")
-    print(f"{'='*60}")
-    print(f"Total experiments analyzed: {len(all_results)}")
-
-    # Group results by parameters
-    grouped_results = group_experiments_by_parameters(all_results)
-    print(f"Networks found: {list(grouped_results.keys())}")
-
-    for network, params in grouped_results.items():
-        print(f"{network}: {len(params)} parameter combinations")
-        print(f"  Parameter keys: {list(params.keys())}")
-
-    # Debug parameter coverage
-    debug_parameter_coverage(grouped_results)
-
-    # Create sensitivity table
-    sensitivity_table = create_sensitivity_table(grouped_results)
-    print(f"Sensitivity table shape: {sensitivity_table.shape}")
-
-    # Save results
-    detailed_path, table_path, json_path, latex_path = save_results(
-        all_results, grouped_results, sensitivity_table
-    )
-
-    print(f"\nFiles saved:")
-    print(f"- Detailed results: {detailed_path}")
-    print(f"- Sensitivity table: {table_path}")
-    print(f"- LaTeX table: {latex_path}")
-    print(f"- Raw results: {json_path}")
-
-    # Display a preview of the sensitivity table
-    print(f"\n{'='*60}")
-    print("SENSITIVITY TABLE PREVIEW")
-    print(f"{'='*60}")
-    print(sensitivity_table.head(10).to_string(index=False))
-
-    # Display LaTeX table preview
-    print(f"\n{'='*60}")
-    print("LATEX TABLE PREVIEW")
-    print(f"{'='*60}")
-    latex_table = format_latex_table(sensitivity_table)
-    # Show just the data rows (not the full table structure)
-    latex_lines = latex_table.split("\n")
-    data_lines = [
-        line
-        for line in latex_lines
-        if line.strip() and not line.startswith("\\") and "&" in line
-    ]
-    for line in data_lines[:12]:  # Show first 12 data rows
-        print(line)
-    print("...")
-    print(f"\nFull LaTeX table saved to: {latex_path}")
-    print("Copy this file content into your LaTeX document.")
+        # Format and display the table
+    print("\nStep 3: Formatting results...")
+    formatted_table = format_sensitivity_table_for_paper(sensitivity_df)
+    latex_table = create_latex_sensitivity_table(sensitivity_df)
+    
+    print("\n" + "=" * 80)
+    print("PARAMETER SENSITIVITY ANALYSIS RESULTS")
+    print("=" * 80)
+    print(formatted_table)
+    
+    # Save results to files
+    output_dir = "results/sensitivity_analysis"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save text version
+    text_file = os.path.join(output_dir, "parameter_sensitivity_table.txt")
+    with open(text_file, "w", encoding="utf-8") as f:
+        f.write(formatted_table)
+    
+    # Save LaTeX version
+    latex_file = os.path.join(output_dir, "parameter_sensitivity_table.tex")
+    with open(latex_file, "w", encoding="utf-8") as f:
+        f.write(latex_table)
+    
+    print(f"\nResults saved to:")
+    print(f"  Text version: {text_file}")
+    print(f"  LaTeX version: {latex_file}")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
