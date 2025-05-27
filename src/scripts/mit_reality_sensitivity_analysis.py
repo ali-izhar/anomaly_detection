@@ -1,1179 +1,956 @@
 #!/usr/bin/env python3
-"""MIT Reality Sensitivity Analysis Script"""
+"""
+MIT Reality Sensitivity Analysis Data Reader
+
+This script reads a single experiment folder from the MIT Reality parameter sweep
+and extracts the configuration and detection results for analysis.
+"""
 
 import os
-import re
+import sys
 import yaml
 import pandas as pd
-from typing import Dict, Tuple, Optional
-from collections import defaultdict
+import numpy as np
+from pathlib import Path
+from typing import Dict, Any, Tuple, Optional, List
+
+# Ensure project root is in path
+project_root = str(Path(__file__).parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 
-def parse_mit_experiment_name(exp_name: str) -> Tuple[str, Dict[str, str]]:
+def read_experiment_folder(
+    folder_path: str,
+) -> Tuple[
+    Optional[Dict[str, Any]],
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+]:
     """
-    Parse MIT Reality experiment name to extract group and parameters.
-
-    Returns:
-        Tuple of (group, parameters_dict)
-    """
-    # Power betting: mit_reality_power_{epsilon}_{distance}
-    power_pattern = r"^mit_reality_power_([0-9.]+)_(\w+)$"
-    power_match = re.match(power_pattern, exp_name)
-    if power_match:
-        epsilon, distance = power_match.groups()
-        return "power_betting", {
-            "dataset": "mit_reality",
-            "epsilon": epsilon,
-            "distance": distance,
-        }
-
-    # Mixture betting: mit_reality_mixture_{distance}
-    mixture_pattern = r"^mit_reality_mixture_(\w+)$"
-    mixture_match = re.match(mixture_pattern, exp_name)
-    if mixture_match:
-        distance = mixture_match.groups()[0]
-        return "mixture_betting", {"dataset": "mit_reality", "distance": distance}
-
-    # Beta betting: mit_reality_beta_{beta_a}_{beta_b}_{distance}
-    beta_pattern = r"^mit_reality_beta_([0-9.]+)_([0-9.]+)_(\w+)$"
-    beta_match = re.match(beta_pattern, exp_name)
-    if beta_match:
-        beta_a, beta_b, distance = beta_match.groups()
-        return "beta_betting", {
-            "dataset": "mit_reality",
-            "beta_a": beta_a,
-            "beta_b": beta_b,
-            "distance": distance,
-        }
-
-    # Threshold analysis: mit_reality_threshold_{threshold}_{distance}
-    threshold_pattern = r"^mit_reality_threshold_(\d+)_(\w+)$"
-    threshold_match = re.match(threshold_pattern, exp_name)
-    if threshold_match:
-        threshold, distance = threshold_match.groups()
-        return "threshold_analysis", {
-            "dataset": "mit_reality",
-            "threshold": threshold,
-            "distance": distance,
-        }
-
-    return "unknown", {}
-
-
-def load_experiment_config(config_path: str) -> Optional[Dict]:
-    """Load and parse the experiment configuration file."""
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        return config
-    except Exception as e:
-        print(f"Error loading config from {config_path}: {e}")
-        return None
-
-
-def extract_config_parameters(config: Dict) -> Dict:
-    """Extract key parameters from the experiment configuration."""
-    params = {}
-
-    # Dataset type
-    if "model" in config and "dataset" in config["model"]:
-        params["dataset"] = config["model"]["dataset"]
-
-    # Distance measure
-    if "detection" in config and "distance" in config["detection"]:
-        params["distance_measure"] = config["detection"]["distance"]["measure"]
-        params["distance_p"] = config["detection"]["distance"].get("p", 2.0)
-
-    # Betting function configuration
-    if "detection" in config and "betting_func_config" in config["detection"]:
-        betting_config = config["detection"]["betting_func_config"]
-        params["betting_function"] = betting_config["name"]
-
-        if betting_config["name"] == "power" and "power" in betting_config:
-            params["epsilon"] = betting_config["power"]["epsilon"]
-        elif betting_config["name"] == "beta" and "beta" in betting_config:
-            params["beta_a"] = betting_config["beta"]["a"]
-            params["beta_b"] = betting_config["beta"]["b"]
-        elif betting_config["name"] == "mixture" and "mixture" in betting_config:
-            params["mixture_epsilons"] = betting_config["mixture"]["epsilons"]
-
-    # Detection threshold
-    if "detection" in config and "threshold" in config["detection"]:
-        params["threshold"] = config["detection"]["threshold"]
-
-    # Other detection parameters
-    if "detection" in config:
-        params["batch_size"] = config["detection"].get("batch_size", None)
-        params["cooldown_period"] = config["detection"].get("cooldown_period", None)
-
-    return params
-
-
-def get_detection_window_for_changepoint(changepoint: int) -> tuple:
-    """
-    Get the detection window for each specific changepoint in MIT Reality.
-
-    Updated logic: detections between changepoints are considered valid (late detections for earlier CPs):
-    - CP 23: window from 23 to 67 (until next CP region)
-    - CP 68: window from 68 to 93 (until next CP region)
-    - CP 94: window from 94 to 99 (until next CP)
-    - CP 100: window from 100 to 172 (until next CP region)
-    - CP 173: window from 173 to 233 (until next CP region)
-    - CP 234: window from 234 to 270 (end of sequence)
-    """
-    windows = {
-        23: (23, 67),  # CP 23: detect from 23 to 67
-        68: (68, 93),  # CP 68: detect from 68 to 93
-        94: (94, 99),  # CP 94: detect from 94 to 99
-        100: (100, 172),  # CP 100: detect from 100 to 172
-        173: (173, 233),  # CP 173: detect from 173 to 233
-        234: (234, 270),  # CP 234: detect from 234 to 270
-    }
-
-    return windows.get(changepoint, (changepoint, changepoint + 30))
-
-
-def compute_metrics_for_changepoint(
-    detection_df: pd.DataFrame,
-    changepoint: int,
-    window_size: int = 30,
-    n_trials: int = 10,
-) -> Dict:
-    """
-    Compute TPR, FPR, and ADD for a specific changepoint in MIT Reality data.
-
-    Uses specific detection windows for each changepoint:
-    - CP 23: detections from 23 to 53 are TP
-    - CP 68: detections from 68 to 88 are TP
-    - CP 94: detections from 94 to 100 are TP (limited by next CP)
-    - CP 100: detections from 100 to 130 are TP
-    - CP 173: detections from 173 to 213 are TP
-    - CP 234: detections from 234 to 274 are TP
-
-    Args:
-        detection_df: DataFrame with detection details
-        changepoint: The true changepoint location
-        window_size: Window size for considering a detection as TP (default: 30, but overridden by specific windows)
-        n_trials: Total number of trials run (default: 10)
-
-    Returns:
-        Dictionary with TPR, FPR, ADD metrics
-    """
-    # Get the specific detection window for this changepoint
-    window_start, window_end = get_detection_window_for_changepoint(changepoint)
-
-    # Get ALL detections in the dataset (not just those attributed to this CP)
-    all_detections = detection_df.copy()
-
-    # Find detections that fall within this changepoint's detection window
-    tp_detections = all_detections[
-        (all_detections["Detection Index"] >= window_start)
-        & (all_detections["Detection Index"] <= window_end)
-    ].copy()
-
-    # Count trials with at least one TP detection for this changepoint
-    trials_with_tp = tp_detections["Trial"].nunique() if len(tp_detections) > 0 else 0
-
-    # False Negatives: trials with no TP detection for this changepoint
-    false_negatives = n_trials - trials_with_tp
-
-    # Calculate TPR (no FPR per changepoint - FPR is calculated globally)
-    tpr = trials_with_tp / n_trials if n_trials > 0 else 0.0
-
-    # Calculate ADD (Average Detection Delay) for TRUE POSITIVE detections only
-    if len(tp_detections) > 0:
-        # Calculate delay as detection index - changepoint
-        delays = tp_detections["Detection Index"] - changepoint
-        add = delays.mean()
-    else:
-        add = float("inf")  # No true positives means infinite delay
-
-    return {
-        "changepoint": changepoint,
-        "window_start": window_start,
-        "window_end": window_end,
-        "total_trials": n_trials,
-        "tpr": tpr,
-        "fpr": 0.0,  # FPR calculated separately at global level
-        "add": add,
-        "true_positives": trials_with_tp,
-        "false_positives": 0,  # FP calculated separately
-        "false_negatives": false_negatives,
-        "trials_with_detections": (
-            tp_detections["Trial"].nunique() if len(tp_detections) > 0 else 0
-        ),
-        "total_tp_detections": len(tp_detections),
-        "total_fp_detections": 0,  # FP calculated separately
-    }
-
-
-def compute_global_fpr(detection_df: pd.DataFrame, n_trials: int = 10) -> float:
-    """
-    Compute global False Positive Rate for MIT Reality data.
-
-    FPR = (number of trials with at least one FP detection) / total trials
-
-    False positives are detections in gaps between changepoint regions:
-    - 0-22 (before first CP)
-    - 68-67 (gap - none)
-    - 94-93 (gap - none)
-    - 173-172 (gap - none)
-    - 271+ (after last CP)
-
-    Valid detection windows (NOT false positives):
-    - CP 23: 23 to 67
-    - CP 68: 68 to 93
-    - CP 94: 94 to 99
-    - CP 100: 100 to 172
-    - CP 173: 173 to 233
-    - CP 234: 234 to 270
-    """
-    if len(detection_df) == 0:
-        return 0.0
-
-    # Define all valid detection windows (detections in these ranges are NOT false positives)
-    valid_windows = [
-        (23, 67),  # CP 23
-        (68, 93),  # CP 68
-        (94, 99),  # CP 94
-        (100, 172),  # CP 100
-        (173, 233),  # CP 173
-        (234, 270),  # CP 234
-    ]
-
-    # Find trials that have at least one FP detection
-    trials_with_fp = set()
-
-    for _, detection in detection_df.iterrows():
-        detection_index = detection["Detection Index"]
-        trial = detection["Trial"]
-        is_fp = True
-
-        # Check if detection falls within any valid window
-        for window_start, window_end in valid_windows:
-            if window_start <= detection_index <= window_end:
-                is_fp = False
-                break
-
-        if is_fp:
-            trials_with_fp.add(trial)
-
-    # Calculate FPR as proportion of trials with at least one FP
-    fpr = len(trials_with_fp) / n_trials if n_trials > 0 else 0.0
-
-    return fpr
-
-
-def analyze_experiment_folder(folder_path: str) -> Optional[Dict]:
-    """
-    Analyze a single MIT Reality experiment folder and extract configuration and metrics.
+    Read a single MIT Reality experiment folder and extract config and results.
 
     Args:
         folder_path: Path to the experiment folder
 
     Returns:
-        Dictionary with experiment analysis results or None if failed
+        Tuple of (config_dict, change_point_metadata_df, detection_details_df, raw_detection_df)
+        Returns (None, None, None, None) if files cannot be read
     """
+    if not os.path.exists(folder_path):
+        print(f"Error: Folder does not exist: {folder_path}")
+        return None, None, None, None
+
+    if not os.path.isdir(folder_path):
+        print(f"Error: Path is not a directory: {folder_path}")
+        return None, None, None, None
+
+    # Read config.yaml
     config_path = os.path.join(folder_path, "config.yaml")
-    results_path = os.path.join(
+    config = None
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+            print(f"✓ Successfully read config.yaml")
+        except Exception as e:
+            print(f"Error reading config.yaml: {e}")
+            return None, None, None, None
+    else:
+        print(f"Error: config.yaml not found in {folder_path}")
+        return None, None, None, None
+
+    # Read detection results Excel file with multiple sheets
+    detection_path = os.path.join(
         folder_path, "detection", "csv", "detection_results.xlsx"
     )
+    change_point_metadata = None
+    detection_details = None
+    raw_detection_data = None
 
-    # Check if required files exist
-    if not os.path.exists(config_path):
-        print(f"Config file not found: {config_path}")
-        return None
+    if os.path.exists(detection_path):
+        try:
+            # Read all sheets to see what's available
+            excel_file = pd.ExcelFile(detection_path)
+            print(f"Available sheets: {excel_file.sheet_names}")
 
-    if not os.path.exists(results_path):
-        print(f"Results file not found: {results_path}")
-        return None
+            # Read ChangePointMetadata sheet
+            if "ChangePointMetadata" in excel_file.sheet_names:
+                change_point_metadata = pd.read_excel(
+                    detection_path, sheet_name="ChangePointMetadata"
+                )
+                print(
+                    f"✓ Successfully read ChangePointMetadata sheet ({len(change_point_metadata)} rows)"
+                )
+            else:
+                print("Warning: ChangePointMetadata sheet not found")
 
-    try:
-        # Load configuration
-        config = load_experiment_config(config_path)
-        if config is None:
-            return None
+            # Read Detection Details sheet
+            if "Detection Details" in excel_file.sheet_names:
+                detection_details = pd.read_excel(
+                    detection_path, sheet_name="Detection Details"
+                )
+                print(
+                    f"✓ Successfully read Detection Details sheet ({len(detection_details)} rows)"
+                )
+            else:
+                print("Warning: Detection Details sheet not found")
 
-        # Extract configuration parameters
-        config_params = extract_config_parameters(config)
-
-        # Load Excel file
-        excel_file = pd.ExcelFile(results_path)
-
-        # Check if required sheets exist
-        required_sheets = ["ChangePointMetadata", "Detection Details"]
-        missing_sheets = [
-            sheet for sheet in required_sheets if sheet not in excel_file.sheet_names
-        ]
-
-        if missing_sheets:
-            print(f"Missing required sheets in {results_path}: {missing_sheets}")
-            return None
-
-        # Load the required sheets
-        changepoint_metadata = pd.read_excel(
-            results_path, sheet_name="ChangePointMetadata"
-        )
-        detection_details = pd.read_excel(results_path, sheet_name="Detection Details")
-
-        # Get all changepoints
-        changepoints = changepoint_metadata["change_point"].tolist()
-
-        # Get number of trials from config
-        n_trials = config.get("trials", {}).get("n_trials", 10)
-
-        # Compute metrics for each changepoint
-        changepoint_metrics = []
-        for cp in changepoints:
-            metrics = compute_metrics_for_changepoint(
-                detection_details, cp, n_trials=n_trials
+            # Read the first sheet (raw detection data) as fallback
+            raw_detection_data = pd.read_excel(detection_path, sheet_name=0)
+            print(
+                f"✓ Successfully read raw detection data ({len(raw_detection_data)} rows)"
             )
-            changepoint_metrics.append(metrics)
 
-        # Compute global FPR (detections outside all valid windows)
-        global_fpr = compute_global_fpr(detection_details, n_trials=n_trials)
+        except Exception as e:
+            print(f"Error reading detection_results.xlsx: {e}")
+            return config, None, None, None
+    else:
+        print(f"Error: detection_results.xlsx not found at {detection_path}")
+        return config, None, None, None
 
-        # Compute overall metrics (averaged across all changepoints)
-        if changepoint_metrics:
-            overall_tpr = sum(m["tpr"] for m in changepoint_metrics) / len(
-                changepoint_metrics
-            )
-            overall_fpr = global_fpr  # Use global FPR instead of averaging per-CP FPR
-
-            # For ADD, exclude infinite values and compute mean
-            finite_adds = [
-                m["add"] for m in changepoint_metrics if m["add"] != float("inf")
-            ]
-            overall_add = (
-                sum(finite_adds) / len(finite_adds) if finite_adds else float("inf")
-            )
-        else:
-            overall_tpr = 0.0
-            overall_fpr = global_fpr
-            overall_add = float("inf")
-
-        return {
-            "folder_path": folder_path,
-            "config_parameters": config_params,
-            "changepoints": changepoints,
-            "changepoint_metrics": changepoint_metrics,
-            "overall_metrics": {
-                "tpr": overall_tpr,
-                "fpr": overall_fpr,
-                "add": overall_add,
-                "num_changepoints": len(changepoints),
-            },
-        }
-
-    except Exception as e:
-        print(f"Error analyzing folder {folder_path}: {e}")
-        return None
+    return config, change_point_metadata, detection_details, raw_detection_data
 
 
-def collect_all_mit_experiment_data(
-    base_dir: str = "results/mit_reality_sensitivity_analysis",
-) -> Dict:
+def print_config_summary(config: Dict[str, Any]) -> None:
+    """Print a summary of the configuration."""
+    print("\n" + "=" * 50)
+    print("CONFIGURATION SUMMARY")
+    print("=" * 50)
+
+    # Detection method info
+    detection = config.get("detection", {})
+    print(f"Detection method: {detection.get('method', 'unknown')}")
+    print(f"Threshold: {detection.get('threshold', 'unknown')}")
+
+    # Betting function info
+    betting_config = detection.get("betting_func_config", {})
+    betting_name = betting_config.get("name", "unknown")
+    print(f"Betting function: {betting_name}")
+
+    if betting_name == "power":
+        epsilon = betting_config.get("power", {}).get("epsilon", "unknown")
+        print(f"  - Epsilon: {epsilon}")
+    elif betting_name == "beta":
+        beta_config = betting_config.get("beta", {})
+        print(f"  - Beta a: {beta_config.get('a', 'unknown')}")
+        print(f"  - Beta b: {beta_config.get('b', 'unknown')}")
+    elif betting_name == "mixture":
+        epsilons = betting_config.get("mixture", {}).get("epsilons", [])
+        print(f"  - Epsilons: {epsilons}")
+
+    # Distance measure
+    distance_config = detection.get("distance", {})
+    print(f"Distance measure: {distance_config.get('measure', 'unknown')}")
+
+    # Model info
+    model = config.get("model", {})
+    print(f"Model type: {model.get('type', 'unknown')}")
+    print(f"Network: {model.get('network', 'unknown')}")
+
+    # Trials info
+    trials = config.get("trials", {})
+    print(f"Number of trials: {trials.get('n_trials', 'unknown')}")
+
+
+def print_change_point_summary(change_points: pd.DataFrame) -> None:
+    """Print a summary of the change point metadata."""
+    print("\n" + "=" * 50)
+    print("CHANGE POINT METADATA SUMMARY")
+    print("=" * 50)
+
+    if change_points is not None and len(change_points) > 0:
+        print(f"Total change points: {len(change_points)}")
+        if "change_point" in change_points.columns:
+            cp_values = sorted(change_points["change_point"].tolist())
+            print(f"Change points: {cp_values}")
+        print(f"\nChange point data:")
+        print(change_points)
+    else:
+        print("No change point data available")
+
+
+def print_detection_details_summary(detection_details: pd.DataFrame) -> None:
+    """Print a summary of the detection details."""
+    print("\n" + "=" * 50)
+    print("DETECTION DETAILS SUMMARY")
+    print("=" * 50)
+
+    if detection_details is not None and len(detection_details) > 0:
+        print(f"Total detections: {len(detection_details)}")
+        print(f"Columns: {list(detection_details.columns)}")
+
+        if "Trial" in detection_details.columns:
+            trials = sorted(detection_details["Trial"].unique())
+            print(f"Trials: {trials}")
+
+        if "Type" in detection_details.columns:
+            types = detection_details["Type"].unique()
+            print(f"Detection types: {list(types)}")
+
+        if "Is Within 30 Steps" in detection_details.columns:
+            within_30 = detection_details["Is Within 30 Steps"].value_counts()
+            print(f"Detections within 30 steps: {dict(within_30)}")
+
+        # Show first few rows
+        print(f"\nFirst 10 detections:")
+        print(detection_details.head(10))
+    else:
+        print("No detection details available")
+
+
+def print_raw_results_summary(results: pd.DataFrame) -> None:
+    """Print a summary of the raw detection results."""
+    print("\n" + "=" * 50)
+    print("RAW DETECTION DATA SUMMARY")
+    print("=" * 50)
+
+    if results is not None and len(results) > 0:
+        print(f"Total rows: {len(results)}")
+        print(f"Columns: {list(results.columns)}")
+
+        if "trial" in results.columns:
+            trials = results["trial"].unique()
+            print(f"Unique trials: {sorted(trials)}")
+
+        if "detection_time" in results.columns:
+            detections = results[results["detection_time"].notna()]
+            print(f"Number of detections: {len(detections)}")
+
+            if len(detections) > 0:
+                print(
+                    f"Detection times: {sorted(detections['detection_time'].tolist())}"
+                )
+
+        # Show first few rows
+        print(f"\nFirst 5 rows:")
+        print(results.head())
+    else:
+        print("No raw detection data available")
+
+
+def define_detection_ranges(change_points: List[int]) -> Dict[int, Tuple[int, int]]:
     """
-    Collect and analyze data from all MIT Reality experiment folders.
+    Define the valid detection ranges for each change point.
+
+    Args:
+        change_points: List of change point locations
 
     Returns:
-        Dictionary with all experiment results organized by parameter type
+        Dictionary mapping change_point -> (start, end) of valid detection range
     """
-    if not os.path.exists(base_dir):
-        print(f"Base directory does not exist: {base_dir}")
-        return {}
+    # Define the specific ranges based on the rules provided
+    ranges = {
+        23: (23, 60),
+        68: (68, 90),
+        94: (94, 130),
+        100: (100, 140),
+        173: (173, 220),
+        234: (234, 270),
+    }
 
-    all_dirs = [
-        d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))
-    ]
+    # Only return ranges for change points that exist in the data
+    return {cp: ranges[cp] for cp in change_points if cp in ranges}
 
-    print(f"Found {len(all_dirs)} MIT Reality experiment directories")
 
-    # Organize results by parameter configuration
-    results = defaultdict(list)
-    failed_experiments = []
+def compute_performance_metrics(
+    change_points_df: pd.DataFrame, detection_details_df: pd.DataFrame
+) -> Dict[str, float]:
+    """
+    Compute TPR, FPR, and ADD based on change points and detection details.
 
-    for i, dirname in enumerate(all_dirs):
-        if (i + 1) % 20 == 0:
-            print(f"Processing experiment {i+1}/{len(all_dirs)}")
+    Args:
+        change_points_df: DataFrame with change point metadata
+        detection_details_df: DataFrame with detection details
 
-        folder_path = os.path.join(base_dir, dirname)
+    Returns:
+        Dictionary with performance metrics
+    """
+    if change_points_df is None or detection_details_df is None:
+        return {"TPR": 0.0, "FPR": 0.0, "ADD": float("inf"), "error": "Missing data"}
 
-        # Extract experiment name from directory name
-        parts = dirname.split("_")
-        timestamp_idx = None
-        for j, part in enumerate(parts):
-            if len(part) == 8 and part.isdigit() and part.startswith("20"):
-                timestamp_idx = j
+    # Extract change points
+    change_points = sorted(change_points_df["change_point"].tolist())
+    detection_ranges = define_detection_ranges(change_points)
+
+    print(f"Change points: {change_points}")
+    print(f"Detection ranges: {detection_ranges}")
+
+    # Get all detections
+    detections = detection_details_df["Detection Index"].tolist()
+    print(f"All detections: {sorted(detections)}")
+
+    # Count true positives and compute delays
+    true_positives = 0
+    detection_delays = []
+    detected_change_points = set()
+    first_detection_delays = {}  # Track first detection delay for each CP
+
+    for detection_idx in detections:
+        is_true_positive = False
+
+        for cp, (start, end) in detection_ranges.items():
+            if start <= detection_idx <= end:
+                # This is a true positive
+                true_positives += 1
+                detected_change_points.add(cp)
+                delay = detection_idx - cp
+                detection_delays.append(delay)
+
+                # Track first detection for each change point for ADD calculation
+                if cp not in first_detection_delays:
+                    first_detection_delays[cp] = delay
+                    print(
+                        f"TP (first): Detection at {detection_idx} for CP {cp}, delay = {delay}"
+                    )
+                else:
+                    print(
+                        f"TP (additional): Detection at {detection_idx} for CP {cp}, delay = {delay}"
+                    )
+
+                is_true_positive = True
                 break
 
-        if timestamp_idx is None:
-            failed_experiments.append(dirname)
-            continue
+        if not is_true_positive:
+            print(f"FP: Detection at {detection_idx}")
 
-        exp_name = "_".join(parts[:timestamp_idx])
-        group, params = parse_mit_experiment_name(exp_name)
+    # Count false positives
+    false_positives = len(detections) - true_positives
 
-        if group == "unknown":
-            failed_experiments.append(dirname)
-            continue
+    # Count false negatives (undetected change points)
+    false_negatives = len(change_points) - len(detected_change_points)
 
-        # Analyze the experiment
-        analysis_result = analyze_experiment_folder(folder_path)
+    # Compute metrics
+    total_change_points = len(change_points)
+    # TPR should be based on how many change points were detected, not total detections
+    TPR = (
+        len(detected_change_points) / total_change_points
+        if total_change_points > 0
+        else 0.0
+    )
 
-        if analysis_result is None:
-            failed_experiments.append(dirname)
-            continue
+    # For FPR, we need to define the total possible false positive opportunities
+    # Using the total time span minus the true positive windows
+    total_time_span = 275  # Based on the data we saw
+    true_positive_windows = sum(
+        end - start + 1 for start, end in detection_ranges.values()
+    )
+    false_positive_opportunities = total_time_span - true_positive_windows
 
-        # Store result organized by parameter configuration
-        results[group].append(
-            {
-                "exp_name": exp_name,
-                "dirname": dirname,
-                "group": group,
-                "parameters": params,
-                "analysis": analysis_result,
-            }
+    FPR = (
+        false_positives / false_positive_opportunities
+        if false_positive_opportunities > 0
+        else 0.0
+    )
+
+    # Compute ADD (Average Detection Delay) - use only first detection for each CP
+    first_delays = list(first_detection_delays.values())
+    ADD = np.mean(first_delays) if first_delays else float("inf")
+
+    metrics = {
+        "TPR": TPR,
+        "FPR": FPR,
+        "ADD": ADD,
+        "true_positive_detections": true_positives,  # Total TP detections (can be > # CPs)
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+        "total_change_points": total_change_points,
+        "detected_change_points": len(detected_change_points),
+        "all_detection_delays": detection_delays,
+        "first_detection_delays": first_delays,
+        "total_detections": len(detections),
+    }
+
+    return metrics
+
+
+def print_performance_summary(metrics: Dict[str, float]) -> None:
+    """Print a summary of the performance metrics."""
+    print("\n" + "=" * 50)
+    print("PERFORMANCE METRICS SUMMARY")
+    print("=" * 50)
+
+    if "error" in metrics:
+        print(f"Error: {metrics['error']}")
+        return
+
+    print(f"True Positive Rate (TPR): {metrics['TPR']:.3f}")
+    print(f"False Positive Rate (FPR): {metrics['FPR']:.6f}")
+    print(f"Average Detection Delay (ADD): {metrics['ADD']:.2f}")
+    print()
+    print(f"True Positive Detections: {metrics['true_positive_detections']}")
+    print(f"False Positive Detections: {metrics['false_positives']}")
+    print(f"False Negatives (Missed CPs): {metrics['false_negatives']}")
+    print(f"Total Change Points: {metrics['total_change_points']}")
+    print(f"Detected Change Points: {metrics['detected_change_points']}")
+    print(f"Total Detections: {metrics['total_detections']}")
+
+    if metrics["first_detection_delays"]:
+        print(
+            f"First Detection Delays (used for ADD): {metrics['first_detection_delays']}"
+        )
+        print(f"Min First Delay: {min(metrics['first_detection_delays'])}")
+        print(f"Max First Delay: {max(metrics['first_detection_delays'])}")
+
+    if metrics["all_detection_delays"]:
+        print(f"All Detection Delays: {metrics['all_detection_delays']}")
+        print(f"Total TP Detections: {len(metrics['all_detection_delays'])}")
+
+
+def process_all_experiments(results_dir: str) -> pd.DataFrame:
+    """
+    Process all experiment folders and compute metrics for each.
+
+    Args:
+        results_dir: Path to the directory containing all experiment folders
+
+    Returns:
+        DataFrame with metrics for all experiments
+    """
+    if not os.path.exists(results_dir):
+        print(f"Error: Results directory does not exist: {results_dir}")
+        return pd.DataFrame()
+
+    # Get all experiment folders
+    experiment_folders = [
+        d
+        for d in os.listdir(results_dir)
+        if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("mit_reality_")
+    ]
+
+    print(f"Found {len(experiment_folders)} experiment folders")
+
+    all_results = []
+
+    for i, folder_name in enumerate(experiment_folders):
+        folder_path = os.path.join(results_dir, folder_name)
+        print(f"\nProcessing [{i+1}/{len(experiment_folders)}]: {folder_name}")
+
+        # Read experiment data
+        config, change_points, detection_details, raw_results = read_experiment_folder(
+            folder_path
         )
 
-    print(
-        f"Successfully processed {sum(len(results[grp]) for grp in results)} experiments"
-    )
-    print(f"Failed to process {len(failed_experiments)} experiments")
+        if config is None or change_points is None or detection_details is None:
+            print(f"  ⚠️  Skipping {folder_name} - missing data")
+            continue
 
-    return dict(results)
+        # Extract experiment parameters from config
+        detection_config = config.get("detection", {})
+        betting_config = detection_config.get("betting_func_config", {})
+        distance_config = detection_config.get("distance", {})
+
+        # Parse experiment name to extract parameters
+        exp_params = parse_experiment_name(folder_name)
+
+        # Compute performance metrics
+        metrics = compute_performance_metrics(change_points, detection_details)
+
+        if "error" in metrics:
+            print(f"  ⚠️  Error computing metrics for {folder_name}: {metrics['error']}")
+            continue
+
+        # Combine all information
+        result = {
+            "experiment_name": folder_name,
+            "experiment_type": exp_params.get("type", "unknown"),
+            "betting_function": betting_config.get("name", "unknown"),
+            "distance_measure": distance_config.get("measure", "unknown"),
+            "threshold": detection_config.get("threshold", None),
+            **exp_params,  # Add parsed parameters
+            **metrics,  # Add performance metrics
+        }
+
+        all_results.append(result)
+
+        print(
+            f"  ✓ TPR: {metrics['TPR']:.3f}, FPR: {metrics['FPR']:.6f}, ADD: {metrics['ADD']:.2f}"
+        )
+
+    # Convert to DataFrame
+    results_df = pd.DataFrame(all_results)
+
+    print(f"\n✓ Successfully processed {len(all_results)} experiments")
+    return results_df
 
 
-def create_mit_sensitivity_table(experiment_data: Dict) -> pd.DataFrame:
+def parse_experiment_name(folder_name: str) -> Dict[str, Any]:
     """
-    Create the MIT Reality parameter sensitivity table.
+    Parse experiment folder name to extract parameters.
 
     Args:
-        experiment_data: Dictionary with all experiment results
+        folder_name: Name of the experiment folder
 
     Returns:
-        DataFrame with the sensitivity analysis table
+        Dictionary with parsed parameters
     """
-    # Initialize results structure
+    params = {}
+
+    # Extract experiment type and parameters from folder name
+    if "power_" in folder_name:
+        params["type"] = "power"
+        # Extract epsilon value
+        parts = folder_name.split("_")
+        for i, part in enumerate(parts):
+            if part == "power" and i + 1 < len(parts):
+                try:
+                    params["epsilon"] = float(parts[i + 1])
+                except ValueError:
+                    pass
+                break
+    elif "mixture_" in folder_name:
+        params["type"] = "mixture"
+        params["mixture"] = True
+    elif "beta_" in folder_name:
+        params["type"] = "beta"
+        # Extract beta_a and beta_b values
+        parts = folder_name.split("_")
+        for i, part in enumerate(parts):
+            if part == "beta" and i + 2 < len(parts):
+                try:
+                    params["beta_a"] = float(parts[i + 1])
+                    params["beta_b"] = float(parts[i + 2])
+                except ValueError:
+                    pass
+                break
+    elif "threshold_" in folder_name:
+        params["type"] = "threshold"
+        # Extract threshold value
+        parts = folder_name.split("_")
+        for i, part in enumerate(parts):
+            if part == "threshold" and i + 1 < len(parts):
+                try:
+                    params["threshold_value"] = float(parts[i + 1])
+                except ValueError:
+                    pass
+                break
+
+    # Extract distance measure (usually the last meaningful part before timestamp)
+    parts = folder_name.split("_")
+    distance_measures = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
+    for part in parts:
+        if part in distance_measures:
+            params["distance"] = part
+            break
+
+    return params
+
+
+def create_parameter_sensitivity_table(results_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create a parameter sensitivity table in the format shown in TABLE III.
+
+    Args:
+        results_df: DataFrame with all experiment results
+
+    Returns:
+        Formatted table DataFrame
+    """
+    # Initialize the table structure
     table_data = []
 
-    # Initialize row for MIT Reality dataset
-    row = {"Dataset": "MIT Reality", "Metric": None}
+    # MIT Reality is our single network type
+    network = "MIT"
 
-    # Process Power Betting experiments
-    power_experiments = experiment_data.get("power_betting", [])
-    power_results = defaultdict(list)
+    # Process Power Betting results
+    power_results = {}
+    power_data = results_df[results_df["experiment_type"] == "power"]
 
-    for exp in power_experiments:
-        epsilon = exp["parameters"]["epsilon"]
-        distance = exp["parameters"]["distance"]
-        metrics = exp["analysis"]["overall_metrics"]
+    if not power_data.empty:
+        # Group by epsilon values
+        for epsilon in [0.2, 0.5, 0.7, 0.9]:
+            epsilon_data = power_data[power_data["epsilon"] == epsilon]
+            if not epsilon_data.empty:
+                # Filter out infinite ADD values for proper averaging
+                finite_add_data = epsilon_data[np.isfinite(epsilon_data["ADD"])]
+                avg_add = (
+                    finite_add_data["ADD"].mean()
+                    if len(finite_add_data) > 0
+                    else float("inf")
+                )
 
-        key = f"epsilon_{epsilon}"
-        power_results[key].append(metrics)
+                power_results[f"ε={epsilon}"] = {
+                    "TPR": epsilon_data["TPR"].mean(),
+                    "FPR": epsilon_data["FPR"].mean(),
+                    "ADD": avg_add,
+                }
 
-    # Process Mixture Betting experiments
-    mixture_experiments = experiment_data.get("mixture_betting", [])
-    mixture_results = []
+    # Process Mixture Betting results
+    mixture_results = {}
+    mixture_data = results_df[results_df["experiment_type"] == "mixture"]
 
-    for exp in mixture_experiments:
-        metrics = exp["analysis"]["overall_metrics"]
-        mixture_results.append(metrics)
+    if not mixture_data.empty:
+        # Filter out infinite ADD values for proper averaging
+        finite_add_data = mixture_data[np.isfinite(mixture_data["ADD"])]
+        avg_add = (
+            finite_add_data["ADD"].mean() if len(finite_add_data) > 0 else float("inf")
+        )
 
-    # Process Beta Betting experiments
-    beta_experiments = experiment_data.get("beta_betting", [])
-    beta_results = defaultdict(list)
+        mixture_results["Mixture"] = {
+            "TPR": mixture_data["TPR"].mean(),
+            "FPR": mixture_data["FPR"].mean(),
+            "ADD": avg_add,
+        }
 
-    for exp in beta_experiments:
-        beta_a = exp["parameters"]["beta_a"]
-        beta_b = exp["parameters"]["beta_b"]
-        metrics = exp["analysis"]["overall_metrics"]
+    # Process Beta Betting results
+    beta_results = {}
+    beta_data = results_df[results_df["experiment_type"] == "beta"]
 
-        key = f"beta_{beta_a}_{beta_b}"
-        beta_results[key].append(metrics)
+    if not beta_data.empty:
+        # Group by beta_a and beta_b combinations
+        beta_combinations = [
+            (0.2, 2.5),
+            (0.4, 1.8),
+            (0.6, 1.2),  # Representative combinations
+        ]
 
-    # Process Threshold experiments
-    threshold_experiments = experiment_data.get("threshold_analysis", [])
-    threshold_results = defaultdict(list)
+        for beta_a, beta_b in beta_combinations:
+            combo_data = beta_data[
+                (beta_data["beta_a"] == beta_a) & (beta_data["beta_b"] == beta_b)
+            ]
+            if not combo_data.empty:
+                # Filter out infinite ADD values for proper averaging
+                finite_add_data = combo_data[np.isfinite(combo_data["ADD"])]
+                avg_add = (
+                    finite_add_data["ADD"].mean()
+                    if len(finite_add_data) > 0
+                    else float("inf")
+                )
 
-    for exp in threshold_experiments:
-        threshold = exp["parameters"]["threshold"]
-        metrics = exp["analysis"]["overall_metrics"]
+                beta_results[f"({beta_a},{beta_b})"] = {
+                    "TPR": combo_data["TPR"].mean(),
+                    "FPR": combo_data["FPR"].mean(),
+                    "ADD": avg_add,
+                }
 
-        key = f"threshold_{threshold}"
-        threshold_results[key].append(metrics)
+    # Process Distance Metric results
+    distance_results = {}
+    distance_measures = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
 
-    # Aggregate distance metric results across all experiment types
-    distance_results = defaultdict(list)
+    for distance in distance_measures:
+        dist_data = results_df[results_df["distance_measure"] == distance]
+        if not dist_data.empty:
+            # Use proper abbreviations
+            abbrev_map = {
+                "euclidean": "Euc.",
+                "mahalanobis": "Mah.",
+                "cosine": "Cos.",
+                "chebyshev": "Cheb.",
+            }
+            # Filter out infinite ADD values for proper averaging
+            finite_add_data = dist_data[np.isfinite(dist_data["ADD"])]
+            avg_add = (
+                finite_add_data["ADD"].mean()
+                if len(finite_add_data) > 0
+                else float("inf")
+            )
 
-    for group_name, group_data in experiment_data.items():
-        for exp in group_data:
-            distance = exp["parameters"]["distance"]
-            metrics = exp["analysis"]["overall_metrics"]
-            distance_results[distance].append(metrics)
+            distance_results[abbrev_map[distance]] = {
+                "TPR": dist_data["TPR"].mean(),
+                "FPR": dist_data["FPR"].mean(),
+                "ADD": avg_add,
+            }
 
-    # Create rows for TPR, FPR, ADD
-    for metric in ["TPR", "FPR", "ADD"]:
-        metric_row = row.copy()
-        metric_row["Metric"] = metric
+    # Process Threshold results
+    threshold_results = {}
+    threshold_data = results_df[results_df["experiment_type"] == "threshold"]
 
-        # Power Betting columns
-        for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
-            key = f"epsilon_{epsilon}"
-            if key in power_results and power_results[key]:
-                values = [m[metric.lower()] for m in power_results[key]]
-                # Filter out infinite values for ADD
-                if metric == "ADD":
-                    values = [v for v in values if v != float("inf")]
-                avg_value = sum(values) / len(values) if values else 0.0
-                metric_row[f"Power_ε={epsilon}"] = avg_value
-            else:
-                metric_row[f"Power_ε={epsilon}"] = 0.0
+    if not threshold_data.empty:
+        for threshold_val in [20, 50, 100]:
+            thresh_data = threshold_data[
+                threshold_data["threshold_value"] == threshold_val
+            ]
+            if not thresh_data.empty:
+                # Filter out infinite ADD values for proper averaging
+                finite_add_data = thresh_data[np.isfinite(thresh_data["ADD"])]
+                avg_add = (
+                    finite_add_data["ADD"].mean()
+                    if len(finite_add_data) > 0
+                    else float("inf")
+                )
 
-        # Mixture Betting column
-        if mixture_results:
-            values = [m[metric.lower()] for m in mixture_results]
-            if metric == "ADD":
-                values = [v for v in values if v != float("inf")]
-            avg_value = sum(values) / len(values) if values else 0.0
-            metric_row["Mixture"] = avg_value
-        else:
-            metric_row["Mixture"] = 0.0
+                threshold_results[str(threshold_val)] = {
+                    "TPR": thresh_data["TPR"].mean(),
+                    "FPR": thresh_data["FPR"].mean(),
+                    "ADD": avg_add,
+                }
 
-        # Beta Betting columns
-        for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
-            key = f"beta_{beta_combo}"
-            if key in beta_results and beta_results[key]:
-                values = [m[metric.lower()] for m in beta_results[key]]
-                if metric == "ADD":
-                    values = [v for v in values if v != float("inf")]
-                avg_value = sum(values) / len(values) if values else 0.0
-                metric_row[f"Beta_{beta_combo}"] = avg_value
-            else:
-                metric_row[f"Beta_{beta_combo}"] = 0.0
-
-        # Distance Metric columns
-        for distance in ["euclidean", "mahalanobis", "cosine", "chebyshev"]:
-            if distance in distance_results and distance_results[distance]:
-                values = [m[metric.lower()] for m in distance_results[distance]]
-                if metric == "ADD":
-                    values = [v for v in values if v != float("inf")]
-                avg_value = sum(values) / len(values) if values else 0.0
-                metric_row[f"Dist_{distance}"] = avg_value
-            else:
-                metric_row[f"Dist_{distance}"] = 0.0
-
-        # Threshold columns
-        for threshold in ["20", "50", "100"]:
-            key = f"threshold_{threshold}"
-            if key in threshold_results and threshold_results[key]:
-                values = [m[metric.lower()] for m in threshold_results[key]]
-                if metric == "ADD":
-                    values = [v for v in values if v != float("inf")]
-                avg_value = sum(values) / len(values) if values else 0.0
-                metric_row[f"Threshold_{threshold}"] = avg_value
-            else:
-                metric_row[f"Threshold_{threshold}"] = 0.0
-
-        table_data.append(metric_row)
-
-    return pd.DataFrame(table_data)
-
-
-def format_mit_sensitivity_table_for_paper(df: pd.DataFrame) -> str:
-    """
-    Format the MIT Reality sensitivity table for LaTeX/paper presentation.
-
-    Args:
-        df: DataFrame with sensitivity analysis results
-
-    Returns:
-        Formatted string for paper presentation
-    """
-    output = []
-    output.append("MIT REALITY PARAMETER SENSITIVITY ANALYSIS")
-    output.append("=" * 80)
-    output.append("")
-
-    # Create formatted table for MIT Reality
+    # Create table rows for each metric
     metrics = ["TPR", "FPR", "ADD"]
 
     for metric in metrics:
-        metric_row = df[df["Metric"] == metric].iloc[0]
+        row = {"Network": network, "Metric": metric}
 
-        output.append(f"{metric}:")
-
-        # Power Betting
-        power_values = []
-        for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
-            col = f"Power_ε={epsilon}"
-            if col in metric_row:
-                value = metric_row[col]
-                if metric == "ADD" and value == 0.0:
-                    power_values.append("--")
-                elif metric in ["TPR", "FPR"]:
-                    power_values.append(f"{value:.3f}")
+        # Power Betting columns
+        for epsilon_key in ["ε=0.2", "ε=0.5", "ε=0.7", "ε=0.9"]:
+            if epsilon_key in power_results:
+                value = power_results[epsilon_key][metric]
+                if metric == "ADD" and np.isinf(value):
+                    row[epsilon_key] = "—"
                 else:
-                    power_values.append(f"{value:.1f}")
+                    row[epsilon_key] = (
+                        f"{value:.3f}" if metric in ["TPR", "FPR"] else f"{value:.1f}"
+                    )
             else:
-                power_values.append("--")
+                row[epsilon_key] = "—"
 
-        mixture_val = metric_row.get("Mixture", 0.0)
-        if metric == "ADD" and mixture_val == 0.0:
-            mixture_str = "--"
-        elif metric in ["TPR", "FPR"]:
-            mixture_str = f"{mixture_val:.3f}"
+        # Mixture column
+        if "Mixture" in mixture_results:
+            value = mixture_results["Mixture"][metric]
+            if metric == "ADD" and np.isinf(value):
+                row["Mixture"] = "—"
+            else:
+                row["Mixture"] = (
+                    f"{value:.3f}" if metric in ["TPR", "FPR"] else f"{value:.1f}"
+                )
         else:
-            mixture_str = f"{mixture_val:.1f}"
+            row["Mixture"] = "—"
 
-        output.append(
-            f"  Power Betting: e=0.2:{power_values[0]} | e=0.5:{power_values[1]} | e=0.7:{power_values[2]} | e=0.9:{power_values[3]} | Mixture:{mixture_str}"
-        )
-
-        # Beta Betting
-        beta_values = []
-        for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
-            col = f"Beta_{beta_combo}"
-            if col in metric_row:
-                value = metric_row[col]
-                if metric == "ADD" and value == 0.0:
-                    beta_values.append("--")
-                elif metric in ["TPR", "FPR"]:
-                    beta_values.append(f"{value:.3f}")
+        # Beta Betting columns
+        for beta_key in ["(0.2,2.5)", "(0.4,1.8)", "(0.6,1.2)"]:
+            if beta_key in beta_results:
+                value = beta_results[beta_key][metric]
+                if metric == "ADD" and np.isinf(value):
+                    row[beta_key] = "—"
                 else:
-                    beta_values.append(f"{value:.1f}")
+                    row[beta_key] = (
+                        f"{value:.3f}" if metric in ["TPR", "FPR"] else f"{value:.1f}"
+                    )
             else:
-                beta_values.append("--")
+                row[beta_key] = "—"
 
-        output.append(
-            f"  Beta Betting: (0.2,2.5):{beta_values[0]} | (0.4,1.8):{beta_values[1]} | (0.6,1.2):{beta_values[2]}"
-        )
-
-        # Distance Metrics
-        dist_values = []
-        dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
-        dist_abbrev = ["Euc", "Mah", "Cos", "Cheb"]
-
-        for dist in dist_names:
-            col = f"Dist_{dist}"
-            if col in metric_row:
-                value = metric_row[col]
-                if metric == "ADD" and value == 0.0:
-                    dist_values.append("--")
-                elif metric in ["TPR", "FPR"]:
-                    dist_values.append(f"{value:.3f}")
+        # Distance Metric columns
+        for dist_key in ["Euc.", "Mah.", "Cos.", "Cheb."]:
+            if dist_key in distance_results:
+                value = distance_results[dist_key][metric]
+                if metric == "ADD" and np.isinf(value):
+                    row[dist_key] = "—"
                 else:
-                    dist_values.append(f"{value:.1f}")
+                    row[dist_key] = (
+                        f"{value:.3f}" if metric in ["TPR", "FPR"] else f"{value:.1f}"
+                    )
             else:
-                dist_values.append("--")
+                row[dist_key] = "—"
 
-        output.append(
-            f"  Distance: {dist_abbrev[0]}:{dist_values[0]} | {dist_abbrev[1]}:{dist_values[1]} | {dist_abbrev[2]}:{dist_values[2]} | {dist_abbrev[3]}:{dist_values[3]}"
-        )
-
-        # Thresholds
-        thresh_values = []
-        for threshold in ["20", "50", "100"]:
-            col = f"Threshold_{threshold}"
-            if col in metric_row:
-                value = metric_row[col]
-                if metric == "ADD" and value == 0.0:
-                    thresh_values.append("--")
-                elif metric in ["TPR", "FPR"]:
-                    thresh_values.append(f"{value:.3f}")
+        # Threshold columns
+        for thresh_key in ["20", "50", "100"]:
+            if thresh_key in threshold_results:
+                value = threshold_results[thresh_key][metric]
+                if metric == "ADD" and np.isinf(value):
+                    row[thresh_key] = "—"
                 else:
-                    thresh_values.append(f"{value:.1f}")
+                    row[thresh_key] = (
+                        f"{value:.3f}" if metric in ["TPR", "FPR"] else f"{value:.1f}"
+                    )
             else:
-                thresh_values.append("--")
+                row[thresh_key] = "—"
 
-        output.append(
-            f"  Threshold: L=20:{thresh_values[0]} | L=50:{thresh_values[1]} | L=100:{thresh_values[2]}"
-        )
-        output.append("")
+        table_data.append(row)
 
-    return "\n".join(output)
-
-
-def create_latex_mit_sensitivity_table(df: pd.DataFrame) -> str:
-    """
-    Create LaTeX table for MIT Reality sensitivity analysis matching Table III format.
-
-    Args:
-        df: DataFrame with MIT Reality sensitivity analysis results
-
-    Returns:
-        LaTeX table string
-    """
-    latex_lines = []
-
-    # Table header
-    latex_lines.append("\\begin{table*}[t]")
-    latex_lines.append("\\centering")
-    latex_lines.append(
-        "\\caption{MIT Reality parameter sensitivity analysis showing relative effectiveness of different configurations. Values represent performance metrics for each parameter choice on real-world academic collaboration data.}"
-    )
-    latex_lines.append("\\label{tab:mit_reality_parameter_sensitivity}")
-    latex_lines.append("\\scriptsize")
-
-    # Column specification
-    latex_lines.append(
-        "\\begin{tabular}{|l|c|cccc>{\\columncolor{blue!5}}c|ccc|c>{\\columncolor{green!5}}ccc|ccc|}"
-    )
-    latex_lines.append("\\hline")
-
-    # Multi-row header
-    latex_lines.append(
-        "\\multirow{2}{*}{\\textbf{Dataset}} & \\multirow{2}{*}{\\textbf{Metric}} & \\multicolumn{5}{c|}{\\textbf{Power Betting}} & \\multicolumn{3}{c|}{\\textbf{Beta Betting $(a,b)$}} & \\multicolumn{4}{c|}{\\textbf{Distance Metric}} & \\multicolumn{3}{c|}{\\textbf{Threshold ($\\lambda$)}} \\\\"
-    )
-    latex_lines.append("\\cline{3-17}")
-    latex_lines.append(
-        " & & $\\epsilon$=0.2 & $\\epsilon$=0.5 & $\\epsilon$=0.7 & $\\epsilon$=0.9 & \\textbf{Mixture} & (0.2,2.5) & (0.4,1.8) & (0.6,1.2) & \\textbf{Euc.} & \\textbf{Mah.} & \\textbf{Cos.} & \\textbf{Cheb.} & \\textbf{20} & \\textbf{50} & \\textbf{100} \\\\"
-    )
-    latex_lines.append("\\hline")
-
-    # Process MIT Reality data
-    dataset_data = df[df["Dataset"] == "MIT Reality"]
-
-    if len(dataset_data) == 0:
-        latex_lines.append("\\multicolumn{17}{|c|}{No MIT Reality data available} \\\\")
-        latex_lines.append("\\hline")
-    else:
-        # Process each metric
-        metrics = ["TPR", "FPR", "ADD"]
-
-        for i, metric in enumerate(metrics):
-            metric_row = dataset_data[dataset_data["Metric"] == metric]
-
-            if len(metric_row) == 0:
-                continue
-
-            metric_row = metric_row.iloc[0]
-
-            # Start row with dataset name (only for first metric)
-            if i == 0:
-                row_start = f"\\multirow{{3}}{{*}}{{MIT Reality}} & {metric}"
-            else:
-                row_start = f" & {metric}"
-
-            # Power Betting columns
-            power_values = []
-            for epsilon in ["0.2", "0.5", "0.7", "0.9"]:
-                col = f"Power_ε={epsilon}"
-                if col in metric_row:
-                    value = metric_row[col]
-                    if metric == "ADD" and value == 0.0:
-                        power_values.append("--")
-                    elif metric in ["TPR", "FPR"]:
-                        power_values.append(f"{value:.3f}")
-                    else:
-                        power_values.append(f"{value:.1f}")
-                else:
-                    power_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-
-            # Mixture value
-            mixture_val = metric_row.get("Mixture", 0.0)
-            if metric == "ADD" and mixture_val == 0.0:
-                mixture_str = "--"
-            elif metric in ["TPR", "FPR"]:
-                mixture_str = f"{mixture_val:.3f}"
-            else:
-                mixture_str = f"{mixture_val:.1f}"
-
-            # Beta Betting columns
-            beta_values = []
-            for beta_combo in ["0.2_2.5", "0.4_1.8", "0.6_1.2"]:
-                col = f"Beta_{beta_combo}"
-                if col in metric_row:
-                    value = metric_row[col]
-                    if metric == "ADD" and value == 0.0:
-                        beta_values.append("--")
-                    elif metric in ["TPR", "FPR"]:
-                        beta_values.append(f"{value:.3f}")
-                    else:
-                        beta_values.append(f"{value:.1f}")
-                else:
-                    beta_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-
-            # Distance Metric columns
-            dist_values = []
-            dist_names = ["euclidean", "mahalanobis", "cosine", "chebyshev"]
-
-            for dist in dist_names:
-                col = f"Dist_{dist}"
-                if col in metric_row:
-                    value = metric_row[col]
-                    if metric == "ADD" and value == 0.0:
-                        dist_values.append("--")
-                    elif metric in ["TPR", "FPR"]:
-                        dist_values.append(f"{value:.3f}")
-                    else:
-                        dist_values.append(f"{value:.1f}")
-                else:
-                    dist_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-
-            # Threshold columns
-            thresh_values = []
-            for threshold in ["20", "50", "100"]:
-                col = f"Threshold_{threshold}"
-                if col in metric_row:
-                    value = metric_row[col]
-                    if metric == "ADD" and value == 0.0:
-                        thresh_values.append("--")
-                    elif metric in ["TPR", "FPR"]:
-                        thresh_values.append(f"{value:.3f}")
-                    else:
-                        thresh_values.append(f"{value:.1f}")
-                else:
-                    thresh_values.append("0.000" if metric in ["TPR", "FPR"] else "--")
-
-            # Construct the complete row
-            row = f"{row_start} & {power_values[0]} & {power_values[1]} & {power_values[2]} & {power_values[3]} & {mixture_str} & {beta_values[0]} & {beta_values[1]} & {beta_values[2]} & {dist_values[0]} & {dist_values[1]} & {dist_values[2]} & {dist_values[3]} & {thresh_values[0]} & {thresh_values[1]} & {thresh_values[2]} \\\\"
-
-            latex_lines.append(row)
-
-        latex_lines.append("\\hline")
-
-    # Table footer
-    latex_lines.append("\\end{tabular}")
-    latex_lines.append("\\end{table*}")
-
-    return "\n".join(latex_lines)
-
-
-def verify_mit_villes_inequality(experiment_data: Dict):
-    """
-    Verify that False Positive Rates respect Ville's inequality: FPR ≤ 1/λ
-    for MIT Reality experiments.
-
-    Args:
-        experiment_data: Dictionary with all experiment results
-    """
-    print("\n" + "=" * 80)
-    print("VERIFYING VILLE'S INEQUALITY FOR MIT REALITY: FPR ≤ 1/λ")
-    print("=" * 80)
-
-    # Define thresholds used in experiments
-    thresholds = [20.0, 50.0, 100.0]
-
-    violations = []
-    total_checks = 0
-
-    print(f"\nMIT REALITY DATASET:")
-    print("-" * 40)
-
-    # Check threshold experiments specifically
-    threshold_experiments = experiment_data.get("threshold_analysis", [])
-
-    for exp in threshold_experiments:
-        threshold = float(exp["parameters"]["threshold"])
-        metrics = exp["analysis"]["overall_metrics"]
-        fpr = metrics["fpr"]
-
-        # Ville's inequality bound
-        ville_bound = 1.0 / threshold
-
-        total_checks += 1
-
-        # Check if FPR violates the bound
-        if fpr > ville_bound:
-            violations.append(
-                {
-                    "dataset": "mit_reality",
-                    "threshold": threshold,
-                    "fpr": fpr,
-                    "ville_bound": ville_bound,
-                    "violation": fpr - ville_bound,
-                }
-            )
-            status = "❌ VIOLATION"
-        else:
-            status = "✅ SATISFIED"
-
-        print(f"  λ={threshold:3.0f}: FPR={fpr:.4f} ≤ 1/λ={ville_bound:.4f} {status}")
-
-    # Also check other experiment types with default threshold (60.0)
-    default_threshold = 60.0
-    ville_bound_default = 1.0 / default_threshold
-
-    for group_name, group_experiments in experiment_data.items():
-        if group_name == "threshold_analysis":
-            continue  # Already checked above
-
-        if group_experiments:
-            # Average FPR for this group
-            fprs = [
-                exp["analysis"]["overall_metrics"]["fpr"] for exp in group_experiments
-            ]
-            avg_fpr = sum(fprs) / len(fprs)
-
-            total_checks += 1
-
-            if avg_fpr > ville_bound_default:
-                violations.append(
-                    {
-                        "dataset": "mit_reality",
-                        "group": group_name,
-                        "threshold": default_threshold,
-                        "fpr": avg_fpr,
-                        "ville_bound": ville_bound_default,
-                        "violation": avg_fpr - ville_bound_default,
-                    }
-                )
-                status = "❌ VIOLATION"
-            else:
-                status = "✅ SATISFIED"
-
-            print(
-                f"  {group_name} (λ=60): FPR={avg_fpr:.4f} ≤ 1/λ={ville_bound_default:.4f} {status}"
-            )
-
-    # Summary
-    print("\n" + "=" * 80)
-    print("MIT REALITY VILLE'S INEQUALITY VERIFICATION SUMMARY")
-    print("=" * 80)
-
-    print(f"Total checks performed: {total_checks}")
-    print(f"Violations found: {len(violations)}")
-    print(
-        f"Compliance rate: {((total_checks - len(violations)) / total_checks * 100):.1f}%"
-    )
-
-    if violations:
-        print(f"\n❌ VIOLATIONS DETECTED:")
-        print("-" * 50)
-        for v in violations:
-            if "group" in v:
-                print(
-                    f"  MIT Reality - {v['group']}: FPR={v['fpr']:.4f} > 1/λ={v['ville_bound']:.4f} (excess: {v['violation']:.4f})"
-                )
-            else:
-                print(
-                    f"  MIT Reality - λ={v['threshold']}: FPR={v['fpr']:.4f} > 1/λ={v['ville_bound']:.4f} (excess: {v['violation']:.4f})"
-                )
-    else:
-        print(f"\n🎉 ALL CHECKS PASSED!")
-        print(
-            f"   False positive rates are well-controlled and respect Ville's inequality."
-        )
-
-    return violations
-
-
-def analyze_mit_fpr_distribution(experiment_data: Dict):
-    """
-    Analyze the distribution of FPR values across all MIT Reality experiments.
-
-    Args:
-        experiment_data: Dictionary with all experiment results
-    """
-    print("\n" + "=" * 80)
-    print("MIT REALITY FALSE POSITIVE RATE DISTRIBUTION ANALYSIS")
-    print("=" * 80)
-
-    all_fprs = []
-    fpr_by_threshold = {20.0: [], 50.0: [], 100.0: [], 60.0: []}  # 60.0 is default
-
-    for group_name, group_experiments in experiment_data.items():
-        for exp in group_experiments:
-            fpr = exp["analysis"]["overall_metrics"]["fpr"]
-            all_fprs.append(fpr)
-
-            # Categorize by threshold
-            if group_name == "threshold_analysis":
-                threshold = float(exp["parameters"]["threshold"])
-                if threshold in fpr_by_threshold:
-                    fpr_by_threshold[threshold].append(fpr)
-            else:
-                # Default threshold for other experiments
-                fpr_by_threshold[60.0].append(fpr)
-
-    print(f"Total MIT Reality experiments analyzed: {len(all_fprs)}")
-    print(f"Overall FPR statistics:")
-    print(f"  Mean: {sum(all_fprs)/len(all_fprs):.4f}")
-    print(f"  Min:  {min(all_fprs):.4f}")
-    print(f"  Max:  {max(all_fprs):.4f}")
-
-    # Count zero FPRs
-    zero_fprs = sum(1 for fpr in all_fprs if fpr == 0.0)
-    print(
-        f"  Zero FPR experiments: {zero_fprs}/{len(all_fprs)} ({zero_fprs/len(all_fprs)*100:.1f}%)"
-    )
-
-    print(f"\nFPR by threshold:")
-    for threshold, fprs in fpr_by_threshold.items():
-        if fprs:
-            ville_bound = 1.0 / threshold
-            mean_fpr = sum(fprs) / len(fprs)
-            max_fpr = max(fprs)
-            violations = sum(1 for fpr in fprs if fpr > ville_bound)
-
-            print(
-                f"  λ={threshold:3.0f}: n={len(fprs):3d}, mean={mean_fpr:.4f}, max={max_fpr:.4f}, bound={ville_bound:.4f}, violations={violations}"
-            )
-
-
-def test_mit_metrics_on_sample_experiment():
-    """
-    Test our metrics calculation on a sample MIT Reality experiment to verify correctness.
-    """
-    print("🧪 TESTING MIT REALITY METRICS CALCULATION ON SAMPLE EXPERIMENT")
-    print("=" * 80)
-
-    # Get first experiment directory
-    base_dir = "results/mit_reality_sensitivity_analysis"
-
-    if not os.path.exists(base_dir):
-        print(f"MIT Reality results directory not found: {base_dir}")
-        return
-
-    all_dirs = [
-        d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))
+    # Create DataFrame
+    columns = [
+        "Network",
+        "Metric",
+        "ε=0.2",
+        "ε=0.5",
+        "ε=0.7",
+        "ε=0.9",
+        "Mixture",
+        "(0.2,2.5)",
+        "(0.4,1.8)",
+        "(0.6,1.2)",
+        "Euc.",
+        "Mah.",
+        "Cos.",
+        "Cheb.",
+        "20",
+        "50",
+        "100",
     ]
 
-    if not all_dirs:
-        print("No MIT Reality experiment directories found!")
-        return
+    table_df = pd.DataFrame(table_data, columns=columns)
 
-    # Find an experiment with actual detections
-    for dirname in all_dirs[:10]:  # Check first 10
-        folder_path = os.path.join(base_dir, dirname)
-        results_path = os.path.join(
-            folder_path, "detection", "csv", "detection_results.xlsx"
-        )
+    return table_df
 
-        if not os.path.exists(results_path):
-            continue
 
-        try:
-            # Load detection details
-            detection_details = pd.read_excel(
-                results_path, sheet_name="Detection Details"
-            )
-            changepoint_metadata = pd.read_excel(
-                results_path, sheet_name="ChangePointMetadata"
+def save_results_summary(results_df: pd.DataFrame, output_path: str) -> None:
+    """Save results summary to Excel file."""
+    try:
+        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            # Save full results
+            results_df.to_excel(writer, sheet_name="All Results", index=False)
+
+            # Create and save parameter sensitivity table
+            param_table = create_parameter_sensitivity_table(results_df)
+            param_table.to_excel(
+                writer, sheet_name="Parameter Sensitivity Table", index=False
             )
 
-            if len(detection_details) > 0:  # Found experiment with detections
-                print(f"📁 Analyzing MIT Reality experiment: {dirname}")
-
-                changepoints = changepoint_metadata["change_point"].tolist()
-                print(f"📍 Expected changepoints: {changepoints}")
-                print(f"📊 Total detections found: {len(detection_details)}")
-
-                # Show sample of detection data
-                print(f"\n📋 Sample detection data:")
-                print(
-                    detection_details[
-                        [
-                            "Trial",
-                            "Detection Index",
-                            "Nearest True CP",
-                            "Distance to CP",
-                            "Is Within 30 Steps",
-                        ]
-                    ]
-                    .head(10)
-                    .to_string()
+            # Create summary by experiment type
+            if "experiment_type" in results_df.columns:
+                summary_by_type = (
+                    results_df.groupby("experiment_type")
+                    .agg(
+                        {
+                            "TPR": ["mean", "std", "min", "max"],
+                            "FPR": ["mean", "std", "min", "max"],
+                            "ADD": ["mean", "std", "min", "max"],
+                        }
+                    )
+                    .round(6)
                 )
+                summary_by_type.to_excel(writer, sheet_name="Summary by Type")
 
-                # Test metrics for each changepoint
-                print(f"\n🔍 DETECTION WINDOW ANALYSIS:")
-                for cp in changepoints:
-                    window_start, window_end = get_detection_window_for_changepoint(cp)
-                    print(
-                        f"   CP {cp}: detection window [{window_start}, {window_end}]"
+            # Create summary by distance measure
+            if "distance_measure" in results_df.columns:
+                summary_by_distance = (
+                    results_df.groupby("distance_measure")
+                    .agg(
+                        {
+                            "TPR": ["mean", "std", "min", "max"],
+                            "FPR": ["mean", "std", "min", "max"],
+                            "ADD": ["mean", "std", "min", "max"],
+                        }
                     )
+                    .round(6)
+                )
+                summary_by_distance.to_excel(writer, sheet_name="Summary by Distance")
 
-                # Compute global FPR
-                global_fpr = compute_global_fpr(detection_details, n_trials=10)
-                print(f"\n📊 GLOBAL FPR: {global_fpr:.3f}")
-
-                for cp in changepoints:
-                    computed_metrics = compute_metrics_for_changepoint(
-                        detection_details, cp, n_trials=10
-                    )
-
-                    print(f"\n🔍 METRICS FOR CHANGEPOINT {cp}:")
-                    print(
-                        f"   Detection window: [{computed_metrics['window_start']}, {computed_metrics['window_end']}]"
-                    )
-                    print(
-                        f"   TPR: {computed_metrics['tpr']:.3f} ({computed_metrics['true_positives']}/{computed_metrics['total_trials']} trials)"
-                    )
-                    print(f"   ADD: {computed_metrics['add']:.2f}")
-                    print(
-                        f"   TP detections in window: {computed_metrics['total_tp_detections']}"
-                    )
-                    print(f"   FN trials: {computed_metrics['false_negatives']}")
-
-                return  # Only test first experiment with detections
-
-        except Exception as e:
-            print(f"Error processing {dirname}: {e}")
-            continue
-
-    print("No MIT Reality experiments with detections found in first 10 directories")
+        print(f"✓ Results saved to: {output_path}")
+        print(
+            f"✓ Parameter sensitivity table created in 'Parameter Sensitivity Table' sheet"
+        )
+    except Exception as e:
+        print(f"Error saving results: {e}")
 
 
 def main():
-    """Main function to create MIT Reality parameter sensitivity analysis."""
-    print("Creating MIT Reality Parameter Sensitivity Analysis Table...")
-    print("=" * 80)
+    """Main function to process experiment folders."""
+    import argparse
 
-    # First, test our metrics calculation
-    print("Step 0: Verifying MIT Reality metrics calculation...")
-    test_mit_metrics_on_sample_experiment()
+    parser = argparse.ArgumentParser(
+        description="Process MIT Reality experiment folders"
+    )
+    parser.add_argument(
+        "path", help="Path to experiment folder (single) or results directory (all)"
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Process all experiments in the directory"
+    )
+    parser.add_argument(
+        "--output",
+        default="mit_reality_sensitivity_results.xlsx",
+        help="Output file for results summary (when processing all)",
+    )
+    parser.add_argument(
+        "--show-config", action="store_true", help="Show detailed config (single mode)"
+    )
+    parser.add_argument(
+        "--show-results",
+        action="store_true",
+        help="Show detailed results (single mode)",
+    )
 
-    # Collect all experiment data
-    print("\nStep 1: Collecting data from all MIT Reality experiments...")
-    experiment_data = collect_all_mit_experiment_data()
+    args = parser.parse_args()
 
-    if not experiment_data:
-        print("No MIT Reality experiment data found!")
-        return
+    if args.all:
+        # Process all experiments
+        print("Processing all MIT Reality experiments...")
+        results_df = process_all_experiments(args.path)
 
-    # Verify Ville's inequality
-    print("\nStep 2: Verifying Ville's inequality for MIT Reality (FPR ≤ 1/λ)...")
-    violations = verify_mit_villes_inequality(experiment_data)
-    analyze_mit_fpr_distribution(experiment_data)
+        if not results_df.empty:
+            # Print summary statistics
+            print("\n" + "=" * 80)
+            print("OVERALL SUMMARY STATISTICS")
+            print("=" * 80)
 
-    # Create the sensitivity table
-    print("\nStep 3: Creating MIT Reality parameter sensitivity table...")
-    sensitivity_df = create_mit_sensitivity_table(experiment_data)
+            print(f"Total experiments processed: {len(results_df)}")
 
-    # Format and display the table
-    print("\nStep 4: Formatting MIT Reality results...")
-    formatted_table = format_mit_sensitivity_table_for_paper(sensitivity_df)
-    latex_table = create_latex_mit_sensitivity_table(sensitivity_df)
+            if "experiment_type" in results_df.columns:
+                print(f"\nBy experiment type:")
+                type_counts = results_df["experiment_type"].value_counts()
+                for exp_type, count in type_counts.items():
+                    print(f"  {exp_type}: {count} experiments")
 
-    print("\n" + "=" * 80)
-    print("MIT REALITY PARAMETER SENSITIVITY ANALYSIS RESULTS")
-    print("=" * 80)
-    print(formatted_table)
+            print(f"\nOverall performance metrics:")
+            print(
+                f"  TPR: {results_df['TPR'].mean():.3f} ± {results_df['TPR'].std():.3f}"
+            )
+            print(
+                f"  FPR: {results_df['FPR'].mean():.6f} ± {results_df['FPR'].std():.6f}"
+            )
+            print(
+                f"  ADD: {results_df['ADD'].mean():.2f} ± {results_df['ADD'].std():.2f}"
+            )
 
-    # Save results to files
-    output_dir = "results/mit_reality_sensitivity_analysis"
-    os.makedirs(output_dir, exist_ok=True)
+            # Save results
+            save_results_summary(results_df, args.output)
 
-    # Save text version
-    text_file = os.path.join(output_dir, "mit_reality_parameter_sensitivity_table.txt")
-    with open(text_file, "w", encoding="utf-8") as f:
-        f.write(formatted_table)
+            # Print parameter sensitivity table
+            print("\n" + "=" * 120)
+            print("PARAMETER SENSITIVITY TABLE (TABLE III FORMAT)")
+            print("=" * 120)
+            param_table = create_parameter_sensitivity_table(results_df)
+            print(param_table.to_string(index=False))
+            print("=" * 120)
+        else:
+            print("No valid experiments found to process")
 
-    # Save LaTeX version
-    latex_file = os.path.join(output_dir, "mit_reality_parameter_sensitivity_table.tex")
-    with open(latex_file, "w", encoding="utf-8") as f:
-        f.write(latex_table)
+    else:
+        # Process single experiment (original functionality)
+        print(f"Reading experiment folder: {args.path}")
 
-    # Save CSV version for further analysis
-    csv_file = os.path.join(output_dir, "mit_reality_parameter_sensitivity_table.csv")
-    sensitivity_df.to_csv(csv_file, index=False)
+        config, change_points, detection_details, raw_results = read_experiment_folder(
+            args.path
+        )
 
-    print(f"\nMIT Reality results saved to:")
-    print(f"  Text version: {text_file}")
-    print(f"  LaTeX version: {latex_file}")
-    print(f"  CSV version: {csv_file}")
-    print("=" * 80)
+        if (
+            config is None
+            and change_points is None
+            and detection_details is None
+            and raw_results is None
+        ):
+            print("Failed to read experiment data")
+            return
+
+        # Print summaries
+        if config is not None:
+            print_config_summary(config)
+
+            if args.show_config:
+                print("\n" + "=" * 50)
+                print("FULL CONFIGURATION")
+                print("=" * 50)
+                print(yaml.dump(config, default_flow_style=False, sort_keys=True))
+
+        # Print change point metadata
+        print_change_point_summary(change_points)
+
+        # Print detection details
+        print_detection_details_summary(detection_details)
+
+        # Compute and print performance metrics
+        if change_points is not None and detection_details is not None:
+            metrics = compute_performance_metrics(change_points, detection_details)
+            print_performance_summary(metrics)
+        else:
+            print(
+                "\n⚠️  Cannot compute performance metrics - missing change points or detection details"
+            )
+
+        # Print raw results summary
+        if raw_results is not None:
+            print_raw_results_summary(raw_results)
+
+            if args.show_results:
+                print("\n" + "=" * 50)
+                print("FULL RAW RESULTS")
+                print("=" * 50)
+                print(raw_results.to_string())
+
+        print(f"\n✓ Successfully processed experiment folder")
 
 
 if __name__ == "__main__":
