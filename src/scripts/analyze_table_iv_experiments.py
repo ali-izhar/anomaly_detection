@@ -441,7 +441,7 @@ def analyze_single_experiment(
     return analysis
 
 
-def analyze_all_table_iv_experiments(
+def analyze_all_plot_using_best_params(
     results_dir: str, detection_window: int = 40
 ) -> List[Dict[str, Any]]:
     """
@@ -1050,8 +1050,8 @@ def main():
     parser.add_argument(
         "results_dir",
         nargs="?",
-        default="results/table_iv_experiments",
-        help="Path to Table IV results directory (default: results/table_iv_experiments)",
+        default="results/plot_using_best_params",
+        help="Path to Table IV results directory (default: results/plot_using_best_params)",
     )
     parser.add_argument(
         "--detailed",
@@ -1082,7 +1082,7 @@ def main():
     print(f"Detection window: {args.detection_window} steps after change point")
 
     # Analyze all experiments
-    analyses = analyze_all_table_iv_experiments(args.results_dir, args.detection_window)
+    analyses = analyze_all_plot_using_best_params(args.results_dir, args.detection_window)
 
     if not analyses:
         print("No experiments found to analyze")
