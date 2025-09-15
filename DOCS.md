@@ -6,31 +6,37 @@
 
 Dynamic networks evolve through structural changes modeled as parametric shifts in the generative process:
 
-$$\boldsymbol{\theta}_t = \begin{cases}
+```math
+\boldsymbol{\theta}_t = \begin{cases}
 \boldsymbol{\theta}_0 & \text{for } t < \tau \\
 \boldsymbol{\theta}_1 \neq \boldsymbol{\theta}_0 & \text{for } t \geq \tau
-\end{cases}$$
+\end{cases}
+```
 where $\boldsymbol{\theta}_t$ controls network generation through parameters such as connection probabilities, community structures, and growth dynamics. These parametric shifts induce distributional changes in observable graph-theoretic features, including degree distributions, clustering coefficients, and spectral characteristics, enabling detection through statistical monitoring of feature sequences.
 
 The change detection problem minimizes expected detection delay while controlling false alarms:
 
-$$\min_{\tau^*} \mathbb{E}[(\tau^* - \tau)^+ \mid \tau^* \geq \tau] \quad \text{subject to} \quad \mathbb{P}(\tau^* < \tau) \leq \alpha$$
-where $\tau^*$ is the stopping time for the detection rule, $(\tau^* - \tau)^+ = \max\{0, \tau^* - \tau\}$ represents detection delay, and $\alpha \in (0,1)$ is the acceptable false alarm probability.
+```math
+\min_{\tau^*} \mathbb{E}[(\tau^* - \tau)^+ \mid \tau^* \geq \tau] \quad \text{subject to} \quad \mathbb{P}(\tau^* < \tau) \leq \alpha
+```
+where $\tau^\*$ is the stopping time for the detection rule, $(\tau^* - \tau)^+ = \max\{0, \tau^* - \tau\}$ represents detection delay, and $\alpha \in (0,1)$ is the acceptable false alarm probability.
 
 
 ### Martingale Framework
 
 #### Traditional Martingale Construction
 
-1. **Non-conformity Score**: $S_t = \|X_t - C_t\|$ where $C_t$ is the cluster center from historical observations
-2. **Conformal P-value**: $p_t = \frac{\#\{s : S_s > S_t\} + \theta_t\#\{s : S_s = S_t\}}{t}$
+1. **Non-conformity Score**: $S_t = ||X_t - C_t||$ where $C_t$ is the cluster center from historical observations
+2. **Conformal P-value**: $p_t = \frac{\\#\\{s : S_s > S_t\\} + \theta_t\\#\\{s : S_s = S_t\\}}{t}$
 3. **Martingale Update**: $M_t = M_{t-1} \cdot g(p_t)$ where $g$ is a valid betting function
 
 ### Horizon Martingale Extension
 
 **Key Innovation**: Horizon martingales accumulate evidence from predicted future states:
 
-$$M_{t,h}^{(k)} = M_{t-1}^{(k)} \cdot g(p_{t,h}^{(k)})$$
+```math
+M_{t,h}^{(k)} = M_{t-1}^{(k)} \cdot g(p_{t,h}^{(k)})
+```
 
 where $p_{t,h}^{(k)}$ are predictive p-values computed from forecasted features $\hat{X}_{t+h}^{(k)}$.
 
@@ -42,7 +48,7 @@ where $p_{t,h}^{(k)}$ are predictive p-values computed from forecasted features 
 
 **Martingale-Shapley Equivalence**: Each feature's martingale value equals its Shapley value, providing exact attribution with $O(K)$ complexity instead of $O(2^K)$.
 
-Relative contribution: $\psi_k(t) = \frac{M^{(k)}_t}{M^A_t} \times 100\%$
+Relative contribution: $\psi_k(t) = \frac{M^{(k)}_t}{M^A_t} \times 100\\%$
 
 ## Implementation Architecture
 
