@@ -163,7 +163,6 @@ cython_debug/
 
 # csv data and pdf files
 *.csv
-*.pdf
 
 # data files
 files*/
@@ -212,3 +211,4 @@ model/
 paper/
 thesis/
 proofs/
+assets/
