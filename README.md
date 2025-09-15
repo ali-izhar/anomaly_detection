@@ -28,6 +28,28 @@ python src/run.py -c src/configs/algorithm.yaml
 python src/run.py -c src/configs/algorithm.yaml --network sbm --threshold 50
 ```
 
+## Key Results
+
+The framework demonstrates consistent early detection across network types:
+
+### MIT Reality Dataset
+![MIT Reality Detection](assets/mit_sum_martingales.png)
+*Horizon martingales (orange) achieve 22% delay reduction over traditional martingales (blue) for academic event detection, with TPR improvement from 88% to 96%.*
+
+### Synthetic Network Performance  
+
+| SBM (36% faster) | ER (81% faster) |
+|:---:|:---:|
+| ![SBM Detection](assets/sbm_sum_martingales.png) | ![ER Detection](assets/er_sum_martingales.png) |
+| **BA (46%/17% faster)** | **NWS (46% faster)** |
+| ![BA Detection](assets/ba_sum_martingales.png) | ![NWS Detection](assets/ws_sum_martingales.png) |
+
+*Horizon martingales consistently outperform traditional detection across all network types.*
+
+### Feature Attribution Analysis
+![Martingale-Shapley Equivalence](assets/martingale_shap_classifier_analysis.png)
+*Demonstration of perfect equivalence (R² = 1.0000) between SHAP values and martingale values, with spectral features contributing 53.6% to detection.*
+
 ## Citation
 
 ```bibtex
