@@ -1,177 +1,65 @@
-# src/configs/algorithm.yaml
+# Configuration for Horizon Martingale Change Detection Framework
 
-name: forecast_based_graph_cpd
-version: 1.0
-description: "Forecast-based Graph Structural Change Detection using Martingale Framework with Distribution-Aware Prediction"
-
-# Algorithm execution mode
 execution:
-  enable_prediction: false  # Whether to use prediction for enhanced detection
-  enable_visualization: true  # Whether to create visualizations
-  save_csv: true  # Whether to export results to CSV files
+  enable_prediction: true
+  save_csv: true
 
-# Trial configuration
 trials:
-  n_trials: 10  # Number of times to run the detector
-  random_seeds: [42, 142, 241, 342, 441, 542, 642, 741, 842, 1041]  # Fixed set of seeds for consistent detection
+  n_trials: 10
+  random_seeds: [42, 142, 241, 342, 441, 542, 642, 741, 842, 1041]
 
-# Detection parameters
 detection:
-  method: "martingale"  # Detection algorithm: "martingale", "cusum", or "ewma"
-  threshold: 60.0  # Threshold for detection
-  batch_size: 1000  # Batch size for multiview processing
-  reset: true  # Reset after detection
-  reset_on_traditional: true  # Whether to reset horizon martingales when traditional martingale detects a change
-  max_window: null  # Maximum window size (null for adaptive)
-  prediction_horizon: 5  # Number of steps to predict ahead
-  enable_pvalue_dampening: false  # Whether to dampen p-values based on prediction error
-  cooldown_period: 30  # Minimum timesteps between consecutive detections (increased from 10)
-  
-  # Betting function configuration (for martingale method)
+  method: "martingale"
+  threshold: 50.0
+  reset: true
+  max_window: null
+  prediction_horizon: 5
+  cooldown: 30
+
   betting_func_config:
-    name: "mixture"  # Using power betting function
-    power:  # Parameters specific to the power betting function
-      epsilon: 0.7  # Epsilon
-    exponential:
-      lambd: 1.0  # Rate parameter controlling sensitivity
+    name: "mixture"
+    power:
+      epsilon: 0.7
     mixture:
-      epsilons: [0.7, 0.8, 0.9]  # Reduced number of epsilons, focused on higher values
-    constant: {}  # No parameters needed
+      epsilons: [0.7, 0.8, 0.9]
     beta:
-      a: 0.5  # Alpha parameter of Beta distribution
-      b: 1.5  # Beta parameter of Beta distribution
-    kernel:
-      bandwidth: 0.1  # Bandwidth for Gaussian kernel
-      past_pvalues: []  # List of past p-values (updated during runtime)
+      a: 0.5
+      b: 1.5
 
-  # CUSUM configuration (updated based on literature)
   cusum:
-    drift: 0.0  # Expected drift under normal conditions
-    startup_period: 40  # Increased from 20 to establish more robust baseline
-    fixed_threshold: true  # Changed to true for more stable control limits
-    k: 0.25  # Reduced from 0.5 to decrease sensitivity to small shifts
-    h: 8.0  # Increased from 5.0 to reduce false positives (Hawkins & Wu recommend 4-8)
-    enable_adaptive: true  # Adaptive CUSUM for changing data characteristics
-    min_deviation: 1.5  # Minimum deviation required to count as anomaly
-    use_robust_scale: true  # Use robust statistics (median/MAD) for normalization
-    enforce_cooldown: true  # Enforce cooldown period after detection
+    k: 0.25
+    startup_period: 40
 
-  # EWMA configuration (updated based on literature)
   ewma:
-    lambda: 0.15  # Increased from 0.1 for smoother series (literature values: 0.1-0.3)
-    L: 4.5  # Increased from 3.0 to reduce false alarms (literature values: 3.0-4.5)
-    startup_period: 50  # Increased to establish more robust baseline
-    use_var_adjust: true  # Maintain variance adjustment for early samples
-    robust: true  # Changed to true to use median/MAD for more robust estimation
-    enforce_cooldown: true  # Enforce cooldown period after detection
-    min_deviation: 2.0  # Minimum standardized deviation to count as anomaly
+    lambda: 0.15
+    L: 4.5
+    startup_period: 50
 
-  # Distance configuration
   distance:
-    measure: "mahalanobis"  # Distance measure
-    p: 2.0  # Order for Minkowski distance
+    measure: "mahalanobis"
 
-# Feature extraction
 features:
-  - mean_degree           # Average node degree
-  - density               # Graph density
-  - mean_clustering       # Average clustering coefficient
-  - mean_betweenness      # Average betweenness centrality
-  - mean_eigenvector      # Average eigenvector centrality
-  - mean_closeness        # Average closeness centrality
-  - max_singular_value    # Largest singular value
-  - min_nonzero_laplacian # Smallest non-zero Laplacian eigenvalue
+  - mean_degree
+  - density
+  - mean_clustering
+  - mean_betweenness
+  - mean_eigenvector
+  - mean_closeness
+  - max_singular_value
+  - min_nonzero_laplacian
 
-# Model configuration
 model:
-  type: "multiview"  # or "single_view"
-  network: "er"  # choices: ["ba", "ws", "er", "sbm"]
+  type: "multiview"
+  network: "sbm"
   predictor:
-    # Graph predictor configuration
-    type: "graph"  # choices: ["adaptive", "auto", "statistical", "graph", "arima", "grnn", "hybrid"]
+    type: "feature"
     config:
-      alpha: 0.8
-      gamma: 0.5
-      omega: null
-      beta_init: 0.5
-      enforce_connectivity: true
-      adaptive: true
-      optimization_iterations: 3
-      threshold: 0.5
-      n_history: 10
+      alpha: 0.3       # Smoothing parameter for level
+      beta: 0.1        # Smoothing parameter for trend
+      n_history: 10    # Historical observations for prediction
 
-    # type: "arima"
-    # config:
-    #   order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
-    #   seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s), null to disable seasonality
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-    #   max_iter: 100  # Maximum iterations for ARIMA fitting
-    #   method: "powell"  # Optimization method - 'powell' often works well for convergence
-    #   force_posparams: true  # Force positive parameters to help with convergence
-    #   auto_order: true  # Automatically determine best ARIMA order for each feature
-    #   enable_preprocessing: true  # Apply preprocessing to time series for better convergence
-
-    # # GRNN forecaster configuration
-    # type: "grnn"
-    # config:
-    #   hidden_layer_sizes: [100, 50]  # Size of hidden layers in neural network
-    #   activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
-    #   solver: "adam"  # Solver for weight optimization
-    #   alpha: 0.0001  # L2 regularization parameter
-    #   batch_size: 32  # Size of minibatches for stochastic optimizers
-    #   learning_rate: "constant"  # Learning rate schedule for weight updates
-    #   max_iter: 200  # Maximum number of iterations
-    #   random_state: 42  # Random seed for reproducibility
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-    
-    # # Hybrid ARIMA-GRNN forecaster configuration
-    # type: "hybrid"
-    # config:
-    #   arima_order: [1, 1, 1]  # ARIMA order (p,d,q) - Using simpler model for better convergence
-    #   arima_seasonal_order: null  # Seasonal ARIMA order (P,D,Q,s)
-    #   grnn_hidden_layers: [100, 50]  # Size of hidden layers in neural network
-    #   grnn_activation: "relu"  # Activation function ('relu', 'tanh', 'logistic')
-    #   grnn_solver: "adam"  # Solver for weight optimization
-    #   grnn_alpha: 0.0001  # L2 regularization parameter
-    #   grnn_batch_size: 32  # Size of minibatches for stochastic optimizers
-    #   grnn_learning_rate: "constant"  # Learning rate schedule for weight updates
-    #   grnn_max_iter: 200  # Maximum number of iterations
-    #   random_state: 42  # Random seed for reproducibility
-    #   enforce_connectivity: true  # Ensure predicted graphs remain connected
-    #   threshold: 0.5  # Threshold for binarizing predicted adjacency matrices
-    #   n_history: 10  # Number of historical points to use
-
-    # type: "adaptive"  # choices: ["adaptive", "auto", "statistical"]
-    # config:
-    #   # AdaptiveDistributionAwarePredictor configuration
-    #   n_history: 10  # Increase from 5 to 10 for better pattern detection
-    #   adaptive: true  
-    #   enforce_connectivity: true  
-    #   binary: true  
-    #   spectral_reg: 0.25  # Reduce from 0.4 to 0.25 to be less constrained by spectral properties
-    #   community_reg: 0.3  # Reduce from 0.4 to 0.3 for more flexibility
-    #   n_communities: 3  # Increase from 2 to 3 for more nuanced community detection
-    #   temporal_window: 15  # Increase from 10 to 15 for better trend detection
-    #   min_edges_per_component: 2  # Lower threshold for connectivity constraints
-    #   degree_reg: 0.2  # Reduce degree regularization (if present) 
-    #   change_threshold: 0.15  # Lower the threshold to detect changes earlier
-    #   smoothing_window: 5  # Add/increase smoothing window if not already present
-    #   min_weight: 0.05  # Lower minimum weight for more adaptivity
-    #   distribution_reg: 0.2  # Reduce from 0.3 to 0.2 for less aggressive distribution forcing    
-
-
-
-# Output configuration
 output:
-  directory: "results"  # Output directory for results
-  prefix: ""  # Prefix for output files
-  save_predictions: true  # Save predicted graphs
-  save_features: true  # Save extracted features
-  save_martingales: true  # Save martingale values
-  visualization:
-    enabled: true  # Enable result visualization
-    skip_shap: false  # Include SHAP value analysis
+  directory: "results"
+  save_predictions: true
+  save_features: true
+  save_martingales: true
