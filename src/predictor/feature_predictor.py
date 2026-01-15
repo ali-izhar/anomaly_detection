@@ -1,5 +1,3 @@
-# src/predictor/feature_predictor.py
-
 """Feature-based predictor using Holt's linear exponential smoothing with trend.
 
 This predictor works directly in feature space rather than predicting graphs,

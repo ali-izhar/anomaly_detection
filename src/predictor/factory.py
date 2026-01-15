@@ -1,5 +1,3 @@
-# src/predictor/factory.py
-
 """Factory for creating predictors."""
 
 from typing import Dict, Any, Optional

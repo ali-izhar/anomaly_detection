@@ -1,5 +1,3 @@
-# src/configs/loader.py
-
 """Loads model configurations from YAML files."""
 
 from pathlib import Path

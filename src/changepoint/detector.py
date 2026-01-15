@@ -1,10 +1,4 @@
-# src/changepoint/detector.py
-
-"""Change point detector using parallel martingale framework.
-
-Implements Algorithm 1 from the ICDM 2025 paper where both traditional and
-horizon martingales run in parallel, sharing the same base value and resetting together.
-"""
+"""Change point detector using parallel martingale framework."""
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
@@ -76,7 +70,7 @@ class DetectorConfig:
 class ChangePointDetector:
     """Parallel martingale detector for change points in multivariate time series.
 
-    Runs both traditional and horizon martingales in parallel (Algorithm 1).
+    Runs both traditional and horizon martingales in parallel.
     Both share the same base value and reset together, ensuring horizon
     never underperforms traditional.
 

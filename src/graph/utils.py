@@ -1,5 +1,3 @@
-# src/graph/utils.py
-
 """Utility functions for graph operations."""
 
 import networkx as nx

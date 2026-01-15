@@ -1,5 +1,3 @@
-# src/algorithm.py
-
 """Core pipeline for graph structural change detection."""
 
 import logging

@@ -1,5 +1,3 @@
-# src/predictor/__init__.py
-
 """Predictor module for graph change point detection.
 
 Uses Holt's double exponential smoothing with trend for feature prediction.

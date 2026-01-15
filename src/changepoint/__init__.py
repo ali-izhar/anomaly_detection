@@ -1,9 +1,7 @@
-# src/changepoint/__init__.py
-
 """Change point detection module.
 
 Core components:
-- ChangePointDetector: Parallel martingale detector (Algorithm 1 from ICDM 2025 paper)
+- ChangePointDetector: Parallel martingale detector 
 - CUSUMDetector: CUSUM baseline
 - EWMADetector: EWMA baseline
 """

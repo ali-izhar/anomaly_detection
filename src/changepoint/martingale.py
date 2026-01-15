@@ -1,12 +1,8 @@
-# src/changepoint/martingale.py
-
 """Martingale-based change point detection.
 
-Implements Algorithm 1 (Parallel Horizon Martingale Detection) from the ICDM 2025 paper.
-
 Key equations:
-- Definition 6: M_t^{(k)} = M_{t-1}^{(k)} * g(p_t^{(k)})  (Traditional)
-- Definition 7: M_{t,h}^{(k)} = M_{t-1}^{(k)} * g(p_{t,h}^{(k)})  (Horizon)
+- M_t^{(k)} = M_{t-1}^{(k)} * g(p_t^{(k)})  (Traditional)
+- M_{t,h}^{(k)} = M_{t-1}^{(k)} * g(p_{t,h}^{(k)})  (Horizon)
 - Aggregation: M_t^A = sum_k M_t^{(k)}
 
 IMPORTANT DESIGN NOTE - Why We Track "Standalone Traditional":
@@ -96,13 +92,6 @@ def run_parallel_detection(
 ) -> Dict[str, Any]:
     """Run parallel martingale detection with both shared and standalone tracking.
 
-    Implements Algorithm 1 from the paper with an additional "standalone" Traditional
-    martingale for fair comparison. See module docstring for detailed explanation.
-
-    Tracking modes:
-        - Shared (Traditional + Horizon): Both use same base, reset together
-        - Standalone Traditional: Completely independent, for fair timing comparison
-
     Args:
         data: Feature matrix of shape (n_samples, n_features)
         predictions: Predicted features of shape (n_predictions, horizon, n_features)
@@ -122,10 +111,6 @@ def run_parallel_detection(
 
             Per-feature breakdowns:
             - individual_*_martingales: Per-feature martingale trajectories
-
-    Note:
-        For benchmarking Traditional vs Horizon detection timing, use
-        "standalone_change_points" instead of "traditional_change_points".
     """
     data = np.asarray(data)
     predictions = np.asarray(predictions)
@@ -152,18 +137,10 @@ def run_parallel_detection(
     hor_cps = []
 
     # STANDALONE Traditional - Completely independent tracking for fair comparison
-    #
-    # WHY THIS EXISTS:
-    # With shared tracking, Horizon always detects first and resets both martingales.
-    # This prevents Traditional from ever crossing the threshold, making it look like
-    # Traditional "fails" when it would have detected - just slower.
-    #
     # Standalone Traditional has:
     # - Its own observation history (standalone_windows) that NEVER resets
     # - Its own non-conformity scores (standalone_scores) that NEVER reset
     # - Its own martingale values that only reset when IT detects
-    #
-    # Use "standalone_change_points" in results for fair Traditional vs Horizon comparison.
     standalone_windows = [[] for _ in range(n_features)]
     standalone_scores = [[] for _ in range(n_features)]
     standalone_values = [1.0] * n_features
@@ -317,11 +294,8 @@ def run_parallel_detection(
             for k in range(n_features):
                 windows[k].append(data[i, k])
 
-    # Return results with clear documentation of each field
     return {
-        # === SHARED TRACKING (Algorithm 1 as written) ===
         # Traditional and Horizon share base value, reset together when either detects.
-        # NOTE: traditional_change_points will often be empty because Horizon detects first.
         "traditional_change_points": trad_cps,
         "traditional_sum_martingales": np.array(trad_sum[1:]),
         "individual_traditional_martingales": [np.array(m[1:]) for m in trad_individual],
@@ -331,9 +305,7 @@ def run_parallel_detection(
         "horizon_sum_martingales": np.array(hor_sum[1:]),
         "individual_horizon_martingales": [np.array(m[1:]) for m in hor_individual],
 
-        # === STANDALONE TRADITIONAL (for fair comparison) ===
-        # Runs completely independently - use this to compare detection timing fairly.
-        # See module docstring for why this is necessary.
+        # Standalone Traditional - completely independent tracking for fair comparison
         "standalone_change_points": standalone_cps,
         "standalone_sum_martingales": np.array(standalone_sum[1:]),
         "individual_standalone_martingales": [np.array(m[1:]) for m in standalone_individual],

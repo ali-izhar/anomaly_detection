@@ -1,5 +1,3 @@
-# src/graph/generator.py
-
 """Generates dynamic graph sequences."""
 
 from typing import Dict, List, Tuple

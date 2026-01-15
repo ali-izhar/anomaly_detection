@@ -1,10 +1,4 @@
-# src/changepoint/conformal.py
-
-"""Conformal prediction: strangeness scores and p-values.
-
-Implements Definition 2 (Non-conformity Score) and Definition 3 (Conformal P-value)
-from the ICDM 2025 paper.
-"""
+"""Conformal prediction: strangeness scores and p-values."""
 
 import random
 from typing import Optional, Literal
@@ -23,7 +17,7 @@ def compute_distance(
 ) -> float:
     """Compute distance between observation and center.
 
-    Per Definition 2: St = ||Xt - Ct|| where ||.|| is the distance metric.
+    St = ||Xt - Ct|| where ||.|| is the distance metric.
 
     Args:
         x: Observation vector (d,)
@@ -69,7 +63,7 @@ def compute_nonconformity_score(
     new_point: np.ndarray,
     metric: DistanceMetric = "mahalanobis",
 ) -> float:
-    """Compute non-conformity score for new observation (Definition 2).
+    """Compute non-conformity score for new observation.
 
     St = ||Xt - Ct|| where:
     - Ct = cluster center (mean) from historical observations {X1, ..., X_{t-1}}
@@ -115,7 +109,7 @@ def compute_pvalue(
     current_score: float,
     random_state: Optional[int] = None,
 ) -> float:
-    """Compute conformal p-value (Definition 3).
+    """Compute conformal p-value.
 
     pt = (#{s : Ss > St} + θt * #{s : Ss = St}) / t
 
@@ -142,33 +136,3 @@ def compute_pvalue(
     # Add 1 to denominator to account for the new observation
     t = len(historical_scores) + 1
     return (n_larger + theta * (n_equal + 1)) / t
-
-
-# Legacy functions for backward compatibility
-def compute_strangeness(
-    data: np.ndarray,
-    n_clusters: int = 1,
-    random_state: Optional[int] = None,
-) -> np.ndarray:
-    """Legacy function - compute strangeness for all points.
-
-    Note: This is kept for backward compatibility but the new
-    compute_nonconformity_score function should be preferred.
-    """
-    data = np.atleast_2d(data)
-    if data.ndim == 1:
-        data = data.reshape(-1, 1)
-
-    n_samples = data.shape[0]
-    if n_samples == 0:
-        return np.array([])
-
-    scores = np.zeros(n_samples)
-    for i in range(n_samples):
-        if i == 0:
-            scores[i] = 0.0
-        else:
-            history = data[:i]
-            scores[i] = compute_nonconformity_score(history, data[i], metric="euclidean")
-
-    return scores

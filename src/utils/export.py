@@ -1,5 +1,3 @@
-# src/utils/export.py
-
 """Export detection results to Excel."""
 
 import os

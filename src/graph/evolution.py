@@ -1,5 +1,3 @@
-# src/graph/evolution.py
-
 """Controls the evolution of graph parameters."""
 
 from typing import Dict, Any

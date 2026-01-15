@@ -19,8 +19,6 @@ python src/scripts/generate_data.py --all
 python src/run.py -c src/configs/algorithm.yaml --network sbm
 ```
 
-## Reproduction Steps
-
 ### 1. Setup Environment
 
 ```bash
@@ -89,7 +87,7 @@ python src/scripts/benchmark.py
 # - Overall summary with F1, precision, recall, detection delay
 ```
 
-### 5. Parameter Sensitivity (Table III)
+### 5. Parameter Sensitivity
 
 ```bash
 # Full parameter sweep
@@ -144,29 +142,6 @@ trials:
   n_trials: 10
   random_seeds: [42, 142, 241, 342, 441, 542, 642, 741, 842, 1041]
 ```
-
-## Results
-
-### Overall Performance (threshold=100)
-
-| Method | Precision | Recall | F1 | Avg Delay |
-|--------|-----------|--------|-----|-----------|
-| **Horizon** | 0.636 | 0.920 | **0.713** | **2.1 steps** |
-| Traditional | 0.567 | 0.920 | 0.673 | 8.5 steps |
-
-**Horizon improvement: +5.9% F1, 6.4 timesteps faster detection**
-
-### Per-Network Results
-
-| Network | Scenario | Traditional F1 | Horizon F1 | Trad Delay | Hor Delay |
-|---------|----------|----------------|------------|------------|-----------|
-| SBM | community_merge | 0.800 | **0.933** | 12.4 | 5.4 |
-| SBM | density_change | 0.767 | **0.833** | 10.6 | 3.4 |
-| ER | density_change | 0.500 | **0.667** | 7.0 | 1.2 |
-| BA | parameter_shift | **0.733** | 0.500 | 4.2 | 0.6 |
-| WS | rewiring_change | 0.567 | **0.633** | 7.8 | -1.0 |
-
-### Example Visualizations
 
 **Synthetic Networks - Martingale Values Over Time**
 

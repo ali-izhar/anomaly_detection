@@ -1,12 +1,4 @@
-# src/utils/evaluation.py
-
-"""Metrics calculation and report generation for change detection.
-
-Implements metrics from the ICDM 2025 paper (Equations 26-28):
-- TPR: True Positive Rate (Eq. 26)
-- FPR: False Positive Rate (Eq. 27)
-- ADD: Average Detection Delay (Eq. 28)
-"""
+"""Metrics calculation and report generation for change detection."""
 
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple

@@ -1,5 +1,3 @@
-# src/configs/params.py
-
 """Defines parameter classes for different graph models."""
 
 from dataclasses import dataclass
