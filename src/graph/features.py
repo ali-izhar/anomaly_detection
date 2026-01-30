@@ -4,13 +4,10 @@ from abc import ABC, abstractmethod
 from typing import Dict, List
 
 import logging
-import warnings
 import networkx as nx
 import numpy as np
 
 logger = logging.getLogger(__name__)
-
-warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 
 class BaseFeatureExtractor(ABC):

@@ -39,7 +39,7 @@ The shared Traditional is still tracked for completeness but will often show no 
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 import numpy as np
 
 from .betting import BettingConfig, create_betting_function
@@ -84,246 +84,242 @@ class MartingaleConfig:
     """Whether to normalize the horizon product by taking geometric mean.
     False gives faster detection; True is more conservative."""
 
+    mode: str = "both"
+    """Detection mode: 'traditional' (no predictions needed), 'horizon' (with predictions),
+    or 'both' (runs all three trackers). Default 'both' preserves existing behavior."""
+
 
 def run_parallel_detection(
     data: np.ndarray,
-    predictions: np.ndarray,
+    predictions: Optional[np.ndarray],
     config: MartingaleConfig,
 ) -> Dict[str, Any]:
-    """Run parallel martingale detection with both shared and standalone tracking.
+    """Run martingale detection with configurable mode.
 
     Args:
         data: Feature matrix of shape (n_samples, n_features)
-        predictions: Predicted features of shape (n_predictions, horizon, n_features)
-        config: Martingale configuration
+        predictions: Predicted features of shape (n_predictions, horizon, n_features).
+                     Required when mode is 'horizon' or 'both'. Ignored when mode is 'traditional'.
+        config: Martingale configuration (config.mode controls which trackers run)
 
     Returns:
-        Dict containing:
-            Shared tracking (Algorithm 1):
+        Dict containing (keys present depend on mode):
+            Shared tracking (mode='horizon' or 'both'):
             - traditional_change_points: Detections from shared Traditional (often empty)
             - horizon_change_points: Detections from shared Horizon
             - traditional_sum_martingales: Summed Traditional martingale values
             - horizon_sum_martingales: Summed Horizon martingale values
 
-            Standalone tracking (for fair comparison):
+            Standalone tracking (mode='traditional' or 'both'):
             - standalone_change_points: Detections from independent Traditional
             - standalone_sum_martingales: Summed standalone martingale values
 
             Per-feature breakdowns:
             - individual_*_martingales: Per-feature martingale trajectories
     """
+    run_horizon = config.mode in ("horizon", "both")
+    run_standalone = config.mode in ("traditional", "both")
+
     data = np.asarray(data)
-    predictions = np.asarray(predictions)
+    if predictions is not None:
+        predictions = np.asarray(predictions)
+    elif run_horizon:
+        raise ValueError("Predictions required when mode is 'horizon' or 'both'")
+
     n_samples, n_features = data.shape
-    n_horizons = predictions.shape[1] if len(predictions) > 0 else 0
+    n_horizons = predictions.shape[1] if predictions is not None and len(predictions) > 0 else 0
 
     betting_fn = create_betting_function(config.betting)
 
     # SHARED observation history (for Traditional and Horizon, resets together)
-    windows = [[] for _ in range(n_features)]
-    scores = [[] for _ in range(n_features)]
-
-    # SHARED base values (both martingales use the same base, reset together)
-    shared_values = [1.0] * n_features
-
-    # Traditional martingale tracking
-    trad_individual = [[1.0] for _ in range(n_features)]
-    trad_sum = [float(n_features)]
-    trad_cps = []
-
-    # Horizon martingale tracking
-    hor_individual = [[1.0] for _ in range(n_features)]
-    hor_sum = [float(n_features)]
-    hor_cps = []
+    if run_horizon:
+        windows = [[] for _ in range(n_features)]
+        scores = [[] for _ in range(n_features)]
+        shared_values = [1.0] * n_features
+        trad_individual = [[1.0] for _ in range(n_features)]
+        trad_sum = [float(n_features)]
+        trad_cps = []
+        hor_individual = [[1.0] for _ in range(n_features)]
+        hor_sum = [float(n_features)]
+        hor_cps = []
+        last_detection = -config.cooldown - 1
 
     # STANDALONE Traditional - Completely independent tracking for fair comparison
-    # Standalone Traditional has:
-    # - Its own observation history (standalone_windows) that NEVER resets
-    # - Its own non-conformity scores (standalone_scores) that NEVER reset
-    # - Its own martingale values that only reset when IT detects
-    standalone_windows = [[] for _ in range(n_features)]
-    standalone_scores = [[] for _ in range(n_features)]
-    standalone_values = [1.0] * n_features
-    standalone_individual = [[1.0] for _ in range(n_features)]
-    standalone_sum = [float(n_features)]
-    standalone_cps = []
-    standalone_last_detection = -config.cooldown - 1
-
-    # Shared cooldown for main detection
-    last_detection = -config.cooldown - 1
+    if run_standalone:
+        standalone_windows = [[] for _ in range(n_features)]
+        standalone_scores = [[] for _ in range(n_features)]
+        standalone_values = [1.0] * n_features
+        standalone_individual = [[1.0] for _ in range(n_features)]
+        standalone_sum = [float(n_features)]
+        standalone_cps = []
+        standalone_last_detection = -config.cooldown - 1
 
     for i in range(n_samples):
         trad_feature_vals = []
         hor_feature_vals = []
         standalone_feature_vals = []
 
-        # Maintain sliding window if configured
-        for k in range(n_features):
-            if config.window_size and len(windows[k]) >= config.window_size:
-                windows[k] = windows[k][-config.window_size:]
-                scores[k] = scores[k][-config.window_size:]
+        # Maintain sliding window if configured (shared trackers)
+        if run_horizon:
+            for k in range(n_features):
+                if config.window_size and len(windows[k]) >= config.window_size:
+                    windows[k] = windows[k][-config.window_size:]
+                    scores[k] = scores[k][-config.window_size:]
 
         for k in range(n_features):
-            # ============ COMPUTE P-VALUE (shared) ============
-            if len(windows[k]) < 2:
-                pv = 0.5
-                current_score = 0.0
-            else:
-                history = np.array(windows[k]).reshape(-1, 1)
-                current_score = compute_nonconformity_score(
-                    history, np.array([data[i, k]]), config.distance_metric
-                )
-                pv = compute_pvalue(np.array(scores[k]), current_score, config.random_state)
-
-            # ============ TRADITIONAL (shared base with Horizon) ============
-            trad_val = betting_fn(shared_values[k], pv)
-            trad_feature_vals.append(trad_val)
-            trad_individual[k].append(trad_val)
-
-            # ============ HORIZON (shared base * multiplier) ============
-            pred_idx = i - config.history_size
-            if pred_idx >= 0 and pred_idx < len(predictions) and len(windows[k]) >= 2:
-                history = np.array(windows[k]).reshape(-1, 1)
-
-                log_product = 0.0
-                total_weight = 0.0
-
-                for h in range(n_horizons):
-                    if h >= predictions.shape[1]:
-                        continue
-
-                    pred_value = predictions[pred_idx, h, k]
-                    pred_score = compute_nonconformity_score(
-                        history, np.array([pred_value]), config.distance_metric
-                    )
-                    pred_pv = compute_pvalue(np.array(scores[k]), pred_score, config.random_state)
-                    betting_multiplier = betting_fn(1.0, pred_pv)
-
-                    weight = config.horizon_decay ** h
-                    log_product += weight * np.log(max(betting_multiplier, 1e-10))
-                    total_weight += weight
-
-                if total_weight > 0:
-                    if config.normalize_horizons:
-                        horizon_multiplier = np.exp(log_product / total_weight)
-                    else:
-                        horizon_multiplier = np.exp(log_product)
+            if run_horizon:
+                # ============ COMPUTE P-VALUE (shared) ============
+                if len(windows[k]) < 2:
+                    pv = 0.5
+                    current_score = 0.0
                 else:
-                    horizon_multiplier = 1.0
+                    history = np.array(windows[k]).reshape(-1, 1)
+                    current_score = compute_nonconformity_score(
+                        history, np.array([data[i, k]]), config.distance_metric
+                    )
+                    pv = compute_pvalue(np.array(scores[k]), current_score, config.random_state)
 
-                hor_val = trad_val * horizon_multiplier
-            else:
-                hor_val = trad_val
+                # ============ TRADITIONAL (shared base with Horizon) ============
+                trad_val = betting_fn(shared_values[k], pv)
+                trad_feature_vals.append(trad_val)
+                trad_individual[k].append(trad_val)
 
-            hor_feature_vals.append(hor_val)
-            hor_individual[k].append(hor_val)
+                # ============ HORIZON (shared base * multiplier) ============
+                pred_idx = i - config.history_size
+                if pred_idx >= 0 and pred_idx < len(predictions) and len(windows[k]) >= 2:
+                    history = np.array(windows[k]).reshape(-1, 1)
 
-            # ============ STANDALONE TRADITIONAL (fully independent) ============
-            # Uses its own observation history that NEVER resets
-            if len(standalone_windows[k]) < 2:
-                standalone_pv = 0.5
-                standalone_score = 0.0
-            else:
-                standalone_history = np.array(standalone_windows[k]).reshape(-1, 1)
-                standalone_score = compute_nonconformity_score(
-                    standalone_history, np.array([data[i, k]]), config.distance_metric
-                )
-                standalone_pv = compute_pvalue(
-                    np.array(standalone_scores[k]), standalone_score, config.random_state
-                )
+                    log_product = 0.0
+                    total_weight = 0.0
 
-            standalone_val = betting_fn(standalone_values[k], standalone_pv)
-            standalone_feature_vals.append(standalone_val)
-            standalone_individual[k].append(standalone_val)
+                    for h in range(n_horizons):
+                        if h >= predictions.shape[1]:
+                            continue
 
-            # Store score for standalone (never resets)
-            if len(standalone_windows[k]) >= 2:
-                standalone_scores[k].append(standalone_score)
+                        pred_value = predictions[pred_idx, h, k]
+                        pred_score = compute_nonconformity_score(
+                            history, np.array([pred_value]), config.distance_metric
+                        )
+                        pred_pv = compute_pvalue(np.array(scores[k]), pred_score, config.random_state)
+                        betting_multiplier = betting_fn(1.0, pred_pv)
 
-            # Store score for next iteration
-            if len(windows[k]) >= 2:
-                scores[k].append(current_score)
+                        weight = config.horizon_decay ** h
+                        log_product += weight * np.log(max(betting_multiplier, 1e-10))
+                        total_weight += weight
 
-        # Aggregate
-        trad_total = sum(trad_feature_vals)
-        hor_total = sum(hor_feature_vals)
-        standalone_total = sum(standalone_feature_vals)
-        trad_sum.append(trad_total)
-        hor_sum.append(hor_total)
-        standalone_sum.append(standalone_total)
+                    if total_weight > 0:
+                        if config.normalize_horizons:
+                            horizon_multiplier = np.exp(log_product / total_weight)
+                        else:
+                            horizon_multiplier = np.exp(log_product)
+                    else:
+                        horizon_multiplier = 1.0
 
-        # ============ DETECTION (shared for Trad/Horizon, independent for Standalone) ============
+                    hor_val = trad_val * horizon_multiplier
+                else:
+                    hor_val = trad_val
+
+                hor_feature_vals.append(hor_val)
+                hor_individual[k].append(hor_val)
+
+                # Store score for next iteration (shared)
+                if len(windows[k]) >= 2:
+                    scores[k].append(current_score)
+
+            if run_standalone:
+                # ============ STANDALONE TRADITIONAL (fully independent) ============
+                # Uses its own observation history that NEVER resets
+                if len(standalone_windows[k]) < 2:
+                    standalone_pv = 0.5
+                    standalone_score = 0.0
+                else:
+                    standalone_history = np.array(standalone_windows[k]).reshape(-1, 1)
+                    standalone_score = compute_nonconformity_score(
+                        standalone_history, np.array([data[i, k]]), config.distance_metric
+                    )
+                    standalone_pv = compute_pvalue(
+                        np.array(standalone_scores[k]), standalone_score, config.random_state
+                    )
+
+                standalone_val = betting_fn(standalone_values[k], standalone_pv)
+                standalone_feature_vals.append(standalone_val)
+                standalone_individual[k].append(standalone_val)
+
+                # Store score for standalone (never resets)
+                if len(standalone_windows[k]) >= 2:
+                    standalone_scores[k].append(standalone_score)
+
+        # Aggregate and detect
+        if run_horizon:
+            trad_total = sum(trad_feature_vals)
+            hor_total = sum(hor_feature_vals)
+            trad_sum.append(trad_total)
+            hor_sum.append(hor_total)
+
+        if run_standalone:
+            standalone_total = sum(standalone_feature_vals)
+            standalone_sum.append(standalone_total)
+
+        # ============ DETECTION (shared for Trad/Horizon) ============
         detected = False
-        if i - last_detection >= config.cooldown:
-            # Traditional detection (from shared tracking)
-            if trad_total > config.threshold:
-                trad_cps.append(i)
-                detected = True
-            # Horizon detection (from shared tracking)
-            if hor_total > config.threshold:
-                hor_cps.append(i)
-                detected = True
+        if run_horizon:
+            if i - last_detection >= config.cooldown:
+                if trad_total > config.threshold:
+                    trad_cps.append(i)
+                    detected = True
+                if hor_total > config.threshold:
+                    hor_cps.append(i)
+                    detected = True
 
         # Standalone Traditional detection (fully independent)
-        if i - standalone_last_detection >= config.cooldown:
-            if standalone_total > config.threshold:
-                standalone_cps.append(i)
-                standalone_last_detection = i
-                if config.reset:
-                    standalone_values = [1.0] * n_features
+        if run_standalone:
+            if i - standalone_last_detection >= config.cooldown:
+                if standalone_total > config.threshold:
+                    standalone_cps.append(i)
+                    standalone_last_detection = i
+                    if config.reset:
+                        standalone_values = [1.0] * n_features
+                    else:
+                        standalone_values = standalone_feature_vals.copy()
                 else:
                     standalone_values = standalone_feature_vals.copy()
             else:
                 standalone_values = standalone_feature_vals.copy()
-        else:
-            standalone_values = standalone_feature_vals.copy()
 
-        # Always update standalone observation history (NEVER resets)
-        for k in range(n_features):
-            standalone_windows[k].append(data[i, k])
+            # Always update standalone observation history (NEVER resets)
+            for k in range(n_features):
+                standalone_windows[k].append(data[i, k])
 
         # ============ SHARED RESET (Trad and Horizon reset together) ============
-        if detected:
-            last_detection = i
-            if config.reset:
-                windows = [[] for _ in range(n_features)]
-                scores = [[] for _ in range(n_features)]
-                shared_values = [1.0] * n_features
-        else:
-            shared_values = trad_feature_vals.copy()
-            for k in range(n_features):
-                windows[k].append(data[i, k])
+        if run_horizon:
+            if detected:
+                last_detection = i
+                if config.reset:
+                    windows = [[] for _ in range(n_features)]
+                    scores = [[] for _ in range(n_features)]
+                    shared_values = [1.0] * n_features
+            else:
+                shared_values = trad_feature_vals.copy()
+                for k in range(n_features):
+                    windows[k].append(data[i, k])
 
-    return {
-        # Traditional and Horizon share base value, reset together when either detects.
-        "traditional_change_points": trad_cps,
-        "traditional_sum_martingales": np.array(trad_sum[1:]),
-        "individual_traditional_martingales": [np.array(m[1:]) for m in trad_individual],
+    result = {}
 
-        # Horizon = Traditional * prediction_multiplier (always >= Traditional)
-        "horizon_change_points": hor_cps,
-        "horizon_sum_martingales": np.array(hor_sum[1:]),
-        "individual_horizon_martingales": [np.array(m[1:]) for m in hor_individual],
+    if run_horizon:
+        result.update({
+            "traditional_change_points": trad_cps,
+            "traditional_sum_martingales": np.array(trad_sum[1:]),
+            "individual_traditional_martingales": [np.array(m[1:]) for m in trad_individual],
+            "horizon_change_points": hor_cps,
+            "horizon_sum_martingales": np.array(hor_sum[1:]),
+            "individual_horizon_martingales": [np.array(m[1:]) for m in hor_individual],
+        })
 
-        # Standalone Traditional - completely independent tracking for fair comparison
-        "standalone_change_points": standalone_cps,
-        "standalone_sum_martingales": np.array(standalone_sum[1:]),
-        "individual_standalone_martingales": [np.array(m[1:]) for m in standalone_individual],
-    }
+    if run_standalone:
+        result.update({
+            "standalone_change_points": standalone_cps,
+            "standalone_sum_martingales": np.array(standalone_sum[1:]),
+            "individual_standalone_martingales": [np.array(m[1:]) for m in standalone_individual],
+        })
 
-
-def _compute_horizon_weights(n_horizons: int, decay: float = 0.8) -> List[float]:
-    """Compute exponentially decaying weights for combining horizon martingales.
-
-    Args:
-        n_horizons: Number of prediction horizons
-        decay: Exponential decay rate (higher = faster decay)
-
-    Returns:
-        Normalized weights summing to 1.0
-    """
-    if n_horizons == 0:
-        return []
-    weights = [np.exp(-decay * h) for h in range(n_horizons)]
-    total = sum(weights)
-    return [w / total for w in weights]
+    return result

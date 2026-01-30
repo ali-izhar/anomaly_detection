@@ -49,7 +49,6 @@ class FeaturePredictor:
         self.alpha = alpha
         self.beta = beta
         self.n_history = n_history
-        self.history_size = n_history  # Compatibility
         self.adaptive = adaptive
         self.min_alpha = min_alpha
         self.max_alpha = max_alpha
@@ -213,7 +212,6 @@ class GraphFeaturePredictor:
             'mean_degree', 'density', 'mean_clustering', 'mean_betweenness'
         ]
         self.n_history = n_history
-        self.history_size = n_history
         self._extractor = None
         self._fitted = False
 
@@ -315,59 +313,3 @@ class GraphFeaturePredictor:
         """Reset predictor state."""
         self.feature_predictor.reset()
         self._fitted = False
-
-
-def create_feature_predictions(
-    graphs: List[np.ndarray],
-    feature_names: List[str],
-    n_history: int = 10,
-    prediction_horizon: int = 5,
-    alpha: float = 0.3,
-    beta: float = 0.1,
-) -> np.ndarray:
-    """Generate feature predictions for a sequence of graphs.
-
-    This is a convenience function that generates predictions in the format
-    expected by the martingale detector.
-
-    Args:
-        graphs: List of adjacency matrices
-        feature_names: List of feature names to predict
-        n_history: History size for prediction
-        prediction_horizon: Number of horizons to predict
-        alpha: Smoothing parameter for level
-        beta: Smoothing parameter for trend
-
-    Returns:
-        Array of shape (n_predictions, horizon, n_features) with predictions
-    """
-    from src.graph import NetworkFeatureExtractor
-    from src.graph.utils import adjacency_to_graph
-
-    extractor = NetworkFeatureExtractor()
-
-    # Extract all features first
-    all_features = []
-    for adj in graphs:
-        graph = adjacency_to_graph(adj)
-        numeric = extractor.get_numeric_features(graph)
-        all_features.append([numeric[name] for name in feature_names])
-    all_features = np.array(all_features)
-
-    # Generate predictions for each timestep
-    predictor = FeaturePredictor(alpha=alpha, beta=beta, n_history=n_history, adaptive=True)
-    predictions = []
-
-    for t in range(n_history, len(graphs)):
-        # Fit on history up to t
-        history = all_features[t-n_history:t]
-        predictor.fit(history)
-
-        # Predict next horizon steps
-        pred = predictor.predict(prediction_horizon)
-        predictions.append(pred)
-
-        # Update with actual observation for next iteration
-        predictor.update(all_features[t])
-
-    return np.array(predictions)

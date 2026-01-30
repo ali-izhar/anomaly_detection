@@ -115,39 +115,6 @@ def find_detection_delay(
     return None, None
 
 
-def compute_detection_rate(
-    cps: List[int], detections: List[int], max_delay: int = DEFAULT_MAX_DELAY
-) -> float:
-    """Compute TPR: fraction of change points detected within delay window."""
-    if not cps:
-        return 0.0
-    detected = sum(1 for cp in cps if find_detection_delay(cp, detections, max_delay)[0] is not None)
-    return detected / len(cps)
-
-
-def compute_average_delay(
-    cps: List[int], detections: List[int], max_delay: int = DEFAULT_MAX_DELAY
-) -> Optional[float]:
-    """Compute ADD: average detection delay for detected change points."""
-    delays = [
-        delay for cp in cps
-        for delay in [find_detection_delay(cp, detections, max_delay)[0]]
-        if delay is not None
-    ]
-    return np.mean(delays) if delays else None
-
-
-def compute_fpr(
-    detections: List[int],
-    true_cps: List[int],
-    total_steps: int = DEFAULT_SEQ_LENGTH,
-    max_delay: int = DEFAULT_MAX_DELAY,
-) -> float:
-    """Compute FPR per Equation 27."""
-    metrics = calculate_metrics(detections, true_cps, total_steps, max_delay)
-    return metrics["fpr"]
-
-
 def analyze_results(
     results: Dict[str, Any],
     fmt: str = "rounded_grid",

@@ -15,25 +15,7 @@ logger = logging.getLogger(__name__)
 class GraphGenerator:
     """Generator for dynamic graph sequences."""
 
-    # Generator functions
-    _GENERATORS = {
-        "ba": lambda n, m, **kwargs: nx.barabasi_albert_graph(
-            n=n, m=m, seed=kwargs.get("seed")
-        ),
-        "ws": lambda n, k_nearest, rewire_prob, **kwargs: nx.watts_strogatz_graph(
-            n=n, k=k_nearest, p=rewire_prob, seed=kwargs.get("seed")
-        ),
-        "er": lambda n, prob, **kwargs: nx.erdos_renyi_graph(
-            n=n, p=prob, seed=kwargs.get("seed")
-        ),
-        "sbm": lambda n, num_blocks, intra_prob, inter_prob, **kwargs: nx.stochastic_block_model(
-            sizes=[n // num_blocks] * (num_blocks - 1)
-            + [n - (n // num_blocks) * (num_blocks - 1)],
-            p=np.full((num_blocks, num_blocks), inter_prob)
-            + np.diag([intra_prob - inter_prob] * num_blocks),
-            seed=kwargs.get("seed"),
-        ),
-    }
+    _SUPPORTED_MODELS = {"ba", "ws", "er", "sbm"}
 
     # Model name aliases
     MODEL_ALIASES = {
@@ -42,9 +24,6 @@ class GraphGenerator:
         "erdos_renyi": "er",
         "stochastic_block_model": "sbm",
     }
-
-    # Parameters to exclude from model generation
-    _EXCLUDED_PARAMS = {"seq_len", "min_segment", "min_changes", "max_changes", "seed"}
 
     def __init__(self, model: str):
         """Initialize generator for a specific model.
@@ -55,64 +34,13 @@ class GraphGenerator:
         # Resolve alias if full name used
         model = self.MODEL_ALIASES.get(model, model)
 
-        if model not in self._GENERATORS:
+        if model not in self._SUPPORTED_MODELS:
             raise ValueError(f"Unknown model: {model}")
 
         self.model = model
         self.generator = None  # Will be set when seed is known
         self.rng = None  # Will be set in generate_sequence
         logger.info(f"Initialized generator for {model} model")
-
-    @property
-    def is_initialized(self) -> bool:
-        """Check if generator is properly initialized with random state."""
-        return self.rng is not None and self.generator is not None
-
-    def _setup_generator(self, seed: int = None) -> None:
-        """Set up the generator with proper random state.
-
-        Args:
-            seed: Random seed to use
-        """
-        if seed is not None:
-            self.rng = np.random.RandomState(seed)
-        else:
-            seed = np.random.randint(2**31 - 1)
-            self.rng = np.random.RandomState(seed)
-
-        # Set up generator with fixed random state
-        self.generator = self._GENERATORS[self.model]
-
-    def _validate_parameters(self, params: Dict) -> Dict:
-        """Validate and adjust model parameters.
-
-        Args:
-            params: Model parameters
-        Returns:
-            Validated and adjusted parameters
-        """
-        current = params.copy()
-        n = current.get("n", 0)
-        if n < 1:
-            raise ValueError(f"Number of nodes must be positive, got {n}")
-
-        # Model-specific validations and adjustments
-        if self.model == "ba":
-            m = current.get("m", 0)
-            if m >= n:
-                current["m"] = max(1, n - 1)
-            elif m < 1:
-                raise ValueError(f"BA model requires m >= 1, got m={m}")
-        elif self.model == "ws":
-            k = current.get("k_nearest", 0)
-            if k >= n:
-                current["k_nearest"] = n - 1 if n > 1 else 1
-        elif self.model == "sbm":
-            num_blocks = current.get("num_blocks", 1)
-            if num_blocks > n:
-                current["num_blocks"] = n
-
-        return current
 
     def generate_sequence(self, params: Dict) -> Dict:
         """Generate graph sequence with optional change points.

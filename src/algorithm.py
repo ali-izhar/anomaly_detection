@@ -62,6 +62,7 @@ class GraphChangeDetection:
             betting_cfg = det.get("betting_func_config", {})
             betting_name = betting_cfg.get("name", "mixture")
             distance_metric = det.get("distance", {}).get("measure", "euclidean")
+            mode = det.get("mode", "both")
 
             return ChangePointDetector(DetectorConfig(
                 threshold=det.get("threshold", 30.0),
@@ -73,6 +74,7 @@ class GraphChangeDetection:
                 betting_params=betting_cfg.get(betting_name, {"epsilons": [0.7, 0.8, 0.9]}),
                 random_state=seed,
                 distance_metric=distance_metric,
+                mode=mode,
             ))
 
         elif method == "cusum":
@@ -180,10 +182,12 @@ class GraphChangeDetection:
             Dict with detection results including true and detected change points.
         """
         method = self.config["detection"].get("method", "martingale")
+        mode = self.config["detection"].get("mode", "both")
 
-        # For martingale, predictions are required
+        # Predictions needed for martingale horizon/both modes, not for traditional-only
         if method == "martingale":
-            enable_pred = True if prediction is None else prediction
+            needs_predictions = mode in ("horizon", "both")
+            enable_pred = needs_predictions if prediction is None else prediction
         else:
             enable_pred = prediction if prediction is not None else self.config["execution"].get("enable_prediction", False)
 

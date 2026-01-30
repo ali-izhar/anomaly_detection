@@ -10,6 +10,7 @@ trials:
 
 detection:
   method: "martingale"
+  mode: "both"  # "traditional" (no predictions), "horizon" (with predictions), or "both"
   threshold: 50.0
   reset: true
   max_window: null

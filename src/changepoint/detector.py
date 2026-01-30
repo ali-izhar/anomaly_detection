@@ -51,6 +51,10 @@ class DetectorConfig:
     normalize_horizons: bool = False
     """Whether to normalize the horizon product. False gives faster detection."""
 
+    mode: str = "both"
+    """Detection mode: 'traditional' (no predictions needed), 'horizon' (with predictions),
+    or 'both' (runs all three trackers). Default 'both' preserves existing behavior."""
+
     def to_martingale_config(self) -> MartingaleConfig:
         """Convert to martingale configuration."""
         return MartingaleConfig(
@@ -64,21 +68,29 @@ class DetectorConfig:
             distance_metric=self.distance_metric,
             horizon_decay=self.horizon_decay,
             normalize_horizons=self.normalize_horizons,
+            mode=self.mode,
         )
 
 
 class ChangePointDetector:
-    """Parallel martingale detector for change points in multivariate time series.
+    """Martingale detector for change points in multivariate time series.
 
-    Runs both traditional and horizon martingales in parallel.
-    Both share the same base value and reset together, ensuring horizon
-    never underperforms traditional.
+    Supports three modes via DetectorConfig.mode:
+    - 'traditional': Runs only the standalone traditional martingale (no predictions needed)
+    - 'horizon': Runs shared traditional + horizon martingales (predictions required)
+    - 'both': Runs all three trackers (predictions required, default)
 
     Example:
-        >>> config = DetectorConfig(threshold=30.0)
+        >>> # Traditional only (no predictions)
+        >>> config = DetectorConfig(threshold=30.0, mode='traditional')
+        >>> detector = ChangePointDetector(config)
+        >>> result = detector.run(features)
+        >>> print(result['standalone_change_points'])
+
+        >>> # Horizon (with predictions)
+        >>> config = DetectorConfig(threshold=30.0, mode='horizon')
         >>> detector = ChangePointDetector(config)
         >>> result = detector.run(features, predictions)
-        >>> print(result['traditional_change_points'])
         >>> print(result['horizon_change_points'])
     """
 
@@ -93,42 +105,45 @@ class ChangePointDetector:
 
     @property
     def change_points(self) -> list:
-        """List of detected change point indices (from horizon martingale)."""
+        """List of detected change point indices."""
         return self._change_points.copy()
 
     def run(
         self,
         data: np.ndarray,
-        predicted_data: np.ndarray,
+        predicted_data: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
-        """Run parallel change point detection.
+        """Run change point detection.
 
         Args:
             data: Feature matrix of shape (n_samples, n_features)
-            predicted_data: Predictions of shape (n_predictions, horizon, n_features)
+            predicted_data: Predictions of shape (n_predictions, horizon, n_features).
+                           Required when mode is 'horizon' or 'both'. Ignored for 'traditional'.
 
         Returns:
-            Dict with detection results including:
-                - traditional_change_points: Detections from traditional martingale
-                - horizon_change_points: Detections from horizon martingale
-                - traditional_sum_martingales: Summed traditional martingale values
-                - horizon_sum_martingales: Summed horizon martingale values
+            Dict with detection results (keys depend on mode):
+                mode='traditional': standalone_change_points, standalone_sum_martingales
+                mode='horizon': traditional_change_points, horizon_change_points, etc.
+                mode='both': All of the above
 
         Raises:
-            ValueError: If data dimensions are invalid
+            ValueError: If data dimensions are invalid or predictions missing when required
         """
         data = np.asarray(data)
-        predictions = np.asarray(predicted_data)
+        predictions = np.asarray(predicted_data) if predicted_data is not None else None
         self._validate_input(data, predictions)
 
         mart_config = self.config.to_martingale_config()
         result = run_parallel_detection(data, predictions, mart_config)
 
-        # Store horizon change points as the primary result
-        self._change_points = result["horizon_change_points"]
+        # Store primary change points based on mode
+        if self.config.mode in ("horizon", "both"):
+            self._change_points = result["horizon_change_points"]
+        else:
+            self._change_points = result["standalone_change_points"]
         return result
 
-    def _validate_input(self, data: np.ndarray, predictions: np.ndarray):
+    def _validate_input(self, data: np.ndarray, predictions: Optional[np.ndarray]):
         """Validate input data dimensions."""
         if data.size == 0:
             raise ValueError("Empty input data")
@@ -136,16 +151,19 @@ class ChangePointDetector:
         if data.ndim != 2:
             raise ValueError(f"Data must be 2D (n_samples, n_features), got shape {data.shape}")
 
-        if predictions.size == 0:
-            raise ValueError("Predictions required for parallel detection")
+        needs_predictions = self.config.mode in ("horizon", "both")
 
-        if predictions.ndim != 3:
-            raise ValueError(
-                f"Predictions must be 3D (n_predictions, horizon, n_features), got shape {predictions.shape}"
-            )
+        if needs_predictions:
+            if predictions is None or predictions.size == 0:
+                raise ValueError(f"Predictions required when mode is '{self.config.mode}'")
 
-        if predictions.shape[-1] != data.shape[1]:
-            raise ValueError(
-                f"Feature dimension mismatch: data has {data.shape[1]} features, "
-                f"predictions have {predictions.shape[-1]}"
-            )
+            if predictions.ndim != 3:
+                raise ValueError(
+                    f"Predictions must be 3D (n_predictions, horizon, n_features), got shape {predictions.shape}"
+                )
+
+            if predictions.shape[-1] != data.shape[1]:
+                raise ValueError(
+                    f"Feature dimension mismatch: data has {data.shape[1]} features, "
+                    f"predictions have {predictions.shape[-1]}"
+                )
