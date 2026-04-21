@@ -12,10 +12,15 @@ The paper's Algorithm 1 specifies that Traditional and Horizon martingales share
 the same base value M_{t-1} and reset together when EITHER crosses the threshold.
 This is the "shared" tracking mode.
 
-Problem: With shared tracking, Horizon always detects first (since Horizon >= Traditional
-by construction). When Horizon detects and triggers a reset, Traditional never gets
-a chance to accumulate enough evidence to cross the threshold. This makes it appear
-that Traditional "fails" when in reality it would have detected - just slower.
+Per Definition 7 (Eq. 11), the horizon martingale uses M_{t-1} as its base (the
+traditional value from the PREVIOUS timestep), NOT M_t. Both traditional and horizon
+are parallel paths from the same base: traditional applies g(p_t) from the actual
+observation, horizon applies g(p_{t,h}) from the predicted observation.
+
+Problem: With shared tracking, Horizon often detects first. When Horizon detects and
+triggers a reset, Traditional never gets a chance to accumulate enough evidence to
+cross the threshold. This makes it appear that Traditional "fails" when in reality
+it would have detected - just slower.
 
 Example:
   - Change at t=100, threshold=100
@@ -215,9 +220,9 @@ def run_parallel_detection(
                     else:
                         horizon_multiplier = 1.0
 
-                    hor_val = trad_val * horizon_multiplier
+                    hor_val = shared_values[k] * horizon_multiplier
                 else:
-                    hor_val = trad_val
+                    hor_val = shared_values[k]
 
                 hor_feature_vals.append(hor_val)
                 hor_individual[k].append(hor_val)
@@ -291,17 +296,23 @@ def run_parallel_detection(
                 standalone_windows[k].append(data[i, k])
 
         # ============ SHARED RESET (Trad and Horizon reset together) ============
+        # Per Algorithm 1 lines 20-21: reset martingale values to 1.
+        # On detection, trim observation history to the last `cooldown`
+        # observations so the cluster center C_t adapts to the post-change
+        # regime, preventing re-detection of the same structural change.
         if run_horizon:
+            for k in range(n_features):
+                windows[k].append(data[i, k])
             if detected:
                 last_detection = i
                 if config.reset:
-                    windows = [[] for _ in range(n_features)]
-                    scores = [[] for _ in range(n_features)]
                     shared_values = [1.0] * n_features
+                    keep = config.cooldown
+                    for k in range(n_features):
+                        windows[k] = windows[k][-keep:]
+                        scores[k] = scores[k][-keep:]
             else:
                 shared_values = trad_feature_vals.copy()
-                for k in range(n_features):
-                    windows[k].append(data[i, k])
 
     result = {}
 

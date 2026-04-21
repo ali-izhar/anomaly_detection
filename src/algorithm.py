@@ -10,7 +10,7 @@ from src.changepoint import ChangePointDetector, DetectorConfig, CUSUMDetector, 
 from src.configs import get_config, get_full_model_name
 from src.graph import GraphGenerator, NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
-from src.predictor import PredictorFactory
+from src.predictor.feature_predictor import FeaturePredictor
 from src.utils import normalize_features, normalize_predictions, OutputManager, prepare_result_data
 
 logger = logging.getLogger(__name__)
@@ -115,30 +115,33 @@ class GraphChangeDetection:
             features.append([numeric[name] for name in self.config["features"]])
         return np.array(features)
 
-    def _generate_predictions(self, graphs, predictor):
-        """Generate predictions for graph sequence."""
+    def _generate_feature_predictions(self, features):
+        """Generate feature predictions using Holt's double exponential smoothing.
+
+        Operates directly on extracted features rather than predicting adjacency
+        matrices, matching the feature-space forecasting in Section IV-B (Eq. 21).
+
+        Args:
+            features: Raw feature matrix of shape (n_samples, n_features)
+
+        Returns:
+            Predictions array of shape (n_predictions, horizon, n_features)
+        """
         horizon = self.config["detection"].get("prediction_horizon", 5)
-        n_history = self.config["model"]["predictor"]["config"].get("n_history", 10)
+        pred_cfg = self.config["model"]["predictor"].get("config", {})
+        n_history = pred_cfg.get("n_history", 10)
+
         predictions = []
+        for t in range(n_history, len(features)):
+            fp = FeaturePredictor(
+                alpha=pred_cfg.get("alpha", 0.3),
+                beta=pred_cfg.get("beta", 0.1),
+                n_history=n_history,
+            )
+            fp.fit(features[t - n_history:t])
+            predictions.append(fp.predict(horizon))
 
-        for t in range(n_history, len(graphs)):
-            history = [{"adjacency": g} for g in graphs[t - n_history:t]]
-            predictions.append(predictor.predict(history, horizon=horizon))
-
-        return predictions
-
-    def _process_predictions(self, predictions):
-        """Convert predicted graphs to features."""
-        extractor = NetworkFeatureExtractor()
-        features = []
-        for preds in predictions:
-            step_features = []
-            for adj in preds:
-                graph = adjacency_to_graph(adj)
-                numeric = extractor.get_numeric_features(graph)
-                step_features.append([numeric[name] for name in self.config["features"]])
-            features.append(step_features)
-        return np.array(features)
+        return np.array(predictions)
 
     def _run_trials(self, features, predictions, true_cps):
         """Run detection trials."""
@@ -204,15 +207,10 @@ class GraphChangeDetection:
         features = self._extract_features(graphs)
         features_norm, means, stds = normalize_features(features)
 
-        # Generate predictions
-        predictor, pred_graphs, pred_norm = None, None, None
+        # Generate predictions using Holt's forecasting directly on features
+        pred_norm = None
         if enable_pred:
-            predictor = PredictorFactory.create(
-                self.config["model"]["predictor"]["type"],
-                self.config["model"]["predictor"].get("config", {}),
-            )
-            pred_graphs = self._generate_predictions(graphs, predictor)
-            pred_features = self._process_predictions(pred_graphs)
+            pred_features = self._generate_feature_predictions(features)
             pred_norm = normalize_predictions(pred_features, means, stds)
 
         # Run trials
@@ -223,4 +221,4 @@ class GraphChangeDetection:
             manager = OutputManager(self.config["output"]["directory"], self.config)
             manager.export_to_csv(trial_results["aggregated"], true_cps, trial_results["individual_trials"])
 
-        return prepare_result_data(seq, features, None, pred_graphs, trial_results, predictor, self.config)
+        return prepare_result_data(seq, features, None, None, trial_results, None, self.config)

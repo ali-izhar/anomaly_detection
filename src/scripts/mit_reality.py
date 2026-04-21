@@ -20,7 +20,7 @@ from src.changepoint import ChangePointDetector, DetectorConfig
 from src.graph import NetworkFeatureExtractor
 from src.graph.utils import adjacency_to_graph
 from src.utils import normalize_features, normalize_predictions, OutputManager, prepare_result_data
-from src.predictor import PredictorFactory
+from src.predictor.feature_predictor import FeaturePredictor
 
 logger = logging.getLogger(__name__)
 
@@ -54,24 +54,39 @@ def load_proximity_data(file_path: str) -> pd.DataFrame:
     return df
 
 
-def create_daily_graphs(df: pd.DataFrame, threshold: float = 0.3) -> Dict[str, nx.Graph]:
-    """Create daily graph snapshots from proximity data."""
+def create_daily_graphs(
+    df: pd.DataFrame,
+    threshold: float = 0.3,
+    start_date: str = "2008-09-19",
+    end_date: str = "2009-07-05",
+) -> Dict[str, nx.Graph]:
+    """Create daily graph snapshots from proximity data.
+
+    Filters to the paper's date range (Sept 2008 - June 2009) per Section V.
+    Creates a graph for every calendar day in the range, even if no
+    interactions occurred (empty graph with all nodes, no edges).
+    """
     if "date" not in df.columns:
         df["date"] = df["timestamp"].dt.date
+
+    start = pd.to_datetime(start_date).date()
+    end = pd.to_datetime(end_date).date()
+    df = df[(df["date"] >= start) & (df["date"] <= end)]
+
     all_users = set(df["user_id"].unique()) | set(df["remote_user_id"].unique())
     daily_graphs = {}
 
-    for date in sorted(df["date"].unique()):
-        day_df = df[(df["date"] == date) & (df["probability"] >= threshold)]
-        if len(day_df) <= 5:
-            continue
+    all_dates = pd.date_range(start, end, freq="D")
+    for date in all_dates:
+        date_key = date.date()
+        day_df = df[(df["date"] == date_key) & (df["probability"] >= threshold)]
         G = nx.Graph()
         G.add_nodes_from(all_users)
-        G.add_edges_from(day_df[["user_id", "remote_user_id"]].values)
-        if G.number_of_edges() > 1:
-            daily_graphs[date.isoformat()] = G
+        if len(day_df) > 0:
+            G.add_edges_from(day_df[["user_id", "remote_user_id"]].values)
+        daily_graphs[date_key.isoformat()] = G
 
-    logger.info(f"Created {len(daily_graphs)} daily graphs")
+    logger.info(f"Created {len(daily_graphs)} daily graphs ({start} to {end}), {len(all_users)} users")
     return daily_graphs
 
 
@@ -135,29 +150,37 @@ def run_mit_detection(
     n_trials = config.get("trials", {}).get("n_trials", 10)
     seeds = [42, 142, 241, 341, 443, 542, 642, 743, 842, 1043][:n_trials]
 
-    # Initialize predictor and generate predictions (required for parallel detection)
+    # Generate feature predictions using Holt's forecasting directly
     predicted_normalized = None
     if enable_prediction:
         try:
-            pred_config = config["model"]["predictor"]
-            predictor = PredictorFactory.create(pred_config["type"], pred_config["config"])
+            pred_config = config["model"]["predictor"]["config"]
             horizon = config["detection"].get("prediction_horizon", 5)
-            n_history = pred_config["config"].get("n_history", 5)
+            n_history = pred_config.get("n_history", 5)
 
-            predicted_features = []
+            # Extract raw features for prediction (before normalization)
             extractor = NetworkFeatureExtractor()
-            for t in range(n_history, len(adjacency_matrices)):
-                history = [{"adjacency": g} for g in adjacency_matrices[t-n_history:t]]
-                preds = predictor.predict(history, horizon=horizon)
-                timestep_features = []
-                for pred_adj in preds:
-                    graph = adjacency_to_graph(pred_adj)
-                    numeric = extractor.get_numeric_features(graph)
-                    timestep_features.append([numeric[n] for n in config.get("features", [])])
-                predicted_features.append(timestep_features)
+            feature_names = config.get("features", [])
+            raw_features = []
+            for adj in adjacency_matrices:
+                graph = adjacency_to_graph(adj)
+                numeric = extractor.get_numeric_features(graph)
+                raw_features.append([numeric[n] for n in feature_names])
+            raw_features = np.array(raw_features)
+
+            # Predict using Holt's on raw features
+            predicted_features = []
+            for t in range(n_history, len(raw_features)):
+                fp = FeaturePredictor(
+                    alpha=pred_config.get("alpha", 0.3),
+                    beta=pred_config.get("beta", 0.1),
+                    n_history=n_history,
+                )
+                fp.fit(raw_features[t - n_history:t])
+                predicted_features.append(fp.predict(horizon))
 
             if predicted_features:
-                _, means, stds = normalize_features(features_normalized)
+                _, means, stds = normalize_features(raw_features)
                 predicted_normalized = normalize_predictions(np.array(predicted_features), means, stds)
         except Exception as e:
             logger.warning(f"Prediction failed: {e}")
@@ -302,11 +325,15 @@ def process_dataset(
         )
         results["detection"] = detection_results
 
-        # Evaluate
-        if "traditional" in detection_results["change_points"]:
-            trad_cps = detection_results["change_points"]["traditional"]
-            results["evaluation"] = evaluate_detections(trad_cps, potential_cps)
-            logger.info(f"Evaluation: {results['evaluation']}")
+        # Evaluate both methods
+        if "horizon" in detection_results["change_points"]:
+            trad_cps = detection_results["change_points"].get("traditional", [])
+            hor_cps = detection_results["change_points"].get("horizon", [])
+            alg1_cps = sorted(set(trad_cps) | set(hor_cps))
+            results["evaluation_traditional"] = evaluate_detections(trad_cps, potential_cps)
+            results["evaluation_horizon"] = evaluate_detections(alg1_cps, potential_cps)
+            logger.info(f"Traditional: {results['evaluation_traditional']}")
+            logger.info(f"Horizon (Alg1): {results['evaluation_horizon']}")
 
     logger.info(f"Processed {len(dates)} days")
     return results
