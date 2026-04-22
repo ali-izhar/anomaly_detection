@@ -29,7 +29,7 @@ The three regularizers (Eqs 23–25) — degree preservation $R_1$, community st
 
 ### Empirical result — graph-space does NOT beat feature-space EWMA
 
-9 scenarios × 10 seeds, λ=50, startup=20, horizon=5 (see `temporary/compare_forecasters.py`):
+9 scenarios × 10 seeds, λ=50, startup=20, horizon=5:
 
 | Forecaster | TPR | FPR | ADD |
 |---|---:|---:|---:|
