@@ -1,0 +1,89 @@
+site_name: Horizon Martingale Detection
+site_description: Reference implementation of "Early Detection and Attribution of Structural Changes in Dynamic Networks" (Ali & Ho, ICDM 2025)
+site_url: https://ali-izhar.github.io/anomaly_detection/
+repo_url: https://github.com/ali-izhar/anomaly_detection
+repo_name: ali-izhar/anomaly_detection
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Theory:
+    - Overview: theory/index.md
+    - Martingale framework (§III): theory/martingale.md
+    - Horizon extension (§IV): theory/horizon.md
+    - Forecasting (§IV-B): theory/forecasting.md
+    - Attribution (§III-D): theory/attribution.md
+  - Algorithm 1 walkthrough: algorithm.md
+  - Usage (student tutorial): usage.md
+  - Reproduced results:
+    - Table IV — main comparison: results/table4.md
+    - Table III — parameter sweep: results/table3.md
+    - Figure 1 — MIT Reality: results/figure1.md
+    - Figure 2 — synthetic networks: results/figure2.md
+  - Design notes:
+    - Why we chose X over Y: design/choices.md
+    - Backend (CPU vs GPU): design/backend.md

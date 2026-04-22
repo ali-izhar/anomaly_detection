@@ -1,14 +1,14 @@
 [project]
-name = "anomaly-detection"
-version = "1.0.0"
-description = "Horizon Martingale Framework for Early Detection of Structural Changes in Dynamic Networks"
+name = "hmd"
+version = "0.1.0"
+description = "Horizon Martingale Detection — early detection & attribution of structural changes in dynamic networks (Ali & Ho, ICDM 2025)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Izhar Ali", email = "izhar.ali@example.com"},
+    {name = "Izhar Ali", email = "aliizh94@rowan.edu"},
 ]
-keywords = ["change-detection", "martingale", "networks", "anomaly-detection", "graph-analysis"]
+keywords = ["change-detection", "martingale", "dynamic-networks", "conformal-prediction", "anytime-valid-inference"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -25,36 +25,31 @@ dependencies = [
     "scipy>=1.10.0",
     "networkx>=3.0",
     "pandas>=2.0.0",
-    "pyyaml>=6.0",
-    "dacite>=1.8.0",
-    "tabulate>=0.9.0",
     "tqdm>=4.65.0",
-    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-]
+# GPU backend for batched experiments (Tables III & IV sweeps).
+# Only needed if HMD_BACKEND=cupy; single-run detection uses numpy.
+gpu = ["cupy-cuda13x>=13.0.0"]
+# Plotting / figure reproduction.
+plot = ["matplotlib>=3.7.0", "seaborn>=0.12.0"]
+# Docs.
+docs = ["mkdocs-material>=9.5.0", "mkdocs-bibtex>=2.11.0", "pymdown-extensions>=10.0"]
+dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "hypothesis>=6.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/ali-izhar/anomaly_detection"
-Repository = "https://github.com/ali-izhar/anomaly_detection"
+Paper = "https://github.com/ali-izhar/anomaly_detection/blob/main/early_detection_and_attribution_of_structural_changes_in_dynamic_networks_ICDM.pdf"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["hmd"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
-addopts = "-v"
-
-[dependency-groups]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

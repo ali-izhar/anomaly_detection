@@ -162,9 +162,10 @@ cython_debug/
 #.idea/
 
 CLAUDE.md
+ISSUES.md
 paper/
-results/
+/results/
+temporary/
 thesis/
 venv/
 archive/
-tests/
