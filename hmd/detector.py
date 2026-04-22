@@ -292,9 +292,25 @@ class HorizonDetector:
         true_change_points: list[int] | None = None,
         scenario: str | None = None,
     ) -> DetectionResult:
-        """Extract features from graphs, then run Algorithm 1."""
+        """Extract features from graphs, then run Algorithm 1.
+
+        If the configured forecaster is a graph-space one
+        (`hmd.forecaster.GraphPredictor`), the raw graph list is threaded
+        through to the horizon stream so adjacency-matrix forecasts can be
+        produced per §IV-B(b).
+        """
         X = _features.extract_sequence(graphs, self.config.features, show_progress=self.config.show_progress)
-        return self.run_on_features(X, true_change_points=true_change_points, scenario=scenario)
+        from hmd.forecaster import GraphPredictor as _GraphPredictor
+
+        graphs_for_horizon: list | None = None
+        if isinstance(self.config.forecaster, _GraphPredictor):
+            graphs_for_horizon = list(graphs)
+        return self.run_on_features(
+            X,
+            true_change_points=true_change_points,
+            scenario=scenario,
+            graphs=graphs_for_horizon,
+        )
 
     def run_on_features(
         self,
@@ -302,8 +318,19 @@ class HorizonDetector:
         *,
         true_change_points: list[int] | None = None,
         scenario: str | None = None,
+        graphs: list | None = None,
     ) -> DetectionResult:
         """Run Algorithm 1 on a precomputed (T, K) feature matrix.
+
+        Parameters
+        ----------
+        X : np.ndarray of shape (T, K)
+            Precomputed feature sequence.
+        graphs : list[nx.Graph], optional
+            Required only when the configured forecaster is a
+            `GraphPredictor` (§IV-B(b)). The horizon stream forecasts a graph
+            from a window of recent snapshots, then extracts features from
+            the forecast.
 
         Why this entry point exists: experiments (Table III/IV sweeps) precompute
         features once and then rerun the detector with many configs. Feature
@@ -312,6 +339,20 @@ class HorizonDetector:
         """
         cfg = self.config
         T, K = X.shape
+        # Graph-space vs feature-space forecaster routing.
+        from hmd.forecaster import GraphPredictor as _GraphPredictor
+
+        using_graph_forecaster = isinstance(cfg.forecaster, _GraphPredictor)
+        if using_graph_forecaster:
+            if graphs is None:
+                raise ValueError(
+                    "Graph-space forecaster requires the original graph sequence. "
+                    "Call detector.run(graphs) instead of run_on_features(X)."
+                )
+            if len(graphs) != T:
+                raise ValueError(
+                    f"graphs length {len(graphs)} must match X rows {T}."
+                )
         rng = np.random.default_rng(cfg.rng_seed)
         # Optional z-scoring using the calibration window's statistics.
         # We freeze μ, σ from X[:startup] so the normalization is constant
@@ -423,6 +464,17 @@ class HorizonDetector:
             if cfg.enable_horizon and t >= w:
                 hist_window = X[t - w + 1 : t + 1]
                 C_t_full = X[: t + 1].mean(axis=0)
+                # For graph-space forecasting we also need the graph window.
+                graph_window = (
+                    graphs[t - w + 1 : t + 1] if using_graph_forecaster else None
+                )
+
+                def _forecast_features(h_step: int) -> np.ndarray:
+                    """Return X̂ for horizon h_step under the active forecaster."""
+                    if using_graph_forecaster:
+                        G_hat = cfg.forecaster.predict_graph(graph_window, horizon=h_step)
+                        return _features.extract(G_hat, cfg.features)
+                    return cfg.forecaster.predict_multi(hist_window, horizon=h_step)
 
                 if using_mixture:
                     # Run H independent per-h horizon streams, then VW-mix.
@@ -430,7 +482,7 @@ class HorizonDetector:
                     last_p_h_pf = np.empty(K)
                     for h_idx in range(H_horizons):
                         h_step = h_idx + 1  # horizons are 1-indexed (h=1..H)
-                        X_hat_h = cfg.forecaster.predict_multi(hist_window, horizon=h_step)
+                        X_hat_h = _forecast_features(h_step)
                         S_pred_h = np.abs(X_hat_h - C_t_full)
                         p_h_pf = np.empty(K)
                         for k in range(K):
@@ -447,9 +499,10 @@ class HorizonDetector:
                         np.exp(weighted - max_per_k[None, :]).sum(axis=0)
                     )
                     pvals_hrzn[t] = last_p_h_pf  # trace last-h p-values (informational)
+                    X_hat = X_hat_h  # keep the last h's forecast around for joint-mode use below
                 else:
                     # Single-horizon (paper Def 7, default).
-                    X_hat = cfg.forecaster.predict_multi(hist_window, horizon=h)
+                    X_hat = _forecast_features(h)
                     S_pred_pf = np.abs(X_hat - C_t_full)
                     p_h_pf = np.empty(K)
                     for k in range(K):
